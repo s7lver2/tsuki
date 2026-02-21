@@ -1,0 +1,114 @@
+[package]
+name        = "ws2812"
+version     = "1.0.0"
+description = "WS2812 / NeoPixel RGB LED driver (Adafruit NeoPixel)"
+author      = "godotino-team"
+cpp_header  = "Adafruit_NeoPixel.h"
+arduino_lib = "Adafruit NeoPixel"
+
+# Additional Go import aliases that resolve to the same package.
+aliases = ["neopixel", "NeoPixel"]
+
+# ── Constructor ───────────────────────────────────────────────────────────────
+# ws2812.New(numPixels, pin, flags) → Adafruit_NeoPixel(n, pin, flags)
+[[function]]
+go  = "New"
+cpp = "Adafruit_NeoPixel({0}, {1}, {2})"
+
+# ── Instance methods  ({0} = receiver variable) ───────────────────────────────
+[[function]]
+go  = "Begin"
+cpp = "{0}.begin()"
+
+[[function]]
+go  = "Show"
+cpp = "{0}.show()"
+
+[[function]]
+go  = "SetPixelColor"
+cpp = "{0}.setPixelColor({1}, {2})"
+
+[[function]]
+go  = "SetPixelColorRGB"
+cpp = "{0}.setPixelColor({1}, {0}.Color({2}, {3}, {4}))"
+
+[[function]]
+go  = "Color"
+cpp = "Adafruit_NeoPixel::Color({0}, {1}, {2})"
+
+[[function]]
+go  = "ColorRGBW"
+cpp = "Adafruit_NeoPixel::Color({0}, {1}, {2}, {3})"
+
+[[function]]
+go  = "Clear"
+cpp = "{0}.clear()"
+
+[[function]]
+go  = "Fill"
+cpp = "{0}.fill({1}, {2}, {3})"
+
+[[function]]
+go  = "SetBrightness"
+cpp = "{0}.setBrightness({1})"
+
+[[function]]
+go  = "GetBrightness"
+cpp = "{0}.getBrightness()"
+
+[[function]]
+go  = "NumPixels"
+cpp = "{0}.numPixels()"
+
+[[function]]
+go  = "GetPixelColor"
+cpp = "{0}.getPixelColor({1})"
+
+[[function]]
+go  = "UpdateLength"
+cpp = "{0}.updateLength({1})"
+
+[[function]]
+go  = "UpdateType"
+cpp = "{0}.updateType({1})"
+
+[[function]]
+go  = "CanShow"
+cpp = "{0}.canShow()"
+
+[[function]]
+go  = "Rainbow"
+cpp = "{0}.rainbow({1})"
+
+[[function]]
+go  = "Gamma32"
+cpp = "Adafruit_NeoPixel::gamma32({0})"
+
+[[function]]
+go  = "Sine8"
+cpp = "Adafruit_NeoPixel::sine8({0})"
+
+[[function]]
+go  = "Gamma8"
+cpp = "Adafruit_NeoPixel::gamma8({0})"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+[[constant]]
+go  = "NEO_GRB"
+cpp = "NEO_GRB"
+
+[[constant]]
+go  = "NEO_RGB"
+cpp = "NEO_RGB"
+
+[[constant]]
+go  = "NEO_RGBW"
+cpp = "NEO_RGBW"
+
+[[constant]]
+go  = "NEO_KHZ800"
+cpp = "NEO_KHZ800"
+
+[[constant]]
+go  = "NEO_KHZ400"
+cpp = "NEO_KHZ400"

@@ -1,0 +1,113 @@
+[package]
+name        = "u8g2"
+version     = "1.0.0"
+description = "U8g2 monochrome display library (OLED, LCD)"
+author      = "godotino-team"
+cpp_header  = "U8g2lib.h"
+arduino_lib = "U8g2"
+
+aliases = ["U8g2", "oled"]
+
+# ── Constructor ───────────────────────────────────────────────────────────────
+[[function]]
+go  = "NewSSD1306_128x64"
+cpp = "U8G2_SSD1306_128X64_NONAME_F_HW_I2C({0}, U8X8_PIN_NONE)"
+
+[[function]]
+go  = "NewSH1106_128x64"
+cpp = "U8G2_SH1106_128X64_NONAME_F_HW_I2C({0}, U8X8_PIN_NONE)"
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
+[[function]]
+go  = "Begin"
+cpp = "{0}.begin()"
+
+[[function]]
+go  = "ClearBuffer"
+cpp = "{0}.clearBuffer()"
+
+[[function]]
+go  = "SendBuffer"
+cpp = "{0}.sendBuffer()"
+
+[[function]]
+go  = "Clear"
+cpp = "{0}.clear()"
+
+# ── Drawing ───────────────────────────────────────────────────────────────────
+[[function]]
+go  = "SetFont"
+cpp = "{0}.setFont({1})"
+
+[[function]]
+go  = "DrawStr"
+cpp = "{0}.drawStr({1}, {2}, {3})"
+
+[[function]]
+go  = "DrawBox"
+cpp = "{0}.drawBox({1}, {2}, {3}, {4})"
+
+[[function]]
+go  = "DrawFrame"
+cpp = "{0}.drawFrame({1}, {2}, {3}, {4})"
+
+[[function]]
+go  = "DrawCircle"
+cpp = "{0}.drawCircle({1}, {2}, {3})"
+
+[[function]]
+go  = "DrawDisc"
+cpp = "{0}.drawDisc({1}, {2}, {3})"
+
+[[function]]
+go  = "DrawLine"
+cpp = "{0}.drawLine({1}, {2}, {3}, {4})"
+
+[[function]]
+go  = "DrawPixel"
+cpp = "{0}.drawPixel({1}, {2})"
+
+[[function]]
+go  = "DrawBitmap"
+cpp = "{0}.drawBitmap({1}, {2}, {3}, {4}, {5})"
+
+[[function]]
+go  = "SetDrawColor"
+cpp = "{0}.setDrawColor({1})"
+
+[[function]]
+go  = "GetDisplayWidth"
+cpp = "{0}.getDisplayWidth()"
+
+[[function]]
+go  = "GetDisplayHeight"
+cpp = "{0}.getDisplayHeight()"
+
+[[function]]
+go  = "SetContrast"
+cpp = "{0}.setContrast({1})"
+
+[[function]]
+go  = "SetFlipMode"
+cpp = "{0}.setFlipMode({1})"
+
+[[function]]
+go  = "SetPowerSave"
+cpp = "{0}.setPowerSave({1})"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+[[constant]]
+go  = "ROTATION_R0"
+cpp = "U8G2_R0"
+
+[[constant]]
+go  = "ROTATION_R1"
+cpp = "U8G2_R1"
+
+[[constant]]
+go  = "ROTATION_R2"
+cpp = "U8G2_R2"
+
+[[constant]]
+go  = "ROTATION_R3"
+cpp = "U8G2_R3"

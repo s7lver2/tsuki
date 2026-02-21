@@ -1,5 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  godotino :: manifest  —  load / save goduino.json
+//  godotino :: manifest  —  load / save goduino.json  (updated)
+//
+//  New field: "packages" — lists external godotinolib packages required
+//  by this project. These are loaded by the core during build.
+//
+//  Example goduino.json:
+//  {
+//    "name": "led-strip",
+//    "version": "0.1.0",
+//    "board": "uno",
+//    "go_version": "1.21",
+//    "packages": [
+//      { "name": "ws2812",  "version": "^1.0.0" },
+//      { "name": "dht",     "version": "^1.0.0" }
+//    ],
+//    "build": { ... }
+//  }
 // ─────────────────────────────────────────────────────────────────────────────
 
 package manifest
@@ -14,19 +30,22 @@ import (
 const FileName = "goduino.json"
 
 type Manifest struct {
-	Name         string       `json:"name"`
-	Version      string       `json:"version"`
-	Board        string       `json:"board"`
-	GoVersion    string       `json:"go_version"`
-	Description  string       `json:"description,omitempty"`
-	Dependencies []Dependency `json:"dependencies"`
-	Build        BuildConfig  `json:"build"`
+	Name        string       `json:"name"`
+	Version     string       `json:"version"`
+	Board       string       `json:"board"`
+	GoVersion   string       `json:"go_version"`
+	Description string       `json:"description,omitempty"`
+	// External godotinolib packages used by this project.
+	Packages    []Package    `json:"packages"`
+	Build       BuildConfig  `json:"build"`
 }
 
-type Dependency struct {
+// Package is a single godotinolib dependency declared in the manifest.
+type Package struct {
+	// Canonical package name (must match godotinolib.toml [package].name).
 	Name    string `json:"name"`
+	// Semver range (e.g. "^1.0.0", "1.2.3", ">=1.0.0 <2.0.0").
 	Version string `json:"version"`
-	Kind    string `json:"kind"` // "go" | "arduino" | "local"
 }
 
 type BuildConfig struct {
@@ -37,14 +56,14 @@ type BuildConfig struct {
 	SourceMap  bool     `json:"source_map"`
 }
 
-// Default returns a new manifest with sensible defaults.
+// Default returns a manifest with sensible defaults.
 func Default(name, board string) *Manifest {
 	return &Manifest{
-		Name:         name,
-		Version:      "0.1.0",
-		Board:        board,
-		GoVersion:    "1.21",
-		Dependencies: []Dependency{},
+		Name:      name,
+		Version:   "0.1.0",
+		Board:     board,
+		GoVersion: "1.21",
+		Packages:  []Package{},
 		Build: BuildConfig{
 			OutputDir:  "build",
 			CppStd:     "c++11",
@@ -97,4 +116,43 @@ func Find(startDir string) (string, *Manifest, error) {
 		dir = parent
 	}
 	return "", nil, fmt.Errorf("no %s found (searched from %s upward)", FileName, startDir)
+}
+
+// PackageNames returns a slice of just the package names (for passing to the core).
+func (m *Manifest) PackageNames() []string {
+	names := make([]string, len(m.Packages))
+	for i, p := range m.Packages {
+		names[i] = p.Name
+	}
+	return names
+}
+
+// HasPackage reports whether the manifest already declares the given package.
+func (m *Manifest) HasPackage(name string) bool {
+	for _, p := range m.Packages {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// AddPackage appends a package dependency (if not already present).
+func (m *Manifest) AddPackage(name, version string) bool {
+	if m.HasPackage(name) {
+		return false
+	}
+	m.Packages = append(m.Packages, Package{Name: name, Version: version})
+	return true
+}
+
+// RemovePackage removes a package dependency by name.
+func (m *Manifest) RemovePackage(name string) bool {
+	for i, p := range m.Packages {
+		if p.Name == name {
+			m.Packages = append(m.Packages[:i], m.Packages[i+1:]...)
+			return true
+		}
+	}
+	return false
 }

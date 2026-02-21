@@ -1,4 +1,6 @@
 target/
 dist/
 bin/
+test/
 Cargo.lock
+*.zip

@@ -1,0 +1,18 @@
+{
+  "name": "led-strip-thermometer",
+  "version": "0.1.0",
+  "board": "uno",
+  "go_version": "1.21",
+  "description": "NeoPixel strip that changes color based on temperature",
+  "packages": [
+    { "name": "ws2812", "version": "^1.0.0" },
+    { "name": "dht",    "version": "^1.0.0" }
+  ],
+  "build": {
+    "output_dir": "build",
+    "cpp_std": "c++11",
+    "optimize": "Os",
+    "extra_flags": [],
+    "source_map": false
+  }
+}

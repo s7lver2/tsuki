@@ -1,18 +1,20 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  godotino :: runtime
+//  godotino :: runtime  (updated)
 //  Maps Go packages / builtins → Arduino C++ APIs.
+//  Now also loads external libraries from godotinolib.toml packages.
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub mod pkg_loader;
+pub mod pkg_manager;
+
 use std::collections::HashMap;
+use std::path::Path;
 
 // ── Mapping types ─────────────────────────────────────────────────────────────
 
-/// How a Go call is rendered in C++.
 #[derive(Debug, Clone)]
 pub enum FnMap {
-    /// Emit a fixed string (e.g. a 0-arg call).
     Direct(String),
-    /// Template: `{0}` = first arg, `{1}` = second arg, …
     Template(String),
 }
 
@@ -33,7 +35,6 @@ impl FnMap {
 
 #[derive(Debug, Clone, Default)]
 pub struct PkgMap {
-    /// `#include <header>` to inject, if any.
     pub header:    Option<String>,
     pub functions: HashMap<String, FnMap>,
     pub constants: HashMap<String, String>,
@@ -41,13 +42,13 @@ pub struct PkgMap {
 }
 
 impl PkgMap {
-    fn new(header: Option<&str>) -> Self {
+    pub fn new(header: Option<&str>) -> Self {
         Self { header: header.map(str::to_owned), ..Default::default() }
     }
-    fn fun(mut self, go: &str, map: FnMap) -> Self {
+    pub fn fun(mut self, go: &str, map: FnMap) -> Self {
         self.functions.insert(go.into(), map); self
     }
-    fn cst(mut self, go: &str, cpp: &str) -> Self {
+    pub fn cst(mut self, go: &str, cpp: &str) -> Self {
         self.constants.insert(go.into(), cpp.into()); self
     }
 }
@@ -62,6 +63,7 @@ pub struct Runtime {
 impl Default for Runtime { fn default() -> Self { Self::new() } }
 
 impl Runtime {
+    /// Create a runtime with only the built-in packages.
     pub fn new() -> Self {
         let mut r = Runtime { packages: HashMap::new(), builtins: HashMap::new() };
         r.init_builtins();
@@ -78,11 +80,68 @@ impl Runtime {
         r
     }
 
+    /// Create a runtime and additionally load all external libraries found
+    /// under the given directory (scans recursively for godotinolib.toml files).
+    pub fn with_libs(libs_dir: &Path) -> Self {
+        let mut r = Self::new();
+        r.load_external_libs(libs_dir);
+        r
+    }
+
+    /// Create a runtime and load only the specific library packages listed in
+    /// `pkg_names`. Used during `build` when the project manifest specifies
+    /// its dependencies explicitly.
+    pub fn with_selected_libs(libs_dir: &Path, pkg_names: &[String]) -> Self {
+        let mut r = Self::new();
+        r.load_selected_libs(libs_dir, pkg_names);
+        r
+    }
+
+    // ── External library loading ──────────────────────────────────────────────
+
+    /// Load all libraries found under `libs_dir`.
+    pub fn load_external_libs(&mut self, libs_dir: &Path) {
+        for lib in pkg_loader::load_all(libs_dir) {
+            self.register_lib(lib);
+        }
+    }
+
+    /// Load only the listed packages from `libs_dir`.
+    pub fn load_selected_libs(&mut self, libs_dir: &Path, pkg_names: &[String]) {
+        for lib in pkg_loader::load_all(libs_dir) {
+            let matches = pkg_names.iter().any(|n| {
+                n == &lib.name || lib.aliases.iter().any(|a| a == n)
+            });
+            if matches {
+                self.register_lib(lib);
+            }
+        }
+    }
+
+    /// Load a single library from a TOML string (used in tests and by the CLI
+    /// `godotino pkg install` flow before the file is written to disk).
+    pub fn load_lib_from_str(&mut self, toml_str: &str) -> crate::error::Result<()> {
+        let lib = pkg_loader::load_from_str(toml_str, Path::new("<inline>"))?;
+        self.register_lib(lib);
+        Ok(())
+    }
+
+    fn register_lib(&mut self, lib: pkg_loader::LoadedLib) {
+        // Register under the canonical name
+        self.packages.insert(lib.name.clone(), lib.pkg_map.clone());
+        // Register under all aliases as well
+        for alias in &lib.aliases {
+            self.packages.insert(alias.clone(), lib.pkg_map.clone());
+        }
+    }
+
+    // ── Registration helper ───────────────────────────────────────────────────
+
     fn reg(&mut self, name: &str, map: PkgMap) {
         self.packages.insert(name.to_owned(), map);
     }
 
-    // ── builtins ─────────────────────────────────────────────────────────────
+    // ── Built-in packages ─────────────────────────────────────────────────────
 
     fn init_builtins(&mut self) {
         let b = &mut self.builtins;
@@ -98,8 +157,6 @@ impl Runtime {
         b.insert("copy".into(),    FnMap::Template("memcpy({0},{1},sizeof({0}))".into()));
     }
 
-    // ── fmt ──────────────────────────────────────────────────────────────────
-
     fn init_fmt(&mut self) {
         self.reg("fmt", PkgMap::new(None)
             .fun("Print",    FnMap::Template("Serial.print({0})".into()))
@@ -111,8 +168,6 @@ impl Runtime {
         );
     }
 
-    // ── time ─────────────────────────────────────────────────────────────────
-
     fn init_time(&mut self) {
         self.reg("time", PkgMap::new(None)
             .fun("Sleep",  FnMap::Template("delay(({0})/1000000UL)".into()))
@@ -123,8 +178,6 @@ impl Runtime {
             .cst("Microsecond", "1000ULL")
         );
     }
-
-    // ── math ─────────────────────────────────────────────────────────────────
 
     fn init_math(&mut self) {
         let fns: &[(&str, &str)] = &[
@@ -160,8 +213,6 @@ impl Runtime {
         self.reg("math", m);
     }
 
-    // ── strconv ───────────────────────────────────────────────────────────────
-
     fn init_strconv(&mut self) {
         self.reg("strconv", PkgMap::new(None)
             .fun("Itoa",        FnMap::Template("String({0})".into()))
@@ -175,24 +226,18 @@ impl Runtime {
         );
     }
 
-    // ── arduino (native wrappers) ─────────────────────────────────────────────
-
     fn init_arduino(&mut self) {
         self.reg("arduino", PkgMap::new(Some("Arduino.h"))
-            // Digital I/O
             .fun("pinMode",       FnMap::Template("pinMode({0}, {1})".into()))
             .fun("digitalWrite",  FnMap::Template("digitalWrite({0}, {1})".into()))
             .fun("digitalRead",   FnMap::Template("digitalRead({0})".into()))
-            // Analog I/O
             .fun("analogRead",    FnMap::Template("analogRead({0})".into()))
             .fun("analogWrite",   FnMap::Template("analogWrite({0}, {1})".into()))
             .fun("analogReference",FnMap::Template("analogReference({0})".into()))
-            // Timing
             .fun("delay",             FnMap::Template("delay({0})".into()))
             .fun("delayMicroseconds", FnMap::Template("delayMicroseconds({0})".into()))
             .fun("millis",            FnMap::Direct("millis()".into()))
             .fun("micros",            FnMap::Direct("micros()".into()))
-            // Math helpers
             .fun("map",       FnMap::Template("map({0}, {1}, {2}, {3}, {4})".into()))
             .fun("constrain", FnMap::Template("constrain({0}, {1}, {2})".into()))
             .fun("abs",       FnMap::Template("abs({0})".into()))
@@ -200,19 +245,14 @@ impl Runtime {
             .fun("max",       FnMap::Template("max({0}, {1})".into()))
             .fun("sqrt",      FnMap::Template("sqrt({0})".into()))
             .fun("pow",       FnMap::Template("pow({0}, {1})".into()))
-            // Random
             .fun("random",     FnMap::Template("random({0})".into()))
             .fun("randomSeed", FnMap::Template("randomSeed({0})".into()))
-            // Tone
             .fun("tone",   FnMap::Template("tone({0}, {1})".into()))
             .fun("noTone", FnMap::Template("noTone({0})".into()))
-            // Pulse
             .fun("pulseIn",    FnMap::Template("pulseIn({0}, {1})".into()))
             .fun("pulseInLong",FnMap::Template("pulseInLong({0}, {1})".into()))
-            // Shift
             .fun("shiftOut", FnMap::Template("shiftOut({0}, {1}, {2}, {3})".into()))
             .fun("shiftIn",  FnMap::Template("shiftIn({0}, {1}, {2})".into()))
-            // Constants
             .cst("HIGH",         "HIGH")
             .cst("LOW",          "LOW")
             .cst("INPUT",        "INPUT")
@@ -226,8 +266,6 @@ impl Runtime {
             .cst("CHANGE","CHANGE").cst("RISING","RISING").cst("FALLING","FALLING")
         );
     }
-
-    // ── Wire (I2C) ───────────────────────────────────────────────────────────
 
     fn init_wire(&mut self) {
         let m = PkgMap::new(Some("Wire.h"))
@@ -245,8 +283,6 @@ impl Runtime {
         self.reg("Wire", m);
     }
 
-    // ── SPI ──────────────────────────────────────────────────────────────────
-
     fn init_spi(&mut self) {
         let m = PkgMap::new(Some("SPI.h"))
             .fun("Begin",           FnMap::Direct("SPI.begin()".into()))
@@ -261,8 +297,6 @@ impl Runtime {
         self.reg("spi", m.clone());
         self.reg("SPI", m);
     }
-
-    // ── Serial ────────────────────────────────────────────────────────────────
 
     fn init_serial(&mut self) {
         let m = PkgMap::new(None)
@@ -283,8 +317,6 @@ impl Runtime {
         self.reg("Serial", m);
     }
 
-    // ── Servo ─────────────────────────────────────────────────────────────────
-
     fn init_servo(&mut self) {
         let m = PkgMap::new(Some("Servo.h"))
             .fun("Attach",   FnMap::Template("{0}.attach({1})".into()))
@@ -296,8 +328,6 @@ impl Runtime {
         self.reg("servo", m.clone());
         self.reg("Servo", m);
     }
-
-    // ── LiquidCrystal (LCD) ───────────────────────────────────────────────────
 
     fn init_liquidcrystal(&mut self) {
         let m = PkgMap::new(Some("LiquidCrystal.h"))
@@ -328,7 +358,6 @@ impl Runtime {
         self.builtins.get(name)
     }
 
-    /// Collect the `#include` directives needed for the given packages.
     pub fn headers_for(&self, pkgs: &[&str]) -> Vec<String> {
         let mut hdrs: Vec<_> = pkgs.iter()
             .filter_map(|p| self.packages.get(*p))
@@ -339,6 +368,13 @@ impl Runtime {
         hdrs.dedup();
         hdrs
     }
+
+    /// List all currently registered package names (builtin + external).
+    pub fn list_packages(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.packages.keys().map(|s| s.as_str()).collect();
+        names.sort();
+        names
+    }
 }
 
 // ── Board profiles ────────────────────────────────────────────────────────────
@@ -347,7 +383,6 @@ impl Runtime {
 pub struct Board {
     pub id:          String,
     pub name:        String,
-    /// arduino-cli Fully Qualified Board Name
     pub fqbn:        String,
     pub cpu:         String,
     pub flash_kb:    u32,
@@ -359,21 +394,20 @@ pub struct Board {
 impl Board {
     pub fn catalog() -> Vec<Board> {
         vec![
-            Board { id: "uno".into(),       name: "Arduino Uno".into(),           fqbn: "arduino:avr:uno".into(),                    cpu: "ATmega328P".into(),  flash_kb: 32,   ram_kb: 2,   clock_mhz: 16,  extra_flags: vec![] },
-            Board { id: "nano".into(),      name: "Arduino Nano".into(),          fqbn: "arduino:avr:nano".into(),                   cpu: "ATmega328P".into(),  flash_kb: 32,   ram_kb: 2,   clock_mhz: 16,  extra_flags: vec![] },
-            Board { id: "nano_every".into(),name: "Arduino Nano Every".into(),    fqbn: "arduino:megaavr:nona4809".into(),           cpu: "ATmega4809".into(),  flash_kb: 48,   ram_kb: 6,   clock_mhz: 20,  extra_flags: vec![] },
-            Board { id: "mega".into(),      name: "Arduino Mega 2560".into(),     fqbn: "arduino:avr:mega".into(),                   cpu: "ATmega2560".into(),  flash_kb: 256,  ram_kb: 8,   clock_mhz: 16,  extra_flags: vec![] },
-            Board { id: "micro".into(),     name: "Arduino Micro".into(),         fqbn: "arduino:avr:micro".into(),                  cpu: "ATmega32U4".into(),  flash_kb: 32,   ram_kb: 2,   clock_mhz: 16,  extra_flags: vec![] },
-            Board { id: "leonardo".into(),  name: "Arduino Leonardo".into(),      fqbn: "arduino:avr:leonardo".into(),               cpu: "ATmega32U4".into(),  flash_kb: 32,   ram_kb: 2,   clock_mhz: 16,  extra_flags: vec![] },
-            Board { id: "due".into(),       name: "Arduino Due".into(),           fqbn: "arduino:sam:arduino_due_x".into(),          cpu: "AT91SAM3X8E".into(), flash_kb: 512,  ram_kb: 96,  clock_mhz: 84,  extra_flags: vec![] },
-            Board { id: "zero".into(),      name: "Arduino Zero".into(),          fqbn: "arduino:samd:arduino_zero_native".into(),   cpu: "ATSAMD21G18A".into(),flash_kb: 256,  ram_kb: 32,  clock_mhz: 48,  extra_flags: vec![] },
-            Board { id: "mkr1000".into(),   name: "Arduino MKR WiFi 1000".into(),fqbn: "arduino:samd:mkr1000".into(),               cpu: "ATSAMD21G18A".into(),flash_kb: 256,  ram_kb: 32,  clock_mhz: 48,  extra_flags: vec![] },
-            Board { id: "mkr_zero".into(),  name: "Arduino MKR Zero".into(),     fqbn: "arduino:samd:mkrzero".into(),               cpu: "ATSAMD21G18A".into(),flash_kb: 256,  ram_kb: 32,  clock_mhz: 48,  extra_flags: vec![] },
-            Board { id: "esp32".into(),     name: "ESP32 Dev Module".into(),      fqbn: "esp32:esp32:esp32".into(),                  cpu: "Xtensa LX6".into(),  flash_kb: 4096, ram_kb: 520, clock_mhz: 240, extra_flags: vec![] },
-            Board { id: "esp8266".into(),   name: "ESP8266 NodeMCU".into(),       fqbn: "esp8266:esp8266:nodemcuv2".into(),          cpu: "ESP8266".into(),     flash_kb: 4096, ram_kb: 80,  clock_mhz: 80,  extra_flags: vec![] },
-            Board { id: "pico".into(),      name: "Raspberry Pi Pico (RP2040)".into(), fqbn: "rp2040:rp2040:rpipico".into(),         cpu: "RP2040".into(),      flash_kb: 2048, ram_kb: 264, clock_mhz: 133, extra_flags: vec![] },
-            Board { id: "teensy41".into(),  name: "Teensy 4.1".into(),            fqbn: "teensy:avr:teensy41".into(),                cpu: "iMXRT1062".into(),   flash_kb: 8192, ram_kb: 1024,clock_mhz: 600, extra_flags: vec![] },
-            Board { id: "portenta_h7".into(),name: "Arduino Portenta H7".into(),  fqbn: "arduino:mbed_portenta:envie_m7".into(),     cpu: "STM32H747XI".into(), flash_kb: 2048, ram_kb: 8192,clock_mhz: 480, extra_flags: vec![] },
+            Board { id: "uno".into(),        name: "Arduino Uno".into(),              fqbn: "arduino:avr:uno".into(),                  cpu: "ATmega328P".into(),   flash_kb: 32,   ram_kb: 2,    clock_mhz: 16,  extra_flags: vec![] },
+            Board { id: "nano".into(),        name: "Arduino Nano".into(),             fqbn: "arduino:avr:nano".into(),                 cpu: "ATmega328P".into(),   flash_kb: 32,   ram_kb: 2,    clock_mhz: 16,  extra_flags: vec![] },
+            Board { id: "nano_every".into(),  name: "Arduino Nano Every".into(),       fqbn: "arduino:megaavr:nona4809".into(),         cpu: "ATmega4809".into(),   flash_kb: 48,   ram_kb: 6,    clock_mhz: 20,  extra_flags: vec![] },
+            Board { id: "mega".into(),        name: "Arduino Mega 2560".into(),        fqbn: "arduino:avr:mega".into(),                 cpu: "ATmega2560".into(),   flash_kb: 256,  ram_kb: 8,    clock_mhz: 16,  extra_flags: vec![] },
+            Board { id: "micro".into(),       name: "Arduino Micro".into(),            fqbn: "arduino:avr:micro".into(),                cpu: "ATmega32U4".into(),   flash_kb: 32,   ram_kb: 2,    clock_mhz: 16,  extra_flags: vec![] },
+            Board { id: "leonardo".into(),    name: "Arduino Leonardo".into(),         fqbn: "arduino:avr:leonardo".into(),             cpu: "ATmega32U4".into(),   flash_kb: 32,   ram_kb: 2,    clock_mhz: 16,  extra_flags: vec![] },
+            Board { id: "due".into(),         name: "Arduino Due".into(),              fqbn: "arduino:sam:arduino_due_x".into(),        cpu: "AT91SAM3X8E".into(),  flash_kb: 512,  ram_kb: 96,   clock_mhz: 84,  extra_flags: vec![] },
+            Board { id: "zero".into(),        name: "Arduino Zero".into(),             fqbn: "arduino:samd:arduino_zero_native".into(), cpu: "ATSAMD21G18A".into(), flash_kb: 256,  ram_kb: 32,   clock_mhz: 48,  extra_flags: vec![] },
+            Board { id: "mkr1000".into(),     name: "Arduino MKR WiFi 1000".into(),   fqbn: "arduino:samd:mkr1000".into(),             cpu: "ATSAMD21G18A".into(), flash_kb: 256,  ram_kb: 32,   clock_mhz: 48,  extra_flags: vec![] },
+            Board { id: "esp32".into(),       name: "ESP32 Dev Module".into(),         fqbn: "esp32:esp32:esp32".into(),                cpu: "Xtensa LX6".into(),   flash_kb: 4096, ram_kb: 520,  clock_mhz: 240, extra_flags: vec![] },
+            Board { id: "esp8266".into(),     name: "ESP8266 NodeMCU".into(),          fqbn: "esp8266:esp8266:nodemcuv2".into(),        cpu: "ESP8266".into(),      flash_kb: 4096, ram_kb: 80,   clock_mhz: 80,  extra_flags: vec![] },
+            Board { id: "pico".into(),        name: "Raspberry Pi Pico (RP2040)".into(), fqbn: "rp2040:rp2040:rpipico".into(),          cpu: "RP2040".into(),       flash_kb: 2048, ram_kb: 264,  clock_mhz: 133, extra_flags: vec![] },
+            Board { id: "teensy41".into(),    name: "Teensy 4.1".into(),               fqbn: "teensy:avr:teensy41".into(),              cpu: "iMXRT1062".into(),    flash_kb: 8192, ram_kb: 1024, clock_mhz: 600, extra_flags: vec![] },
+            Board { id: "portenta_h7".into(), name: "Arduino Portenta H7".into(),      fqbn: "arduino:mbed_portenta:envie_m7".into(),   cpu: "STM32H747XI".into(),  flash_kb: 2048, ram_kb: 8192, clock_mhz: 480, extra_flags: vec![] },
         ]
     }
 

@@ -64,9 +64,24 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 	for _, goFile := range goFiles {
 		ui.Info(fmt.Sprintf("Checking %s…", filepath.Base(goFile)))
 
-		warnings, errors, err := transpiler.Check(goFile, board)
+		srcBytes, err := os.ReadFile(goFile)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read %s: %w", goFile, err)
+		}
 
-		// Collect issues
+		// Convert []manifest.Package -> []string
+		pkgNames := make([]string, 0, len(m.Packages))
+		for _, p := range m.Packages {
+			pkgNames = append(pkgNames, p.Name)
+		}
+
+		warnings, errors, err := transpiler.Check(
+			string(srcBytes),
+			filepath.Base(goFile),
+			board,
+			pkgNames,
+		)
+
 		for _, w := range warnings {
 			report.Warnings = append(report.Warnings, Issue{
 				File:    goFile,
@@ -74,6 +89,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 				IsError: false,
 			})
 		}
+
 		for _, e := range errors {
 			report.Errors = append(report.Errors, Issue{
 				File:    goFile,
@@ -83,8 +99,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 		}
 
 		if err != nil {
-			// transpiler.Check already rendered the rich traceback.
-			// Just record the error.
 			report.Errors = append(report.Errors, Issue{
 				File:    goFile,
 				Message: err.Error(),

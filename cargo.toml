@@ -23,6 +23,9 @@ thiserror  = "1.0"
 anyhow     = "1.0"
 serde      = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml       = "0.8"
+# HTTP client for package manager (sync, no async runtime required)
+ureq       = { version = "2.9", features = ["json"] }
 
 # ─── dev dependencies ─────────────────────────────────────────
 [dev-dependencies]

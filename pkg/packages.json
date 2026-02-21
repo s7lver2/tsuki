@@ -1,0 +1,37 @@
+{
+  "_comment": "godotino package registry — host this at the root of your GitHub repo as registry.json",
+  "packages": {
+    "ws2812": {
+      "description": "WS2812 / NeoPixel LED driver (Adafruit NeoPixel)",
+      "author": "godotino-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver/godotino-pkgs/main/ws2812/1.0.0/godotinolib.toml"
+      }
+    },
+    "dht": {
+      "description": "DHT11 / DHT22 temperature & humidity sensor",
+      "author": "godotino-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver/godotino-pkgs/main/dht/1.0.0/godotinolib.toml"
+      }
+    },
+    "hcsr04": {
+      "description": "HC-SR04 ultrasonic distance sensor",
+      "author": "godotino-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver/godotino-pkgs/main/hcsr04/1.0.0/godotinolib.toml"
+      }
+    },
+    "u8g2": {
+      "description": "U8g2 monochrome display library (SSD1306 OLED, SH1106, LCD)",
+      "author": "godotino-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver/godotino-pkgs/main/u8g2/1.0.0/godotinolib.toml"
+      }
+    }
+  }
+}
