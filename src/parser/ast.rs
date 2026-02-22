@@ -78,7 +78,7 @@ impl Type {
             Type::Slice(elem)      => format!("{}*", elem.to_cpp()),
             Type::Array { len: Some(n), elem } => format!("{} /* [{}] */", elem.to_cpp(), n),
             Type::Array { len: None,    elem } => format!("{}*", elem.to_cpp()),
-            Type::Named(n)         => n.clone(),
+            Type::Named(n)         => n.split('.').last().unwrap_or(n).to_owned(),
             Type::Infer            => "auto".into(),
             _                      => "void* /* unsupported */".into(),
         }

@@ -5,38 +5,39 @@ description = "DHT11/DHT22 temperature and humidity sensor"
 author      = "godotino-team"
 cpp_header  = "DHT.h"
 arduino_lib = "DHT sensor library"
+cpp_class   = "DHT"
 
 aliases = ["DHT"]
 
 # ── Constructor ───────────────────────────────────────────────────────────────
 [[function]]
 go  = "New"
-cpp = "DHT({0}, {1})"
+cpp = "new DHT({0}, {1})"
 
 # ── Instance methods ──────────────────────────────────────────────────────────
 [[function]]
 go  = "Begin"
-cpp = "{0}.begin()"
+cpp = "{0}->begin()"
 
 [[function]]
 go  = "ReadTemperature"
-cpp = "{0}.readTemperature()"
+cpp = "{0}->readTemperature()"
 
 [[function]]
 go  = "ReadTemperatureF"
-cpp = "{0}.readTemperature(true)"
+cpp = "{0}->readTemperature(true)"
 
 [[function]]
 go  = "ReadHumidity"
-cpp = "{0}.readHumidity()"
+cpp = "{0}->readHumidity()"
 
 [[function]]
 go  = "ComputeHeatIndex"
-cpp = "{0}.computeHeatIndex({1}, {2})"
+cpp = "{0}->computeHeatIndex({1}, {2})"
 
 [[function]]
 go  = "IsNan"
-cpp = "isnan({0})"
+cpp = "isnan({1})"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]

@@ -335,7 +335,7 @@ impl Parser {
                 // qualified: pkg.Type
                 if self.eat(&TokenKind::Dot) {
                     let sub = self.expect_ident()?;
-                    return Ok(Type::Named(format!("{}::{}", name, sub)));
+                    return Ok(Type::Named(format!("{}.{}", name, sub)));
                 }
                 Ok(builtin_type(&name))
             }

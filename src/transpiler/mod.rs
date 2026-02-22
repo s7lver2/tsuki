@@ -8,19 +8,23 @@ pub mod config;
 pub use config::TranspileConfig;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as FmtWrite;
 
 use crate::error::{GodotinoError, Result};
 use crate::parser::ast::*;
-use crate::runtime::{FnMap, PkgMap, Runtime};
+use crate::runtime::Runtime;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct Transpiler {
-    cfg:      TranspileConfig,
-    rt:       Runtime,
-    indent:   usize,
-    includes: HashSet<String>,
-    pkg_map:  HashMap<String, String>,
+    cfg:       TranspileConfig,
+    rt:        Runtime,
+    indent:    usize,
+    includes:  HashSet<String>,
+    pkg_map:   HashMap<String, String>,
+    /// Maps local variable names → canonical package name for instance-method dispatch.
+    /// e.g. `sensor` → `"dht"` when declared as `var sensor dht.DHT`.
+    var_types: HashMap<String, String>,
 }
 
 impl Transpiler {
@@ -34,9 +38,10 @@ impl Transpiler {
         Self {
             cfg,
             rt,
-            indent:   0,
-            includes: HashSet::new(),
-            pkg_map:  HashMap::new(),
+            indent:    0,
+            includes:  HashSet::new(),
+            pkg_map:   HashMap::new(),
+            var_types: HashMap::new(),
         }
     }
 
@@ -161,12 +166,33 @@ impl Transpiler {
         } else { Ok(String::new()) }
     }
 
-    fn emit_global(&self, d: &Decl) -> Result<String> {
+    fn emit_global(&mut self, d: &Decl) -> Result<String> {
         if let Decl::Var { name, ty, init, .. } = d {
+            // Track variable → package for instance-method dispatch
+            if let Some(Type::Named(type_name)) = ty {
+                let pkg_part = type_name.split('.').next().unwrap_or("");
+                if let Some(canon) = self.pkg_map.get(pkg_part).cloned() {
+                    self.var_types.insert(name.clone(), canon.clone());
+                    // If this package declares a C++ class, emit as pointer
+                    // (many Arduino libs lack a default constructor).
+                    if let Some(pkg) = self.rt.pkg(&canon) {
+                        if let Some(class) = pkg.cpp_class.clone() {
+                            let init_str = if let Some(e) = init {
+                                format!(" = new {}", self.emit_expr(e)?)
+                            } else {
+                                " = nullptr".to_string()
+                            };
+                            return Ok(format!("{}* {}{};
+", class, name, init_str));
+                        }
+                    }
+                }
+            }
             let t    = ty.as_ref().map(|t| t.to_cpp()).unwrap_or_else(|| "auto".into());
             let init = init.as_ref().map(|e| self.emit_expr(e)).transpose()?
                 .map(|s| format!(" = {}", s)).unwrap_or_default();
-            Ok(format!("{} {}{};\n", t, name, init))
+            Ok(format!("{} {}{};
+", t, name, init))
         } else { Ok(String::new()) }
     }
 
@@ -232,6 +258,19 @@ impl Transpiler {
                 for (i, name) in names.iter().enumerate() {
                     let val = vals.get(i).map(|v| self.emit_expr(v))
                         .unwrap_or_else(|| Ok("0".into()))?;
+                    // Infer package type from RHS constructor call (Bug 2)
+                    // e.g. `sensor := dht.New(...)` → var_types["sensor"] = "dht"
+                    if let Some(val_node) = vals.get(i) {
+                        if let Expr::Call { func, .. } = val_node {
+                            if let Expr::Select { expr: pkg_expr, .. } = func.as_ref() {
+                                if let Expr::Ident { name: pkg_alias, .. } = pkg_expr.as_ref() {
+                                    if let Some(canon) = self.pkg_map.get(pkg_alias.as_str()).cloned() {
+                                        self.var_types.insert(name.clone(), canon);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     s += &format!("{}auto {} = {};\n", pad, name, val);
                 }
                 s
@@ -355,7 +394,21 @@ impl Transpiler {
                 if s.contains('.') { s } else { format!("{}.0", s) }
             }
             Expr::Str(s)   => {
-                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                // Escape every byte so the C++ string literal is always valid.
+                // Go strings may contain real newlines, tabs, or non-ASCII bytes
+                // (e.g. em-dash as UTF-8) that would break avr-gcc otherwise.
+                let mut escaped = String::new();
+                for byte in s.bytes() {
+                    match byte {
+                        b'\\' => escaped.push_str("\\\\"),
+                        b'"'  => escaped.push_str("\\\""),
+                        b'\n' => escaped.push_str("\\n"),
+                        b'\r' => escaped.push_str("\\r"),
+                        b'\t' => escaped.push_str("\\t"),
+                        0x20..=0x7E => escaped.push(byte as char), // printable ASCII
+                        other => { let _ = write!(escaped, "\\x{:02X}", other); }
+                    }
+                }
                 if self.cfg.arduino_string {
                     format!("String(\"{}\")", escaped)
                 } else {
@@ -416,34 +469,60 @@ impl Transpiler {
     }
 
     fn emit_call(&self, func: &Expr, args: &[Expr]) -> Result<String> {
-        let arg_strs: Vec<String> = args.iter()
-            .map(|a| self.emit_expr(a))
+        // Detect printf-style calls (fmt.Printf / fmt.Fprintf / fmt.Sprintf) so we
+        // can emit the format string as a raw C-string literal instead of String("...").
+        let is_printf_style = matches!(func,
+            Expr::Select { field, .. } if matches!(field.as_str(), "Printf" | "Fprintf" | "Sprintf" | "Errorf")
+        );
+
+        let arg_strs: Vec<String> = args.iter().enumerate()
+            .map(|(i, a)| {
+                // First arg of a printf call must be const char*, not String("...")
+                if is_printf_style && i == 0 {
+                    self.emit_str_raw(a)
+                } else {
+                    self.emit_expr(a)
+                }
+            })
             .collect::<Result<_>>()?;
 
         match func {
             Expr::Select { expr, field, .. } => {
                 if let Expr::Ident { name: alias, .. } = expr.as_ref() {
-                    let canon = self.pkg_map.get(alias.as_str())
-                        .cloned().unwrap_or_else(|| alias.clone());
-
-                    if let Some(pkg) = self.rt.pkg(&canon) {
-                        if let Some(fmap) = pkg.functions.get(field.as_str()) {
-                            return Ok(fmap.apply(&arg_strs));
+                    // ── Case 1: static package call  e.g. dht.New(pin, type) ──────────
+                    if let Some(canon) = self.pkg_map.get(alias.as_str()).cloned() {
+                        if let Some(pkg) = self.rt.pkg(&canon) {
+                            if let Some(fmap) = pkg.functions.get(field.as_str()) {
+                                return Ok(fmap.apply(&arg_strs));
+                            }
                         }
+                        if self.cfg.passthrough_unknown {
+                            return Ok(format!("{}.{}({})", alias, field, arg_strs.join(", ")));
+                        }
+                        return Err(GodotinoError::codegen(
+                            format!("no mapping for {}.{}", canon, field)));
                     }
 
-                    if self.cfg.passthrough_unknown {
-                        return Ok(format!("{}.{}({})", alias, field, arg_strs.join(", ")));
+                    // ── Case 2: instance method call  e.g. sensor.Begin() ────────────
+                    // Look up the variable's declared package, prepend receiver as {0}.
+                    if let Some(pkg_name) = self.var_types.get(alias.as_str()).cloned() {
+                        if let Some(pkg) = self.rt.pkg(&pkg_name) {
+                            if let Some(fmap) = pkg.functions.get(field.as_str()) {
+                                let mut all_args = vec![alias.clone()];
+                                all_args.extend_from_slice(&arg_strs);
+                                return Ok(fmap.apply(&all_args));
+                            }
+                        }
+                        if self.cfg.passthrough_unknown {
+                            return Ok(format!("{}.{}({})", alias, field, arg_strs.join(", ")));
+                        }
+                        return Err(GodotinoError::codegen(
+                            format!("no method mapping for {}.{} (package: {})", alias, field, pkg_name)));
                     }
-                    return Err(GodotinoError::codegen(
-                        format!("no mapping for {}.{}", canon, field)));
                 }
                 // ── Chained: pkg.SubObj.Method(args)  e.g. arduino.Serial.Begin(9600) ──
-                // Detect Select { expr: Select { Ident(pkg), sub_obj }, method }
-                // and delegate to the sub-package (sub_obj lowercased) if registered.
                 if let Expr::Select { expr: inner_expr, field: sub_obj, .. } = expr.as_ref() {
                     if let Expr::Ident { name: pkg_alias, .. } = inner_expr.as_ref() {
-                        // Only activate when the alias is a known imported package.
                         if self.pkg_map.contains_key(pkg_alias.as_str()) {
                             let sub_canon = sub_obj.to_lowercase();
                             if let Some(sub_pkg) = self.rt.pkg(&sub_canon) {
@@ -451,8 +530,6 @@ impl Transpiler {
                                     return Ok(fmap.apply(&arg_strs));
                                 }
                             }
-                            // Sub-package unknown — emit a direct C++ object call so the
-                            // compiler gets something valid (e.g. Serial.Begin(...)).
                             if self.cfg.passthrough_unknown {
                                 return Ok(format!("{}.{}({})", sub_obj, field, arg_strs.join(", ")));
                             }
@@ -471,6 +548,34 @@ impl Transpiler {
                 Ok(format!("{}({})", self.resolve_ident(name), arg_strs.join(", ")))
             }
             _ => Ok(format!("{}({})", self.emit_expr(func)?, arg_strs.join(", "))),
+        }
+    }
+
+    /// Emit a string expression always as a raw C-string literal (`"..."`)
+    /// regardless of `arduino_string`, for use as printf format arguments.
+    fn emit_str_raw(&self, expr: &Expr) -> Result<String> {
+        if let Expr::Str(s) = expr {
+            let mut escaped = String::new();
+            for byte in s.bytes() {
+                match byte {
+                    b'\\' => escaped.push_str("\\\\"),
+                    b'"'  => escaped.push_str("\\\""),
+                    b'\n' => escaped.push_str("\\n"),
+                    b'\r' => escaped.push_str("\\r"),
+                    b'\t' => escaped.push_str("\\t"),
+                    0x20..=0x7E => escaped.push(byte as char),
+                    other => { let _ = write!(escaped, "\\x{:02X}", other); }
+                }
+            }
+            Ok(format!("\"{}\"", escaped))
+        } else {
+            // Not a literal string — emit normally and strip String() wrapper if present
+            let s = self.emit_expr(expr)?;
+            if s.starts_with("String(\"") && s.ends_with("\")") {
+                Ok(s[7..s.len()-1].to_owned())
+            } else {
+                Ok(s)
+            }
         }
     }
 

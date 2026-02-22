@@ -16,6 +16,9 @@ use std::path::Path;
 pub enum FnMap {
     Direct(String),
     Template(String),
+    /// All args joined by ", " replace the `{args}` placeholder.
+    /// Used for variadic calls like Serial.printf where arg count varies.
+    Variadic(String),
 }
 
 impl FnMap {
@@ -24,10 +27,17 @@ impl FnMap {
             Self::Direct(s)   => s.clone(),
             Self::Template(t) => {
                 let mut out = t.clone();
+                // {self} is a named alias for the receiver (args[0])
+                if let Some(receiver) = args.first() {
+                    out = out.replace("{self}", receiver);
+                }
                 for (i, a) in args.iter().enumerate() {
-                    out = out.replace(&format!("{{{}}}", i), a);
+                    out = out.replace(&format!("{{{i}}}"), a);
                 }
                 out
+            }
+            Self::Variadic(t) => {
+                t.replace("{args}", &args.join(", "))
             }
         }
     }
@@ -39,11 +49,16 @@ pub struct PkgMap {
     pub functions: HashMap<String, FnMap>,
     pub constants: HashMap<String, String>,
     pub types:     HashMap<String, String>,
+    /// C++ class name for global variable declarations (emitted as pointer).
+    pub cpp_class: Option<String>,
 }
 
 impl PkgMap {
     pub fn new(header: Option<&str>) -> Self {
         Self { header: header.map(str::to_owned), ..Default::default() }
+    }
+    pub fn with_class(mut self, class: &str) -> Self {
+        self.cpp_class = Some(class.to_owned()); self
     }
     pub fn fun(mut self, go: &str, map: FnMap) -> Self {
         self.functions.insert(go.into(), map); self
@@ -158,13 +173,16 @@ impl Runtime {
     }
 
     fn init_fmt(&mut self) {
+        // NOTE: On AVR (Uno/Nano) snprintf does NOT support %f by default.
+        // Add `-Wl,-u,vfprintf -lprintf_flt -lm` to board build flags to enable it,
+        // or replace fmt.Printf float args with dtostrf() calls in your Go source.
         self.reg("fmt", PkgMap::new(None)
             .fun("Print",    FnMap::Template("Serial.print({0})".into()))
             .fun("Println",  FnMap::Template("Serial.println({0})".into()))
-            .fun("Printf",   FnMap::Template("Serial.print({0})".into()))
-            .fun("Sprintf",  FnMap::Template("String({0})".into()))
-            .fun("Fprintf",  FnMap::Template("Serial.print({0})".into()))
-            .fun("Errorf",   FnMap::Template("String({0})".into()))
+            .fun("Printf",   FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
+            .fun("Fprintf",  FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
+            .fun("Sprintf",  FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
+            .fun("Errorf",   FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
         );
     }
 

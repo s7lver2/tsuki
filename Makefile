@@ -63,7 +63,7 @@ build: $(BUILD_DIR)/$(BINARY)  ## Build the godotino CLI binary
 $(BUILD_DIR)/$(BINARY): cli/go.mod cli/go.sum $(shell find cli -name '*.go')
 	@mkdir -p $(BUILD_DIR)
 	@echo "  GO BUILD  $(BINARY) $(VERSION)"
-	cd cli && $(GO) build $(GOFLAGS) $(LDFLAGS) -o ../$(BUILD_DIR)/$(BINARY) ./cmd/godotino
+	@cd cli && $(GO) build $(GOFLAGS) $(LDFLAGS) -o ../$(BUILD_DIR)/$(BINARY) ./cmd/godotino
 	@echo "  OK        $(BUILD_DIR)/$(BINARY)"
 .PHONY: build-core
 build-core:  ## Build the godotino-core Rust binary

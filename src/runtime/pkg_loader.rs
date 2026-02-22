@@ -79,6 +79,8 @@ pub struct LibPackage {
     pub arduino_lib: Option<String>,
     /// Min godotino-core version required (semver, optional).
     pub requires_core: Option<String>,
+    /// C++ class name for global variable declarations (emitted as pointer).
+    pub cpp_class: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -131,6 +133,9 @@ pub fn load_from_str(toml_str: &str, path: &Path) -> Result<LoadedLib> {
     })?;
 
     let mut pkg = PkgMap::new(manifest.package.cpp_header.as_deref());
+    if let Some(ref class) = manifest.package.cpp_class {
+        pkg = pkg.with_class(class);
+    }
 
     for f in &manifest.functions {
         pkg = pkg.fun(&f.go, FnMap::Template(f.cpp.clone()));
