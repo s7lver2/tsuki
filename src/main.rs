@@ -88,7 +88,6 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        return;
     }
 
     match pipeline.run(&source, &filename) {

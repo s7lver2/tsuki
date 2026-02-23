@@ -1,6 +1,6 @@
 [package]
 name        = "tsuki"
-version     = "0.1.0"
+version     = "2.0.0"
 edition     = "2021"
 description = "Arduino Framework"
 license     = "MIT"
@@ -11,6 +11,10 @@ readme      = "README.md"
 [[bin]]
 name = "tsuki-core"
 path = "src/main.rs"
+
+[[bin]]
+name = "tsuki-flash"
+path = "flash/main.rs"
 
 # ─── library (used by CLI / IDE integrations) ─────────────────
 [lib]
@@ -24,8 +28,14 @@ anyhow     = "1.0"
 serde      = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml       = "0.8"
-# HTTP client for package manager (sync, no async runtime required)
+clap       = { version = "4.5", features = ["derive", "color"] }
+rayon      = "1.10"
+sha2       = "0.10"
+hex        = "0.4"
+colored    = "2.1"
+walkdir    = "2.5"
 ureq       = { version = "2.9", features = ["json"] }
+zip        = { version = "0.6", default-features = false, features = ["deflate"] }
 
 # ─── dev dependencies ─────────────────────────────────────────
 [dev-dependencies]

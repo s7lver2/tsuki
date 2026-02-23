@@ -16,6 +16,7 @@
 # ── Variables ─────────────────────────────────────────────────────────────────
 BINARY      := tsuki
 CORE_BINARY := tsuki-core
+FLASH_BINARY:= tsuki-flash
 MODULE      := github.com/tsuki/cli
 VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -73,6 +74,8 @@ build-core:  ## Build the tsuki-core Rust binary
 	@mkdir -p $(BUILD_DIR)
 	@cp $(CORE_DIR)/target/release/tsuki $(BUILD_DIR)/$(CORE_BINARY) 2>/dev/null || \
 	   cp $(CORE_DIR)/target/release/tsuki.exe $(BUILD_DIR)/$(CORE_BINARY).exe 2>/dev/null || true
+	@cp $(CORE_DIR)/target/release/tsuki-flash $(BUILD_DIR)/$(FLASH_BINARY) 2>/dev/null || \
+	   cp $(CORE_DIR)/target/release/tsuki-flash.exe $(BUILD_DIR)/$(FLASH_BINARY).exe 2>/dev/null || true
 	@echo "  OK  $(BUILD_DIR)/$(CORE_BINARY)"
 # ── Install ───────────────────────────────────────────────────────────────────
 .PHONY: install
@@ -87,6 +90,7 @@ install-all: build build-core  ## Install CLI + core to $(BINDIR)
 	@$(MAKE) install
 	@echo "  INSTALL   $(BINDIR)/$(CORE_BINARY)"
 	@sudo install -m 0755 $(C_BUILD_DIR)/$(CORE_BINARY) $(BINDIR)/$(CORE_BINARY)
+	@sudo install -m 0755 $(C_BUILD_DIR)/$(FLASH_BINARY) $(BINDIR)/$(FLASH_BINARY)
 	@echo "  ✓  tsuki-core installed to $(BINDIR)/$(CORE_BINARY)"
 	@echo "  ✓  Rembember to run tsuki config set core_binary $(BINDIR)/$(CORE_BINARY)"
 .PHONY: install-user

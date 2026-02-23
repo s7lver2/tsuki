@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -96,11 +98,51 @@ func newPkgInstallCmd() *cobra.Command {
 			fmt.Println()
 			ui.Info(fmt.Sprintf("Add to your project: tsuki pkg add %s", pkg.Name))
 
-			// If arduino_lib is set, suggest installing it
+			// If arduino_lib is set, auto-install it via tsuki-flash or arduino-cli.
 			if pkg.ArduinoLib != "" {
 				fmt.Println()
 				ui.Warn(fmt.Sprintf("This package requires the '%s' Arduino library.", pkg.ArduinoLib))
-				ui.Info(fmt.Sprintf("Install it with: arduino-cli lib install \"%s\"", pkg.ArduinoLib))
+
+				flashBin := cfg.FlashBinary
+				if flashBin == "" {
+					flashBin = "tsuki-flash"
+				}
+
+				// Use tsuki-flash when: backend is explicitly set, OR the binary is on PATH.
+				useTsukiFlash := cfg.Backend == "tsuki-flash"
+				if !useTsukiFlash {
+					if _, err := exec.LookPath(flashBin); err == nil {
+						useTsukiFlash = true
+					}
+				}
+
+				if useTsukiFlash {
+					ui.Info(fmt.Sprintf("Installing '%s' via tsuki-flash lib install…", pkg.ArduinoLib))
+					libCmd := exec.Command(flashBin, "lib", "install", pkg.ArduinoLib)
+					libCmd.Stdout = os.Stdout
+					libCmd.Stderr = os.Stderr
+					if libErr := libCmd.Run(); libErr != nil {
+						ui.Warn("Auto-install failed. Run manually:")
+						ui.Info(fmt.Sprintf("  tsuki-flash lib install \"%s\"", pkg.ArduinoLib))
+					} else {
+						ui.Success(fmt.Sprintf("'%s' installed successfully.", pkg.ArduinoLib))
+					}
+				} else {
+					arduinoCLI := cfg.ArduinoCLI
+					if arduinoCLI == "" {
+						arduinoCLI = "arduino-cli"
+					}
+					ui.Info(fmt.Sprintf("Installing '%s' via arduino-cli…", pkg.ArduinoLib))
+					libCmd := exec.Command(arduinoCLI, "lib", "install", pkg.ArduinoLib)
+					libCmd.Stdout = os.Stdout
+					libCmd.Stderr = os.Stderr
+					if libErr := libCmd.Run(); libErr != nil {
+						ui.Warn("Auto-install failed. Run manually:")
+						ui.Info(fmt.Sprintf("  arduino-cli lib install \"%s\"", pkg.ArduinoLib))
+					} else {
+						ui.Success(fmt.Sprintf("'%s' installed successfully.", pkg.ArduinoLib))
+					}
+				}
 			}
 
 			return nil

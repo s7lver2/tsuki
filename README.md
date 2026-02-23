@@ -369,7 +369,7 @@ tsuki (Go CLI)              ← thin orchestrator
 tsuki-core (Rust)           ← Go → C++ transpiler (lexer → parser → AST → codegen)
  │
  ▼
-arduino-cli                    ← compile .cpp → .hex / .bin / .uf2  +  flash to board
+tsuki-flash                    ← compile .cpp → .hex / .bin / .uf2  +  flash to board
  │
  ▼
 Board  ✓

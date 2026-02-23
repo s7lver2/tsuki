@@ -25,8 +25,12 @@ const defaultKeysIndexURL = "https://raw.githubusercontent.com/s7lver2/tsuki/ref
 // Config holds all persistent user-level settings.
 type Config struct {
 	// ── Core tools ──────────────────────────────────────────────────────────
-	CoreBinary   string `json:"core_binary"   comment:"path to tsuki-core binary"`
-	ArduinoCLI   string `json:"arduino_cli"   comment:"path to arduino-cli binary"`
+	CoreBinary  string `json:"core_binary"  comment:"path to tsuki-core binary"`
+	ArduinoCLI  string `json:"arduino_cli"  comment:"path to arduino-cli binary"`
+	FlashBinary string `json:"flash_binary" comment:"path to tsuki-flash binary (used when backend=tsuki-flash)"`
+	// Backend selects the compile+upload toolchain: "tsuki-flash" or "arduino-cli".
+	// Set with: tsuki config set backend tsuki-flash
+	Backend      string `json:"backend"       comment:"compiler backend: tsuki-flash or arduino-cli (default: arduino-cli)"`
 	DefaultBoard string `json:"default_board" comment:"default target board"`
 	DefaultBaud  int    `json:"default_baud"  comment:"default serial baud rate"`
 
@@ -66,6 +70,8 @@ func Default() *Config {
 	return &Config{
 		CoreBinary:       "",
 		ArduinoCLI:       "arduino-cli",
+		FlashBinary:      "tsuki-flash",
+		Backend:          "arduino-cli",
 		DefaultBoard:     "uno",
 		DefaultBaud:      9600,
 		Color:            true,

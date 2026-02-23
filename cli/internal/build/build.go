@@ -30,13 +30,18 @@ import (
 
 // Options controls the build pipeline.
 type Options struct {
-	Board      string
-	Compile    bool
-	OutputDir  string
-	SourceMap  bool
-	Verbose    bool
-	CoreBin    string
-	ArduinoCLI string
+	Board       string
+	Compile     bool
+	OutputDir   string
+	SourceMap   bool
+	Verbose     bool
+	CoreBin     string
+	ArduinoCLI  string
+	// FlashBinary is the path to tsuki-flash (used when Backend == "tsuki-flash").
+	FlashBinary string
+	// Backend selects the compiler: "tsuki-flash" or "arduino-cli".
+	// Defaults to "arduino-cli" if empty.
+	Backend     string
 }
 
 // Result holds the outputs of a successful build.
@@ -148,21 +153,131 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		return result, nil
 	}
 
-	// ── arduino-cli compile ──────────────────────────────────────────────────
+	// ── Compile — dispatch to selected backend ────────────────────────────
 	ui.SectionTitle("Compiling")
+
+	backend := opts.Backend
+	if backend == "" {
+		backend = "arduino-cli"
+	}
+
+	buildCacheDir := filepath.Join(baseOutDir, ".cache")
+	_ = os.MkdirAll(buildCacheDir, 0755)
+
+	switch backend {
+	case "tsuki-flash":
+		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir); err != nil {
+			return result, err
+		}
+	default: // "arduino-cli" or anything unrecognised
+		if err := compileArduinoCLI(result, board, opts, sketchDir, buildCacheDir); err != nil {
+			return result, err
+		}
+	}
+
+	hexFiles, _ := filepath.Glob(filepath.Join(buildCacheDir, "*.hex"))
+	if len(hexFiles) > 0 {
+		result.FirmwareHex = hexFiles[0]
+	}
+
+	return result, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Backend: tsuki-flash
+// ─────────────────────────────────────────────────────────────────────────────
+
+func compileTsukiFlash(
+	result *Result,
+	m *manifest.Manifest,
+	board string,
+	opts Options,
+	buildCacheDir string,
+	pkgNames []string,
+	libsDir string,
+) error {
+	flashBin := opts.FlashBinary
+	if flashBin == "" {
+		flashBin = "tsuki-flash"
+	}
+
+	// Build the --include list from installed tsuki packages.
+	var includeArgs []string
+	for _, pkg := range pkgNames {
+		pkgDir := filepath.Join(libsDir, pkg)
+		// Walk to find the versioned subdirectory.
+		entries, err := os.ReadDir(pkgDir)
+		if err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					includeArgs = append(includeArgs, filepath.Join(pkgDir, e.Name()))
+					break
+				}
+			}
+		} else {
+			// Fall back to the package root itself.
+			includeArgs = append(includeArgs, pkgDir)
+		}
+	}
+
+	cppStd := m.Build.CppStd
+	if cppStd == "" {
+		cppStd = "c++11"
+	}
+
+	args := []string{
+		"compile",
+		"--board", board,
+		"--sketch", result.SketchDir,
+		"--build-dir", buildCacheDir,
+		"--name", sanitizeSketchName(m.Name),
+		"--cpp-std", cppStd,
+	}
+	for _, inc := range includeArgs {
+		args = append(args, "--include", inc)
+	}
+	if opts.Verbose {
+		args = append(args, "--verbose")
+	}
+
+	sp := ui.NewSpinner(fmt.Sprintf("tsuki-flash compile --board %s", board))
+	sp.Start()
+
+	cmd := exec.Command(flashBin, args...)
+	out, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
+		sp.Stop(false, "compilation failed")
+		renderTsukiFlashError(string(out))
+		return fmt.Errorf("tsuki-flash compile failed")
+	}
+
+	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
+	if opts.Verbose && len(out) > 0 {
+		fmt.Print(string(out))
+	}
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Backend: arduino-cli
+// ─────────────────────────────────────────────────────────────────────────────
+
+func compileArduinoCLI(
+	result *Result,
+	board string,
+	opts Options,
+	sketchDir string,
+	buildCacheDir string,
+) error {
 	fqbn, err := boardFQBN(board)
 	if err != nil {
-		return result, fmt.Errorf("unknown board %q — run `tsuki boards list`", board)
+		return fmt.Errorf("unknown board %q — run `tsuki boards list`", board)
 	}
 
 	arduinoCLI := opts.ArduinoCLI
 	if arduinoCLI == "" {
 		arduinoCLI = "arduino-cli"
 	}
-
-	// Compile artifacts go into build/.cache/ to keep the sketch dir clean.
-	buildCacheDir := filepath.Join(baseOutDir, ".cache")
-	_ = os.MkdirAll(buildCacheDir, 0755)
 
 	args := []string{
 		"compile",
@@ -173,7 +288,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	if opts.Verbose {
 		args = append(args, "--verbose")
 	}
-	// *** KEY FIX: pass the SKETCH DIR, not the project root ***
 	args = append(args, sketchDir)
 
 	sp := ui.NewSpinner(fmt.Sprintf("arduino-cli compile --fqbn %s", fqbn))
@@ -185,17 +299,11 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	if cmdErr != nil {
 		sp.Stop(false, "compilation failed")
 		renderArduinoError(string(out))
-		return result, fmt.Errorf("arduino-cli compile failed")
+		return fmt.Errorf("arduino-cli compile failed")
 	}
+
 	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
-
-	hexFiles, _ := filepath.Glob(filepath.Join(buildCacheDir, "*.hex"))
-	if len(hexFiles) > 0 {
-		result.FirmwareHex = hexFiles[0]
-	}
-
-	return result, nil
-}
+	return nil
 
 // writeInoStub creates <sketchDir>/<sketchName>.ino — the required entry
 // point for arduino-cli. The stub must NOT #include the generated .cpp files:
@@ -249,13 +357,15 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			opts := Options{
-				Board:      board,
-				Compile:    compile,
-				OutputDir:  output,
-				Verbose:    verbose,
-				CoreBin:    cfg.CoreBinary,
-				ArduinoCLI: cfg.ArduinoCLI,
-				SourceMap:  m.Build.SourceMap,
+				Board:       board,
+				Compile:     compile,
+				OutputDir:   output,
+				Verbose:     verbose,
+				CoreBin:     cfg.CoreBinary,
+				ArduinoCLI:  cfg.ArduinoCLI,
+				FlashBinary: cfg.FlashBinary,
+				Backend:     cfg.Backend,
+				SourceMap:   m.Build.SourceMap,
 			}
 
 			res, err := Run(dir, m, opts)
@@ -275,6 +385,38 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&compile, "compile", "c", false, "compile to firmware after transpile")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	return cmd
+}
+
+func renderTsukiFlashError(output string) {
+	lines := strings.Split(output, "\n")
+	var frames []ui.Frame
+	var errMsg string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// tsuki-flash error format: "✗ <message>" or "error: <message>"
+		if strings.HasPrefix(line, "✗") || strings.Contains(line, "error:") || strings.Contains(line, "Error:") {
+			if errMsg == "" {
+				errMsg = strings.TrimPrefix(strings.TrimPrefix(line, "✗ "), "error: ")
+			}
+			frames = append(frames, ui.Frame{
+				File: "tsuki-flash", Func: "compile",
+				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: true}},
+			})
+		}
+	}
+
+	if len(frames) == 0 {
+		errMsg = strings.TrimSpace(output)
+		frames = []ui.Frame{{
+			File: "tsuki-flash", Func: "compile",
+			Code: []ui.CodeLine{{Number: 0, Text: errMsg, IsPointer: true}},
+		}}
+	}
+	ui.Traceback("CompileError", errMsg, frames)
 }
 
 func renderArduinoError(output string) {
