@@ -236,3 +236,164 @@ fn parse_name_version(s: &str) -> (&str, Option<&str>) {
         None    => (s, None),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  v3 additions: multi-registry support via keys.json
+//
+//  keys.json lives at  ~/.config/tsuki/keys.json
+//  DB cache lives at   ~/.cache/tsuki/db/<registry-name>.json
+//
+//  Each cache file is a flat packages.json:
+//    [{"name":"ws2812","version":"1.0.0","toml_url":"https://..."}]
+//
+//  This mirrors what `tsuki updatedb` (Go CLI) writes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One entry in keys.json.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RegistryKey {
+    pub name: String,
+    pub url:  String,
+}
+
+/// A single entry inside a packages.json cache file.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct PackagesEntry {
+    pub name:     String,
+    pub version:  String,
+    #[serde(alias = "download_url")]
+    pub toml_url: Option<String>,
+}
+
+/// Load all registry keys from `~/.config/tsuki/keys.json`.
+/// Returns an empty vec if the file does not exist (not an error).
+pub fn load_keys() -> Vec<RegistryKey> {
+    let Some(home) = dirs_home() else { return vec![] };
+    let path = home.join(".config").join("tsuki").join("keys.json");
+    let Ok(data) = fs::read_to_string(&path) else { return vec![] };
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+/// Fetch and cache every registry listed in keys.json.
+/// Writes one `<name>.json` file per registry into `~/.cache/tsuki/db/`.
+/// Returns a list of (registry_name, package_count_or_error) for display.
+pub fn update_db() -> Vec<(String, Result<usize>)> {
+    let keys = load_keys();
+    let Some(home) = dirs_home() else {
+        return vec![("error".into(), Err(tsukiError::codegen("cannot determine home directory")))];
+    };
+    let cache_dir = home.join(".cache").join("tsuki").join("db");
+    let _ = fs::create_dir_all(&cache_dir);
+
+    keys.into_iter().map(|key| {
+        let result = fetch_and_cache_registry(&key, &cache_dir);
+        (key.name, result)
+    }).collect()
+}
+
+fn fetch_and_cache_registry(key: &RegistryKey, cache_dir: &Path) -> Result<usize> {
+    let url = if key.url.ends_with('/') {
+        format!("{}packages.json", key.url)
+    } else {
+        format!("{}/packages.json", key.url)
+    };
+
+    let body = http_get(&url)?;
+
+    // Validate it's parseable JSON array before caching.
+    let entries: Vec<PackagesEntry> = serde_json::from_str(&body).map_err(|e| {
+        tsukiError::codegen(format!("invalid packages.json from {}: {}", url, e))
+    })?;
+    let count = entries.len();
+
+    let cache_file = cache_dir.join(format!("{}.json", key.name));
+    fs::write(&cache_file, &body).map_err(|e| {
+        tsukiError::codegen(format!("writing cache {}: {}", cache_file.display(), e))
+    })?;
+
+    Ok(count)
+}
+
+/// Resolve a package spec ("registry@name:version" or "name:version" or "name")
+/// from the local DB cache.  Returns the toml_url and resolved version.
+pub fn resolve_from_db(spec: &str) -> Result<(String, String)> {
+    let (registry_hint, name, version_hint) = parse_v3_spec(spec);
+
+    let Some(home) = dirs_home() else {
+        return Err(tsukiError::codegen("cannot determine home directory"));
+    };
+    let cache_dir = home.join(".cache").join("tsuki").join("db");
+
+    // Collect cache files to search: specific registry or all.
+    let files: Vec<PathBuf> = if let Some(reg) = registry_hint {
+        vec![cache_dir.join(format!("{}.json", reg))]
+    } else {
+        fs::read_dir(&cache_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    for file in &files {
+        let Ok(data) = fs::read_to_string(file) else { continue };
+        let Ok(entries) = serde_json::from_str::<Vec<PackagesEntry>>(&data) else { continue };
+
+        for entry in entries {
+            if entry.name.to_lowercase() != name.to_lowercase() {
+                continue;
+            }
+            if let Some(v) = version_hint {
+                if entry.version != v {
+                    continue;
+                }
+            }
+            if let Some(url) = entry.toml_url {
+                return Ok((url, entry.version));
+            }
+        }
+    }
+
+    Err(tsukiError::codegen(format!(
+        "package '{}' not found in local registry cache — run `tsuki updatedb` to refresh",
+        name
+    )))
+}
+
+/// Install a package from a v3 spec string using the local DB cache.
+pub fn install_from_spec(spec: &str, libs_dir: &Path) -> Result<String> {
+    let (toml_url, version) = resolve_from_db(spec)?;
+    eprintln!("tsuki: downloading {} from {} …", spec, toml_url);
+    let toml_str = http_get(&toml_url)?;
+    let _ = version; // version is embedded in the TOML itself
+    pkg_loader::install_from_toml(libs_dir, &toml_str)
+}
+
+// ── v3 spec parser ────────────────────────────────────────────────────────────
+
+/// Parse `"registry@name:version"` into its optional components.
+///   "ws2812"                  → (None, "ws2812", None)
+///   "ws2812:1.0.0"            → (None, "ws2812", Some("1.0.0"))
+///   "tsuki-team@ws2812:1.0.0" → (Some("tsuki-team"), "ws2812", Some("1.0.0"))
+fn parse_v3_spec(spec: &str) -> (Option<&str>, &str, Option<&str>) {
+    let (registry, rest) = match spec.find('@') {
+        Some(i) => (Some(&spec[..i]), &spec[i + 1..]),
+        None    => (None, spec),
+    };
+    let (name, version) = match rest.rfind(':') {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None    => (rest, None),
+    };
+    (registry, name, version)
+}
+
+// ── home dir helper (avoids the `dirs` crate) ─────────────────────────────────
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}

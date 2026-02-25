@@ -1,17 +1,21 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  godotino — Makefile
-#  Builds the Go CLI + optional Rust core, and installs both.
+#  tsuki — Makefile
+#  Builds the Go CLI + Rust core/flash, and installs both.
 #
 #  Usage:
-#    make            — build CLI binary
-#    make install    — build + install to /usr/local/bin
-#    make build-core — build the Rust core binary
-#    make all        — build CLI + core
-#    make release    — cross-compile for Linux, macOS, Windows
-#    make clean      — remove build artifacts
-#    make test       — run Go unit tests
-#    make lint       — run golangci-lint
-#    make uninstall  — remove installed binaries
+#    make                  — build CLI binary
+#    make install          — build + install to /usr/local/bin
+#    make build-core       — build the Rust binaries (tsuki-core + tsuki-flash)
+#    make all              — build CLI + core
+#    make release          — cross-compile Go CLI for all platforms
+#    make release-<target> — build Rust for a specific target (used by CI)
+#                            targets: x86_64-linux  aarch64-linux
+#                                     x86_64-windows x86_64-macos aarch64-macos
+#    make push             — run `tsuki push` to publish a GitHub Release
+#    make clean            — remove build artifacts
+#    make test             — run Go unit tests + Rust tests
+#    make lint             — run golangci-lint
+#    make uninstall        — remove installed binaries
 # ─────────────────────────────────────────────────────────────────────────────
 # ── Variables ─────────────────────────────────────────────────────────────────
 BINARY      := tsuki
@@ -111,7 +115,7 @@ configure:
 	@tsuki config set registry_url "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/packages.json"
 # ── Release (cross-compile) ───────────────────────────────────────────────────
 .PHONY: release
-release:  ## Cross-compile for all platforms into dist/
+release:  ## Cross-compile Go CLI for all platforms into dist/
 	@mkdir -p $(BUILD_DIR)
 	@for platform in $(PLATFORMS); do \
 	  GOOS=$$(echo $$platform | cut -d/ -f1); \
@@ -124,14 +128,65 @@ release:  ## Cross-compile for all platforms into dist/
 	@echo ""
 	@echo "  ✓  Release binaries in $(BUILD_DIR)/"
 	@ls -lh $(BUILD_DIR)/$(BINARY)-* 2>/dev/null | awk '{print "     " $$NF " (" $$5 ")"}'
+
+# ── Rust release targets (called by GitHub Actions) ───────────────────────────
+# Cada target compila tsuki-core y tsuki-flash para una plataforma específica,
+# empaqueta los binarios en dist/ y genera un .sha256.
+# En CI, `cross` debe estar instalado para aarch64-linux.
+
+RUST_TARGET_x86_64-linux   := x86_64-unknown-linux-gnu
+RUST_TARGET_aarch64-linux  := aarch64-unknown-linux-gnu
+RUST_TARGET_x86_64-windows := x86_64-pc-windows-msvc
+RUST_TARGET_x86_64-macos   := x86_64-apple-darwin
+RUST_TARGET_aarch64-macos  := aarch64-apple-darwin
+
+# Uso: make release-x86_64-linux  /  make release-aarch64-linux  / etc.
+release-%:
+	$(eval TSUKI_TARGET := $*)
+	$(eval RUST_TARGET  := $(RUST_TARGET_$(TSUKI_TARGET)))
+	@test -n "$(RUST_TARGET)" || \
+	  (echo "Target desconocido: $(TSUKI_TARGET). Válidos: x86_64-linux aarch64-linux x86_64-windows x86_64-macos aarch64-macos" && exit 1)
+	@echo "  CARGO BUILD  $(RUST_TARGET)"
+	@if echo "$(TSUKI_TARGET)" | grep -q "aarch64-linux"; then \
+	  cross build --release --target $(RUST_TARGET); \
+	else \
+	  cargo build --release --target $(RUST_TARGET); \
+	fi
+	@mkdir -p $(BUILD_DIR)
+	@EXT=""; \
+	 if echo "$(TSUKI_TARGET)" | grep -q "windows"; then EXT=".exe"; fi; \
+	 CORE_SRC=target/$(RUST_TARGET)/release/tsuki-core$$EXT; \
+	 FLASH_SRC=target/$(RUST_TARGET)/release/tsuki-flash$$EXT; \
+	 ARTIFACT=$(BUILD_DIR)/tsuki-$(TSUKI_TARGET)-$(VERSION); \
+	 mkdir -p $$ARTIFACT; \
+	 cp $$CORE_SRC  $$ARTIFACT/$(CORE_BINARY)$$EXT; \
+	 cp $$FLASH_SRC $$ARTIFACT/$(FLASH_BINARY)$$EXT; \
+	 cp README.md $$ARTIFACT/ 2>/dev/null || true; \
+	 cp LICENSE   $$ARTIFACT/ 2>/dev/null || true; \
+	 if echo "$(TSUKI_TARGET)" | grep -q "windows"; then \
+	   cd $(BUILD_DIR) && zip -r tsuki-$(TSUKI_TARGET)-$(VERSION).zip tsuki-$(TSUKI_TARGET)-$(VERSION)/; \
+	   sha256sum tsuki-$(TSUKI_TARGET)-$(VERSION).zip > tsuki-$(TSUKI_TARGET)-$(VERSION).zip.sha256; \
+	 else \
+	   cd $(BUILD_DIR) && tar czf tsuki-$(TSUKI_TARGET)-$(VERSION).tar.gz tsuki-$(TSUKI_TARGET)-$(VERSION)/; \
+	   sha256sum tsuki-$(TSUKI_TARGET)-$(VERSION).tar.gz > tsuki-$(TSUKI_TARGET)-$(VERSION).tar.gz.sha256; \
+	 fi
+	@echo "  ✓  $(BUILD_DIR)/tsuki-$(TSUKI_TARGET)-$(VERSION)"
+
+# ── Publish via tsuki push ────────────────────────────────────────────────────
+.PHONY: push
+push:  ## Publish a GitHub Release using `tsuki push` (requiere GITHUB_TOKEN)
+	@command -v tsuki >/dev/null 2>&1 || { echo "tsuki CLI no encontrado — instala con: make install"; exit 1; }
+	tsuki push
+
 # ── Dev tools ─────────────────────────────────────────────────────────────────
 .PHONY: deps
 deps:  ## Download Go dependencies
 	cd cli && $(GO) mod download
 	cd cli && $(GO) mod tidy
 .PHONY: test
-test:  ## Run unit tests
+test:  ## Run Go unit tests + Rust tests
 	cd cli && $(GO) test ./... -v -count=1
+	cargo test
 .PHONY: test-short
 test-short:  ## Run unit tests (skip slow tests)
 	cd cli && $(GO) test ./... -short

@@ -1,0 +1,23 @@
+{
+  "_comment": "Metadatos del proyecto tsuki para el registro. Generado/actualizado con `tsuki push`.",
+  "name": "tsuki",
+  "version": "3.0.0",
+  "description": "Arduino Framework — Write in Go, Upload in C++",
+  "author": "s7lver",
+  "license": "MIT",
+  "repository": "https://github.com/s7lver/tsuki",
+  "keywords": ["arduino", "embedded", "go", "transpiler"],
+  "type": "program",
+
+  "files": [
+    "tsuki-config.toml",
+    "src/main.rs",
+    "src/lib.rs",
+    "flash/main.rs",
+    "README.md",
+    "LICENSE"
+  ],
+
+  "published_at": "",
+  "download_url": "https://github.com/s7lver/tsuki/releases/latest"
+}

@@ -1,0 +1,11 @@
+{
+  "_comment": "Lista de fuentes de paquetes tsuki. Copia este archivo a ~/.config/tsuki/keys.json",
+  "registries": [
+    {
+      "id": "tsuki-team",
+      "name": "Tsuki Official Registry",
+      "packages_url": "https://raw.githubusercontent.com/s7lver/tsuki/main/pkg/packages.json",
+      "trusted": true
+    }
+  ]
+}

@@ -37,6 +37,19 @@ var (
 	wMagenta = color.New(color.FgHiMagenta, color.Bold)
 )
 
+// ── Project type choices ──────────────────────────────────────────────────────
+
+type projectTypeChoice struct {
+	id   string
+	name string
+	note string
+}
+
+var projectTypeChoices = []projectTypeChoice{
+	{"program", "Program  ✦", "has a main entrypoint · can be run with `tsuki run`"},
+	{"library", "Library", "reusable package · no entrypoint"},
+}
+
 // ── Language choices ──────────────────────────────────────────────────────────
 
 type langChoice struct {
@@ -155,6 +168,7 @@ func newInitCmd() *cobra.Command {
 		flagYes      bool
 		flagBackend  string
 		flagLanguage string
+		flagType     string
 	)
 
 	cmd := &cobra.Command{
@@ -163,12 +177,13 @@ func newInitCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		Example: `  tsuki init
   tsuki init my-robot
-  tsuki init my-robot --board esp32 --yes`,
+  tsuki init my-robot --board esp32 --yes
+  tsuki init my-app --type program`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				flagName = args[0]
 			}
-			return runWizard(flagName, flagBoard, flagBackend, flagLanguage, flagYes)
+			return runWizard(flagName, flagBoard, flagBackend, flagLanguage, flagType, flagYes)
 		},
 	}
 
@@ -176,6 +191,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&flagName, "name", "n", "", "skip name prompt")
 	cmd.Flags().StringVar(&flagBackend, "backend", "", "compiler backend: tsuki-flash or arduino-cli")
 	cmd.Flags().StringVarP(&flagLanguage, "language", "l", "", "programming language (go)")
+	cmd.Flags().StringVar(&flagType, "type", "", "project type: program or library")
 	cmd.Flags().BoolVarP(&flagYes, "yes", "y", false, "accept all defaults")
 	return cmd
 }
@@ -184,7 +200,7 @@ func newInitCmd() *cobra.Command {
 //  Wizard runner
 // ─────────────────────────────────────────────────────────────────────────────
 
-func runWizard(prefillName, prefillBoard, prefillBackend, prefillLanguage string, acceptDefaults bool) error {
+func runWizard(prefillName, prefillBoard, prefillBackend, prefillLanguage, prefillType string, acceptDefaults bool) error {
 	printIntro()
 
 	reader := bufio.NewReader(os.Stdin)
@@ -202,61 +218,74 @@ func runWizard(prefillName, prefillBoard, prefillBackend, prefillLanguage string
 	}
 	projectName = sanitizeName(projectName)
 
-	// ── 2. Language ─────────────────────────────────────────────────────────
+	// ── 2. Project type ─────────────────────────────────────────────────────
+	var projType projectTypeChoice
+	if prefillType != "" {
+		projType = findProjectTypeChoice(prefillType)
+		stepDone(2, "Project type", projType.name)
+	} else if acceptDefaults {
+		projType = projectTypeChoices[0]
+		stepDone(2, "Project type", projType.name+" (default)")
+	} else {
+		idx := promptArrowSelect(2, "What kind of project is this?", projectTypeLabels(), 0)
+		projType = projectTypeChoices[idx]
+	}
+
+	// ── 3. Language ─────────────────────────────────────────────────────────
 	var lang langChoice
 	if prefillLanguage != "" {
 		lang = findLangChoice(prefillLanguage)
-		stepDone(2, "Language", lang.name)
+		stepDone(3, "Language", lang.name)
 	} else if acceptDefaults {
 		lang = langChoices[0]
-		stepDone(2, "Language", lang.name+" (default)")
+		stepDone(3, "Language", lang.name+" (default)")
 	} else {
-		idx := promptArrowSelect(2, "Which language do you want to use?", langChoicesLabels(), 0)
+		idx := promptArrowSelect(3, "Which language do you want to use?", langChoicesLabels(), 0)
 		lang = langChoices[idx]
 	}
 
-	// ── 3. Board ────────────────────────────────────────────────────────────
+	// ── 4. Board ────────────────────────────────────────────────────────────
 	var board boardChoice
 	if prefillBoard != "" {
 		board = findBoardChoice(prefillBoard)
-		stepDone(3, "Target board", board.name)
+		stepDone(4, "Target board", board.name)
 	} else if acceptDefaults {
 		board = boardChoices[0]
-		stepDone(3, "Target board", board.name+" (default)")
+		stepDone(4, "Target board", board.name+" (default)")
 	} else {
-		idx := promptArrowSelect(3, "Which board are you targeting?", boardChoicesLabels(), 0)
+		idx := promptArrowSelect(4, "Which board are you targeting?", boardChoicesLabels(), 0)
 		board = boardChoices[idx]
 	}
 
-	// ── 4. Compiler backend ─────────────────────────────────────────────────
+	// ── 5. Compiler backend ─────────────────────────────────────────────────
 	var backend backendChoice
 	if prefillBackend != "" {
 		backend = findBackendChoice(prefillBackend)
-		stepDone(4, "Compiler backend", backend.name)
+		stepDone(5, "Compiler backend", backend.name)
 	} else if acceptDefaults {
 		backend = backendChoices[0]
-		stepDone(4, "Compiler backend", backend.name+" (default)")
+		stepDone(5, "Compiler backend", backend.name+" (default)")
 	} else {
-		idx := promptArrowSelect(4, "Which compiler backend?", backendChoicesLabels(), 0)
+		idx := promptArrowSelect(5, "Which compiler backend?", backendChoicesLabels(), 0)
 		backend = backendChoices[idx]
 	}
 
-	// ── 5. Starter template ─────────────────────────────────────────────────
+	// ── 6. Starter template ─────────────────────────────────────────────────
 	var tmpl templateChoice
 	if acceptDefaults {
 		tmpl = templateChoices[0]
-		stepDone(5, "Starter template", tmpl.name+" (default)")
+		stepDone(6, "Starter template", tmpl.name+" (default)")
 	} else {
-		idx := promptArrowSelect(5, "How should we start your project?", templateLabels(), 0)
+		idx := promptArrowSelect(6, "How should we start your project?", templateLabels(), 0)
 		tmpl = templateChoices[idx]
 	}
 
-	// ── 6. Git init ──────────────────────────────────────────────────────────
+	// ── 7. Git init ──────────────────────────────────────────────────────────
 	gitInit := true
 	if !acceptDefaults {
-		gitInit = promptYesNo(reader, 6, "Initialize a git repository?", true)
+		gitInit = promptYesNo(reader, 7, "Initialize a git repository?", true)
 	} else {
-		stepDone(6, "Git repository", "yes (default)")
+		stepDone(7, "Git repository", "yes (default)")
 	}
 
 	// ── Scaffold ─────────────────────────────────────────────────────────────
@@ -264,14 +293,14 @@ func runWizard(prefillName, prefillBoard, prefillBackend, prefillLanguage string
 	printLine()
 	fmt.Println()
 
-	return scaffold(projectName, lang, board, backend, tmpl, gitInit)
+	return scaffold(projectName, projType, lang, board, backend, tmpl, gitInit)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Scaffold
 // ─────────────────────────────────────────────────────────────────────────────
 
-func scaffold(name string, lang langChoice, board boardChoice, backend backendChoice, tmpl templateChoice, gitInit bool) error {
+func scaffold(name string, projType projectTypeChoice, lang langChoice, board boardChoice, backend backendChoice, tmpl templateChoice, gitInit bool) error {
 	dir := filepath.Join(projectDir(), name)
 	srcDir := filepath.Join(dir, "src")
 
@@ -282,8 +311,21 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 		fn    func() error
 	}{
 		{"Creating project directory", func() error { return os.MkdirAll(srcDir, 0755) }},
-		{"Writing goduino.json", func() error {
+		{"Writing tsuki-config.toml", func() error {
 			m := manifest.Default(name, board.id)
+			m.Project.Type = projType.id
+			if projType.id == "program" {
+				m.Bins = []manifest.BinTarget{{
+					Name:       name,
+					Path:       "src/main.go",
+					Entrypoint: "tsuki build --compile",
+				}}
+			} else {
+				m.Libs = []manifest.LibTarget{{
+					Name: name,
+					Path: "src/lib.go",
+				}}
+			}
 			if backend.id == "arduino-cli" {
 				m.Build.ExtraFlags = append(m.Build.ExtraFlags, "--arduino-cli")
 			}
@@ -299,7 +341,7 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 		{"Writing .gitignore", func() error {
 			p := filepath.Join(dir, ".gitignore")
 			if _, err := os.Stat(p); os.IsNotExist(err) {
-				return os.WriteFile(p, []byte("build/\n*.hex\n*.bin\n*.uf2\n.tsuki-cache.json\n"), 0644)
+				return os.WriteFile(p, []byte("build/\n*.hex\n*.bin\n*.uf2\n.tsuki-cache.json\n.tsuki/\n"), 0644)
 			}
 			return nil
 		}},
@@ -329,7 +371,7 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 		sp.Stop(true, step.label)
 	}
 
-	printSuccess(name, lang, board, backend)
+	printSuccess(name, projType, lang, board, backend)
 	return nil
 }
 
@@ -557,7 +599,7 @@ func printLine() {
 	wDim.Println(" " + strings.Repeat("─", 58))
 }
 
-func printSuccess(name string, lang langChoice, board boardChoice, backend backendChoice) {
+func printSuccess(name string, projType projectTypeChoice, lang langChoice, board boardChoice, backend backendChoice) {
 	fmt.Println()
 	printLine()
 	fmt.Println()
@@ -566,6 +608,10 @@ func printSuccess(name string, lang langChoice, board boardChoice, backend backe
 	wCyan.Printf("%s", name)
 	wBold.Println(" is ready!")
 	fmt.Println()
+
+	wDim.Printf("   %-14s", "type")
+	wMagenta.Printf("%s", projType.name)
+	wDim.Printf("  %s\n", projType.note)
 
 	wDim.Printf("   %-14s", "language")
 	wGreen.Printf("%s", lang.name)
@@ -589,6 +635,9 @@ func printSuccess(name string, lang langChoice, board boardChoice, backend backe
 	printStep("cd", name)
 	printStep("edit", "src/main.go")
 	printStep("tsuki build", "--compile")
+	if projType.id == "program" {
+		printStep("tsuki run", "")
+	}
 	printStep("tsuki upload", "")
 	fmt.Println()
 	printLine()
@@ -696,4 +745,20 @@ func isatty() bool {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+func projectTypeLabels() []string {
+	out := make([]string, len(projectTypeChoices))
+	for i, t := range projectTypeChoices {
+		out[i] = fmt.Sprintf("%-12s  %s", t.name, t.note)
+	}
+	return out
+}
+
+func findProjectTypeChoice(id string) projectTypeChoice {
+	for _, t := range projectTypeChoices {
+		if strings.EqualFold(t.id, id) {
+			return t
+		}
+	}
+	return projectTypeChoices[0]
 }

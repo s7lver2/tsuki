@@ -1,0 +1,5 @@
+# Dependencias locales del proyecto (instaladas con `tsuki install`)
+deps/
+
+# Tarballs cacheados localmente
+cache/

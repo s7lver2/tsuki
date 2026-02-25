@@ -1,6 +1,37 @@
-target/
+# ── Rust ──────────────────────────────────────────────────────────────────────
+/target/
+Cargo.lock
 dist/
+
+# ── Go CLI ────────────────────────────────────────────────────────────────────
+cli/vendor/
+# cli/go.sum        # sí debe commitearse para binarios
+
+# ── Tsuki build artifacts ─────────────────────────────────────────────────────
+/dist/
+*.hex
+*.bin
+*.uf2
+
+# ── Tsuki project deps & cache (proyectos de usuario) ────────────────────────
+.tsuki/deps/
+.tsuki/cache/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Credenciales (nunca commitear) ───────────────────────────────────────────
+auth.toml
+.env
+
+
 bin/
 test/
-Cargo.lock
 *.zip

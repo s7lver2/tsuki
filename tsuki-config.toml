@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  tsuki-config.toml  —  Configuración del proyecto tsuki (formato v3)
+#
+#  Este archivo es para la CLI de tsuki (metadatos, entrypoints, publicación).
+#  Las dependencias de Rust y el build de cargo siguen en Cargo.toml.
+#  El build real lo orquesta el Makefile.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[package]
+name        = "tsuki"
+version     = "3.0.0"
+edition     = "2024"
+description = "Arduino Framework — Write in Go, Upload in C++"
+license     = "MIT"
+authors     = ["tsuki Contributors", "s7lver"]
+readme      = "README.md"
+repository  = "https://github.com/s7lver/tsuki"
+keywords    = ["arduino", "embedded", "go", "transpiler"]
+type        = "program"
+
+# ─── Entrypoints para `tsuki run` ────────────────────────────────────────────
+# Delega al Makefile para aprovechar la lógica existente.
+
+[[package]]
+name       = "tsuki-core"
+path       = "src/main.rs"
+entrypoint = "make build-core"
+
+[[package]]
+name       = "tsuki-flash"
+path       = "flash/main.rs"
+entrypoint = "make build-core"
+
+# ─── Librería interna ─────────────────────────────────────────────────────────
+[lib]
+name = "tsuki_core"
+path = "src/lib.rs"
+
+# ─── Publicación ─────────────────────────────────────────────────────────────
+# `tsuki push` usa estos targets. El build se delega a `make release-<target>`.
+
+[publish]
+github_repo = "s7lver/tsuki"
+targets = [
+  "x86_64-linux",
+  "aarch64-linux",
+  "x86_64-windows",
+  "x86_64-macos",
+  "aarch64-macos",
+]
+pre_build  = "make test"
+post_build = ""

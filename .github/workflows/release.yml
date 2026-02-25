@@ -1,0 +1,161 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  tsuki — .github/workflows/release.yml
+#
+#  Se activa cuando se hace push de un tag v* o manualmente.
+#  Todo el build se delega al Makefile (make release-<target>, make release).
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v3.0.0)'
+        required: true
+
+jobs:
+  # ── Rust binaries (tsuki-core + tsuki-flash) ────────────────────────────────
+  build-rust:
+    name: make release-${{ matrix.tsuki_target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tsuki_target: x86_64-linux
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            use_cross: false
+
+          - tsuki_target: aarch64-linux
+            os: ubuntu-latest
+            rust_target: aarch64-unknown-linux-gnu
+            use_cross: true            # instala `cross` automáticamente
+
+          - tsuki_target: x86_64-windows
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            use_cross: false
+
+          - tsuki_target: x86_64-macos
+            os: macos-latest
+            rust_target: x86_64-apple-darwin
+            use_cross: false
+
+          - tsuki_target: aarch64-macos
+            os: macos-latest
+            rust_target: aarch64-apple-darwin
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.rust_target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ matrix.rust_target }}-
+
+      - name: Install cross (aarch64-linux only)
+        if: matrix.use_cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # El Makefile detecta aarch64-linux y usa `cross` automáticamente
+      - name: Build & package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: make release-${{ matrix.tsuki_target }}
+
+      - name: Build & package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: make release-${{ matrix.tsuki_target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-${{ matrix.tsuki_target }}
+          path: |
+            dist/tsuki-${{ matrix.tsuki_target }}-*.tar.gz
+            dist/tsuki-${{ matrix.tsuki_target }}-*.zip
+            dist/tsuki-${{ matrix.tsuki_target }}-*.sha256
+          if-no-files-found: error
+
+  # ── Go CLI (tsuki) ──────────────────────────────────────────────────────────
+  build-cli:
+    name: make release (Go CLI)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: cli/go.sum
+
+      # `make release` cross-compila para linux/darwin/windows en un solo paso
+      - name: Build CLI for all platforms
+        run: make release
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-all-platforms
+          path: dist/tsuki-*
+          if-no-files-found: error
+
+  # ── GitHub Release ───────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-rust, build-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate combined checksums.txt
+        run: |
+          cd artifacts
+          # Une los .sha256 individuales en un solo archivo
+          find . -name "*.sha256" | sort | xargs cat | sort > checksums.txt
+          echo "=== Artefactos ==="
+          ls -lh *.tar.gz *.zip *.exe 2>/dev/null | awk '{print $NF, "("$5")"}'
+          echo ""
+          echo "=== checksums.txt ==="
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.version }}
+          name: "tsuki ${{ github.ref_name || github.event.inputs.version }}"
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/tsuki-*
+            artifacts/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

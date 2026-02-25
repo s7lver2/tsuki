@@ -16,12 +16,9 @@ import (
 )
 
 var (
-	// Global flags
 	globalVerbose bool
 	globalNoColor bool
-
-	// Loaded config (available to all subcommands)
-	cfg *config.Config
+	cfg           *config.Config
 )
 
 var rootCmd = &cobra.Command{
@@ -65,6 +62,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&globalNoColor, "no-color", false, "disable colored output")
 
 	rootCmd.AddCommand(
+		// original commands
 		newInitCmd(),
 		newBuildCmd(),
 		newUploadCmd(),
@@ -74,11 +72,15 @@ func init() {
 		newCleanCmd(),
 		newVersionCmd(),
 		newPkgCmd(),
+		// v3 commands
+		newRunCmd(),
+		newInstallCmd(),
+		newPullCmd(),
+		newPushCmd(),
+		newUpdateDBCmd(),
 	)
 }
 
-
-// banner returns the styled ASCII banner.
 func banner() string {
 	b := `
   ████████╗███████╗██╗   ██╗██╗  ██╗██╗    
@@ -91,11 +93,9 @@ func banner() string {
 	if color.NoColor {
 		return b
 	}
-	// Color the banner cyan+bold
 	return ui.ColorInfo.Sprint(b)
 }
 
-// projectDir returns the current working directory (used by most commands).
 func projectDir() string {
 	wd, err := os.Getwd()
 	if err != nil {

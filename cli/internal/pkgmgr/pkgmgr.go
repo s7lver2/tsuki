@@ -131,13 +131,89 @@ const (
 )
 
 type InstallOptions struct {
+	// ── legacy ────────────────────────────────────────────────────────────
 	Source  string
 	Version string
+
+	// ── v3 ────────────────────────────────────────────────────────────────
+	// Spec is the user-facing package specifier: "name", "name:1.2.3", or
+	// "registry@name:1.2.3".  When set it takes precedence over Source.
+	Spec   string
+	Dir    string // project root for local installs
+	Global bool   // install to global deps dir instead of .tsuki/deps/
+	Dev    bool   // add to [dev-dependencies]
 }
 
-// Install fetches a tsukilib.toml, optionally verifies its Ed25519
-// signature, and places it in LibsDir.
+// Install fetches a tsukilib package and installs it.
+//
+// When opts.Spec is set (v3 path) the spec is parsed as "registry@name:version"
+// and the package is looked up in the local DB cache then placed in either
+// the project-local .tsuki/deps/ or the global deps dir.
+//
+// When opts.Source is set (legacy path) the TOML is fetched directly from that
+// URL or file path and placed in LibsDir().
 func Install(opts InstallOptions) (*InstalledPackage, error) {
+	if opts.Spec != "" {
+		return installFromSpec(opts)
+	}
+	return installFromSource(opts)
+}
+
+// installFromSpec handles "registry@name:version" specifiers (v3).
+func installFromSpec(opts InstallOptions) (*InstalledPackage, error) {
+	registry, name, version := parseInstallSpec(opts.Spec)
+
+	// Resolve install root: local (.tsuki/deps/) or global.
+	installRoot := specLocalDepDir(opts.Dir)
+	if opts.Global {
+		installRoot = specGlobalDepDir()
+	}
+
+	// Return early if already cached.
+	if cached := findCachedPkg(installRoot, name, version); cached != nil {
+		return cached, nil
+	}
+
+	// Resolve via local DB cache → live registry.
+	tomlURL, resolvedVer, err := resolveSpecURL(registry, name, version)
+	if err != nil {
+		return nil, err
+	}
+
+	tomlData, err := fetchTOML(tomlURL)
+	if err != nil {
+		return nil, fmt.Errorf("downloading %s: %w", name, err)
+	}
+
+	pkgName, pkgVer, desc, header, lib, parseErr := parseTOMLMeta(tomlData)
+	if parseErr != nil || pkgName == "" {
+		pkgName = name
+	}
+	if pkgVer == "" {
+		pkgVer = resolvedVer
+	}
+
+	destDir := filepath.Join(installRoot, pkgName, pkgVer)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return nil, fmt.Errorf("creating install dir: %w", err)
+	}
+	destFile := filepath.Join(destDir, "tsukilib.toml")
+	if err := os.WriteFile(destFile, []byte(tomlData), 0644); err != nil {
+		return nil, fmt.Errorf("writing tsukilib.toml: %w", err)
+	}
+
+	return &InstalledPackage{
+		Name:        pkgName,
+		Version:     pkgVer,
+		Description: desc,
+		CppHeader:   header,
+		ArduinoLib:  lib,
+		Path:        destFile,
+	}, nil
+}
+
+// installFromSource is the original install path (legacy, uses opts.Source).
+func installFromSource(opts InstallOptions) (*InstalledPackage, error) {
 	tomlData, err := fetchTOML(opts.Source)
 	if err != nil {
 		return nil, err
@@ -705,4 +781,229 @@ func ReadLock(projectDir string) ([]LockEntry, error) {
 	}
 	var entries []LockEntry
 	return entries, json.Unmarshal(data, &entries)
+}
+// ─────────────────────────────────────────────────────────────────────────────
+//  v3 helpers: spec parsing, local/global dep dirs, cache lookup, PullAll
+// ─────────────────────────────────────────────────────────────────────────────
+
+// parseInstallSpec splits "registry@name:version" into its three parts.
+// All parts are optional:
+//   "ws2812"                   → ("", "ws2812", "")
+//   "ws2812:1.0.0"             → ("", "ws2812", "1.0.0")
+//   "tsuki-team@ws2812:1.0.0"  → ("tsuki-team", "ws2812", "1.0.0")
+func parseInstallSpec(spec string) (registry, name, version string) {
+	if at := strings.Index(spec, "@"); at >= 0 {
+		registry = spec[:at]
+		spec = spec[at+1:]
+	}
+	if colon := strings.LastIndex(spec, ":"); colon >= 0 {
+		version = spec[colon+1:]
+		name = spec[:colon]
+	} else {
+		name = spec
+	}
+	return
+}
+
+// specLocalDepDir returns <projectDir>/.tsuki/deps.
+func specLocalDepDir(projectDir string) string {
+	if projectDir == "" {
+		projectDir = "."
+	}
+	return filepath.Join(projectDir, ".tsuki", "deps")
+}
+
+// specGlobalDepDir returns ~/.local/share/tsuki/global/deps.
+func specGlobalDepDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "tsuki", "global", "deps")
+}
+
+// findCachedPkg returns an already-installed package from root, or nil.
+func findCachedPkg(root, name, version string) *InstalledPackage {
+	if version == "" {
+		dir := filepath.Join(root, name)
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) == 0 {
+			return nil
+		}
+		version = entries[len(entries)-1].Name()
+	}
+	tomlPath := filepath.Join(root, name, version, "tsukilib.toml")
+	if _, err := os.Stat(tomlPath); err != nil {
+		return nil
+	}
+	data, _ := os.ReadFile(tomlPath)
+	desc, header, lib := quickParseMeta(string(data))
+	return &InstalledPackage{
+		Name:        name,
+		Version:     version,
+		Description: desc,
+		CppHeader:   header,
+		ArduinoLib:  lib,
+		Path:        tomlPath,
+	}
+}
+
+// resolveSpecURL looks up a package in the local DB cache (populated by
+// `tsuki updatedb`) and returns its toml_url and resolved version.
+func resolveSpecURL(registryName, name, version string) (url, resolvedVer string, err error) {
+	home, _ := os.UserHomeDir()
+	cacheDir := filepath.Join(home, ".cache", "tsuki", "db")
+
+	var cacheFiles []string
+	if registryName != "" {
+		cacheFiles = []string{filepath.Join(cacheDir, registryName+".json")}
+	} else {
+		entries, _ := os.ReadDir(cacheDir)
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".json") {
+				cacheFiles = append(cacheFiles, filepath.Join(cacheDir, e.Name()))
+			}
+		}
+	}
+
+	for _, cf := range cacheFiles {
+		data, readErr := os.ReadFile(cf)
+		if readErr != nil {
+			continue
+		}
+		u, v, lookupErr := lookupPackagesJSON(data, name, version)
+		if lookupErr == nil {
+			return u, v, nil
+		}
+	}
+	return "", "", fmt.Errorf(
+		"package %q not found in local registry cache — run `tsuki updatedb` first", name,
+	)
+}
+
+// lookupPackagesJSON finds name@version in a packages.json byte slice.
+// packages.json is an array: [{"name":"ws2812","version":"1.0.0","toml_url":"https://..."}]
+func lookupPackagesJSON(data []byte, name, version string) (url, resolvedVersion string, err error) {
+	var entries []map[string]interface{}
+	if err = json.Unmarshal(data, &entries); err != nil {
+		return
+	}
+	for _, e := range entries {
+		n, _ := e["name"].(string)
+		v, _ := e["version"].(string)
+		u, _ := e["toml_url"].(string)
+		if u == "" {
+			u, _ = e["download_url"].(string)
+		}
+		if strings.EqualFold(n, name) && (version == "" || version == v) {
+			return u, v, nil
+		}
+	}
+	err = fmt.Errorf("package %q @ %q not found", name, version)
+	return
+}
+
+// ── PullAll ───────────────────────────────────────────────────────────────────
+
+// PullResult holds the outcome for a single package during PullAll.
+type PullResult struct {
+	Name    string
+	Version string
+	Err     error
+}
+
+// PullAll installs every dependency from the manifest at dir.
+func PullAll(dir string) ([]PullResult, error) {
+	// Import manifest inline to avoid import cycle — read the file directly.
+	// We use the pkgmgr's own lock file as the source of truth when present.
+	lockEntries, _ := ReadLock(dir)
+	if len(lockEntries) > 0 {
+		var results []PullResult
+		for _, le := range lockEntries {
+			pkg, err := Install(InstallOptions{Spec: le.Name + ":" + le.Version, Dir: dir})
+			if err != nil {
+				results = append(results, PullResult{Name: le.Name, Err: err})
+			} else {
+				results = append(results, PullResult{Name: pkg.Name, Version: pkg.Version})
+			}
+		}
+		return results, nil
+	}
+
+	// No lock file — fall back to reading tsuki-config.toml / tsuki_package.json.
+	deps, err := readManifestDeps(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []PullResult
+	for name, version := range deps {
+		spec := name
+		if version != "" {
+			spec = name + ":" + version
+		}
+		pkg, err := Install(InstallOptions{Spec: spec, Dir: dir})
+		if err != nil {
+			results = append(results, PullResult{Name: name, Err: err})
+		} else {
+			results = append(results, PullResult{Name: pkg.Name, Version: pkg.Version})
+		}
+	}
+	return results, nil
+}
+
+// readManifestDeps returns name→version from the project manifest without
+// importing the manifest package (avoids potential import cycle).
+func readManifestDeps(dir string) (map[string]string, error) {
+	// Try tsuki-config.toml first, then tsuki_package.json.
+	for _, fname := range []string{"tsuki-config.toml", "tsuki_package.json"} {
+		data, err := os.ReadFile(filepath.Join(dir, fname))
+		if err != nil {
+			continue
+		}
+		deps := make(map[string]string)
+		if strings.HasSuffix(fname, ".json") {
+			// Parse "packages": [{"name":"...","version":"..."}]
+			var raw struct {
+				Packages []struct {
+					Name    string `json:"name"`
+					Version string `json:"version"`
+				} `json:"packages"`
+			}
+			if json.Unmarshal(data, &raw) == nil {
+				for _, p := range raw.Packages {
+					deps[p.Name] = p.Version
+				}
+			}
+		} else {
+			// Minimal TOML parse: lines under [dependencies] as  name = "version"
+			inDeps := false
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "[dependencies]" {
+					inDeps = true
+					continue
+				}
+				if strings.HasPrefix(line, "[") {
+					inDeps = false
+					continue
+				}
+				if inDeps {
+					k, v, ok := parseKV(line)
+					if ok {
+						// v may be `"1.0"` or `{ version = "1.0", ... }`
+						v = strings.Trim(v, `"`)
+						if idx := strings.Index(v, `"`); idx >= 0 {
+							v = v[idx+1:]
+							if end := strings.Index(v, `"`); end >= 0 {
+								v = v[:end]
+							}
+						}
+						deps[k] = v
+					}
+				}
+			}
+		}
+		if len(deps) > 0 {
+			return deps, nil
+		}
+	}
+	return nil, nil
 }

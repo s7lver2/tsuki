@@ -1,36 +1,56 @@
 {
-  "_comment": "tsuki package registry — host this at the root of your GitHub repo as registry.json",
+  "_comment": "Índice de paquetes del registro tsuki-team. Formato v3.",
   "packages": {
     "ws2812": {
       "description": "WS2812 / NeoPixel LED driver (Adafruit NeoPixel)",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/ws2812/v1.0.0/godotinolib.toml"
+        "1.0.0": {
+          "download_url": "https://github.com/s7lver/tsuki/releases/download/ws2812-v1.0.0/ws2812-1.0.0.tar.gz",
+          "metadata_url": "https://raw.githubusercontent.com/s7lver/tsuki/main/pkg/ws2812/v1.0.0/tsuki-package.json",
+          "checksum": "",
+          "published_at": "2025-01-01T00:00:00Z"
+        }
       }
     },
     "dht": {
       "description": "DHT11 / DHT22 temperature & humidity sensor",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/dht/v1.0.0/godotinolib.toml"
+        "1.0.0": {
+          "download_url": "https://github.com/s7lver/tsuki/releases/download/dht-v1.0.0/dht-1.0.0.tar.gz",
+          "metadata_url": "https://raw.githubusercontent.com/s7lver/tsuki/main/pkg/dht/v1.0.0/tsuki-package.json",
+          "checksum": "",
+          "published_at": "2025-01-01T00:00:00Z"
+        }
       }
     },
     "hcsr04": {
       "description": "HC-SR04 ultrasonic distance sensor",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/hcsr04/v1.0.0/godotinolib.toml"
+        "1.0.0": {
+          "download_url": "https://github.com/s7lver/tsuki/releases/download/hcsr04-v1.0.0/hcsr04-1.0.0.tar.gz",
+          "metadata_url": "https://raw.githubusercontent.com/s7lver/tsuki/main/pkg/hcsr04/v1.0.0/tsuki-package.json",
+          "checksum": "",
+          "published_at": "2025-01-01T00:00:00Z"
+        }
       }
     },
     "u8g2": {
       "description": "U8g2 monochrome display library (SSD1306 OLED, SH1106, LCD)",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/u8g2/v1.0.0/godotinolib.toml"
+        "1.0.0": {
+          "download_url": "https://github.com/s7lver/tsuki/releases/download/u8g2-v1.0.0/u8g2-1.0.0.tar.gz",
+          "metadata_url": "https://raw.githubusercontent.com/s7lver/tsuki/main/pkg/u8g2/v1.0.0/tsuki-package.json",
+          "checksum": "",
+          "published_at": "2025-01-01T00:00:00Z"
+        }
       }
     }
   }
