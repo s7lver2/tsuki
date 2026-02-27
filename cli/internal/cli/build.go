@@ -30,13 +30,18 @@ import (
 
 // Options controls the build pipeline.
 type Options struct {
-	Board      string
-	Compile    bool
-	OutputDir  string
-	SourceMap  bool
-	Verbose    bool
-	CoreBin    string
-	ArduinoCLI string
+	Board       string
+	Compile     bool
+	OutputDir   string
+	SourceMap   bool
+	Verbose     bool
+	CoreBin     string
+	ArduinoCLI  string
+	// FlashBinary is the path to tsuki-flash (used when Backend == "tsuki-flash").
+	FlashBinary string
+	// Backend selects the compiler: "tsuki-flash" or "arduino-cli".
+	// Defaults to "arduino-cli" if empty.
+	Backend     string
 }
 
 // Result holds the outputs of a successful build.
@@ -148,21 +153,181 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		return result, nil
 	}
 
-	// ── arduino-cli compile ──────────────────────────────────────────────────
+	// ── Compile — dispatch to selected backend ────────────────────────────
+	backend := opts.Backend
+	if backend == "" {
+		backend = "arduino-cli"
+	}
+
+	// Show the backend badge before the section title so it's visible at the
+	// top of the compile phase for tsuki-flash / tsuki-flash+cores.
+	ui.FlashBadge(backend)
 	ui.SectionTitle("Compiling")
+
+	buildCacheDir := filepath.Join(baseOutDir, ".cache")
+	_ = os.MkdirAll(buildCacheDir, 0755)
+
+	switch backend {
+	case "tsuki-flash":
+		// Uses .arduino15 (or TSUKI_SDK_ROOT) as the SDK source.
+		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir, false); err != nil {
+			return result, err
+		}
+	case "tsuki-flash+cores":
+		// Fully standalone: tsuki-modules provides the SDK — no arduino-cli, no .arduino15.
+		// Auto-installs the SDK on first run via `tsuki-flash modules install avr` internally.
+		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir, true); err != nil {
+			return result, err
+		}
+	default: // "arduino-cli" or anything unrecognised
+		if err := compileArduinoCLI(result, board, opts, sketchDir, buildCacheDir); err != nil {
+			return result, err
+		}
+	}
+
+	hexFiles, _ := filepath.Glob(filepath.Join(buildCacheDir, "*.hex"))
+	if len(hexFiles) > 0 {
+		result.FirmwareHex = hexFiles[0]
+	}
+
+	return result, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Backend: tsuki-flash
+// ─────────────────────────────────────────────────────────────────────────────
+
+func compileTsukiFlash(
+	result *Result,
+	m *manifest.Manifest,
+	board string,
+	opts Options,
+	buildCacheDir string,
+	pkgNames []string,
+	libsDir string,
+	useModules bool, // true → backend is "tsuki-flash+cores", pass --use-modules
+) error {
+	flashBin := opts.FlashBinary
+	if flashBin == "" {
+		flashBin = "tsuki-flash"
+	}
+
+	// Build the --include list from installed tsuki packages.
+	var includeArgs []string
+	for _, pkg := range pkgNames {
+		pkgDir := filepath.Join(libsDir, pkg)
+		// Walk to find the versioned subdirectory.
+		entries, err := os.ReadDir(pkgDir)
+		if err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					includeArgs = append(includeArgs, filepath.Join(pkgDir, e.Name()))
+					break
+				}
+			}
+		} else {
+			// Fall back to the package root itself.
+			includeArgs = append(includeArgs, pkgDir)
+		}
+	}
+
+	cppStd := m.Build.CppStd
+	if cppStd == "" {
+		cppStd = "c++11"
+	}
+
+	args := []string{
+		"compile",
+		"--board", board,
+		"--sketch", result.SketchDir,
+		"--build-dir", buildCacheDir,
+		"--name", sanitizeSketchName(m.Name),
+		"--cpp-std", cppStd,
+	}
+	for _, inc := range includeArgs {
+		args = append(args, "--include", inc)
+	}
+	if opts.Verbose {
+		args = append(args, "--verbose")
+	}
+	if useModules {
+		// Instructs tsuki-flash to use ~/.tsuki/modules as the SDK root instead
+		// of .arduino15. The first invocation auto-installs the SDK via the
+		// tsuki-modules AVR module if it is not already present.
+		args = append(args, "--use-modules")
+	}
+
+	cmd := exec.Command(flashBin, args...)
+
+	// When using modules the first run downloads the SDK (~40 MB).
+	// Stream stdout directly so the download progress is visible,
+	// and capture stderr separately for error reporting.
+	if useModules {
+		// Let stdout stream through (shows ↓ Downloading… progress).
+		cmd.Stdout = os.Stdout
+		var stderrBuf strings.Builder
+		cmd.Stderr = &stderrBuf
+
+		sp := ui.NewSpinner(fmt.Sprintf("tsuki-flash compile --board %s", board))
+		sp.Start()
+
+		cmdErr := cmd.Run()
+		if cmdErr == nil {
+			sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
+		} else {
+			sp.Stop(false, "compilation failed")
+		}
+
+		if cmdErr != nil {
+			errOutput := stderrBuf.String()
+			if errOutput == "" {
+				// stderr was empty — compose a helpful message from the last stdout lines
+				errOutput = "tsuki-flash exited with error (see output above)"
+			}
+			renderTsukiFlashError(errOutput)
+			return fmt.Errorf("tsuki-flash compile failed")
+		}
+		return nil
+	}
+
+	// Non-modules path: capture combined output and show on error.
+	sp := ui.NewSpinner(fmt.Sprintf("tsuki-flash compile --board %s", board))
+	sp.Start()
+
+	out, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
+		sp.Stop(false, "compilation failed")
+		renderTsukiFlashError(string(out))
+		return fmt.Errorf("tsuki-flash compile failed")
+	}
+
+	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
+	if opts.Verbose && len(out) > 0 {
+		fmt.Print(string(out))
+	}
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Backend: arduino-cli
+// ─────────────────────────────────────────────────────────────────────────────
+
+func compileArduinoCLI(
+	result *Result,
+	board string,
+	opts Options,
+	sketchDir string,
+	buildCacheDir string,
+) error {
 	fqbn, err := boardFQBN(board)
 	if err != nil {
-		return result, fmt.Errorf("unknown board %q — run `tsuki boards list`", board)
+		return fmt.Errorf("unknown board %q — run `tsuki boards list`", board)
 	}
 
 	arduinoCLI := opts.ArduinoCLI
 	if arduinoCLI == "" {
 		arduinoCLI = "arduino-cli"
 	}
-
-	// Compile artifacts go into build/.cache/ to keep the sketch dir clean.
-	buildCacheDir := filepath.Join(baseOutDir, ".cache")
-	_ = os.MkdirAll(buildCacheDir, 0755)
 
 	args := []string{
 		"compile",
@@ -173,7 +338,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	if opts.Verbose {
 		args = append(args, "--verbose")
 	}
-	// *** KEY FIX: pass the SKETCH DIR, not the project root ***
 	args = append(args, sketchDir)
 
 	sp := ui.NewSpinner(fmt.Sprintf("arduino-cli compile --fqbn %s", fqbn))
@@ -185,20 +349,17 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	if cmdErr != nil {
 		sp.Stop(false, "compilation failed")
 		renderArduinoError(string(out))
-		return result, fmt.Errorf("arduino-cli compile failed")
+		return fmt.Errorf("arduino-cli compile failed")
 	}
+
 	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
-
-	hexFiles, _ := filepath.Glob(filepath.Join(buildCacheDir, "*.hex"))
-	if len(hexFiles) > 0 {
-		result.FirmwareHex = hexFiles[0]
-	}
-
-	return result, nil
+	return nil
 }
-
 // writeInoStub creates <sketchDir>/<sketchName>.ino — the required entry
-// point for arduino-cli.  The file name MUST match the directory name.
+// point for arduino-cli. The stub must NOT #include the generated .cpp files:
+// arduino-cli independently compiles every .cpp in the sketch directory as its
+// own translation unit, so including them here causes duplicate setup()/loop()
+// definitions and the linker exits with "ld returned 1 exit status".
 func writeInoStub(sketchDir, sketchName string, _ []string) error {
 	const stub = "// Auto-generated by tsuki — do not edit.\n" +
 		"// arduino-cli compiles the .cpp files in this directory automatically.\n"
@@ -246,13 +407,15 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			opts := Options{
-				Board:      board,
-				Compile:    compile,
-				OutputDir:  output,
-				Verbose:    verbose,
-				CoreBin:    cfg.CoreBinary,
-				ArduinoCLI: cfg.ArduinoCLI,
-				SourceMap:  m.Build.SourceMap,
+				Board:       board,
+				Compile:     compile,
+				OutputDir:   output,
+				Verbose:     verbose,
+				CoreBin:     cfg.CoreBinary,
+				ArduinoCLI:  cfg.ArduinoCLI,
+				FlashBinary: cfg.FlashBinary,
+				Backend:     m.Backend,
+				SourceMap:   m.Build.SourceMap,
 			}
 
 			res, err := Run(dir, m, opts)
@@ -272,6 +435,67 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&compile, "compile", "c", false, "compile to firmware after transpile")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	return cmd
+}
+
+func renderTsukiFlashError(output string) {
+	lines := strings.Split(output, "\n")
+	var frames []ui.Frame
+	var errMsg string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Match: ✗, error:, Error:, failed:, AVR SDK, SDK install, install failed
+		isErr := strings.HasPrefix(line, "✗") ||
+			strings.Contains(line, "error:") ||
+			strings.Contains(line, "Error:") ||
+			strings.Contains(line, "failed:") ||
+			strings.Contains(line, "Failed:") ||
+			strings.Contains(line, "AVR SDK") ||
+			strings.Contains(line, "SDK install") ||
+			strings.Contains(line, "install failed")
+
+		if isErr {
+			if errMsg == "" {
+				errMsg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(line, "✗ "), "error: "), "Error: ")
+			}
+			frames = append(frames, ui.Frame{
+				File: "tsuki-flash", Func: "compile",
+				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: true}},
+			})
+		}
+	}
+
+	if len(frames) == 0 {
+		// Fallback: show all non-empty lines
+		errMsg = strings.TrimSpace(output)
+		// Use up to first 3 lines as frames for readability
+		shown := 0
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			isPtr := shown == 0
+			frames = append(frames, ui.Frame{
+				File: "tsuki-flash", Func: "compile",
+				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: isPtr}},
+			})
+			shown++
+			if shown >= 5 {
+				break
+			}
+		}
+		if len(frames) == 0 {
+			frames = []ui.Frame{{
+				File: "tsuki-flash", Func: "compile",
+				Code: []ui.CodeLine{{Number: 0, Text: errMsg, IsPointer: true}},
+			}}
+		}
+	}
+	ui.Traceback("CompileError", errMsg, frames)
 }
 
 func renderArduinoError(output string) {

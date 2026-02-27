@@ -1,17 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  tsuki-flash  —  Arduino compile & flash toolchain
-//
-//  Replaces arduino-cli entirely. Invokes avr-gcc / esptool / avrdude
-//  directly for maximum speed, with parallel compilation and incremental
-//  caching.
-//
-//  USAGE
-//  ─────
-//    tsuki-flash compile  --board uno  --sketch build/sketch  --build-dir build/.cache
-//    tsuki-flash upload   --board uno  --port /dev/ttyUSB0    --build-dir build/.cache
-//    tsuki-flash run      --board uno  --port /dev/ttyUSB0    --sketch build/sketch
-//    tsuki-flash detect
-//    tsuki-flash boards
 // ─────────────────────────────────────────────────────────────────────────────
 
 mod boards;
@@ -20,9 +8,10 @@ mod detect;
 mod error;
 mod flash;
 mod lib_manager;
+mod modules;
 mod sdk;
 
-use clap::{Parser, Subcommand, Args};
+use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -33,7 +22,7 @@ use flash::{flash, FlashRequest};
 use error::{FlashError, Result};
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CLI definition (clap derive)
+//  CLI
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -41,21 +30,17 @@ use error::{FlashError, Result};
     name    = "tsuki-flash",
     version = env!("CARGO_PKG_VERSION"),
     about   = "Arduino compile & flash toolchain — no arduino-cli required",
-    long_about = None,
 )]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
 
-    /// Suppress spinner / progress output
     #[arg(long, global = true)]
     quiet: bool,
 
-    /// Print all compiler commands
     #[arg(long, short = 'v', global = true)]
     verbose: bool,
 
-    /// Disable colored output
     #[arg(long, global = true)]
     no_color: bool,
 }
@@ -66,23 +51,104 @@ enum Cmd {
     Compile(CompileArgs),
     /// Upload compiled firmware to a connected board
     Upload(UploadArgs),
-    /// Compile then immediately upload  (shortcut for compile + upload)
+    /// Compile then immediately upload
     Run(RunArgs),
     /// Detect connected boards / serial ports
     Detect,
     /// List all supported boards
     Boards,
-    /// Print SDK discovery paths for a board arch
+    /// Print SDK discovery paths for a board
     SdkInfo {
-        /// Board ID (e.g. "uno", "esp32")
         #[arg(default_value = "uno")]
         board: String,
     },
-    /// Manage Arduino libraries (install / search / list / info)
+    /// Manage Arduino libraries  (install / search / list / info)
     Lib(LibArgs),
+    /// Manage Arduino SDK cores via tsuki-modules  (no arduino-cli needed)
+    Modules(ModulesArgs),
 }
 
-// ── Lib ───────────────────────────────────────────────────────────────────────
+// ── Compile args ──────────────────────────────────────────────────────────────
+
+#[derive(Args)]
+struct CompileArgs {
+    #[arg(long, short = 'b')]
+    board: String,
+
+    #[arg(long)]
+    sketch: PathBuf,
+
+    #[arg(long)]
+    build_dir: PathBuf,
+
+    #[arg(long)]
+    name: Option<String>,
+
+    #[arg(long, default_value = "c++11")]
+    cpp_std: String,
+
+    /// Extra include directories
+    #[arg(long, value_delimiter = ',')]
+    include: Vec<PathBuf>,
+
+    /// Use the tsuki-modules SDK store instead of .arduino15
+    #[arg(long, default_value_t = false)]
+    use_modules: bool,
+}
+
+// ── Upload args ───────────────────────────────────────────────────────────────
+
+#[derive(Args)]
+struct UploadArgs {
+    #[arg(long, short = 'b')]
+    board: String,
+
+    #[arg(long, short = 'p')]
+    port: Option<String>,
+
+    #[arg(long)]
+    build_dir: PathBuf,
+
+    #[arg(long)]
+    name: Option<String>,
+
+    #[arg(long, default_value = "0")]
+    baud: u32,
+}
+
+// ── Run args ──────────────────────────────────────────────────────────────────
+
+#[derive(Args)]
+struct RunArgs {
+    #[arg(long, short = 'b')]
+    board: String,
+
+    #[arg(long, short = 'p')]
+    port: Option<String>,
+
+    #[arg(long)]
+    sketch: PathBuf,
+
+    #[arg(long, default_value = "build/.cache")]
+    build_dir: PathBuf,
+
+    #[arg(long)]
+    name: Option<String>,
+
+    #[arg(long, default_value = "c++11")]
+    cpp_std: String,
+
+    #[arg(long, value_delimiter = ',')]
+    include: Vec<PathBuf>,
+
+    #[arg(long, default_value_t = false)]
+    use_modules: bool,
+
+    #[arg(long, default_value = "0")]
+    baud: u32,
+}
+
+// ── Lib args ──────────────────────────────────────────────────────────────────
 
 #[derive(Args)]
 struct LibArgs {
@@ -92,120 +158,33 @@ struct LibArgs {
 
 #[derive(Subcommand)]
 enum LibCmd {
-    /// Install an Arduino library (and its dependencies)
     Install {
-        /// Library name, e.g. "DHT sensor library"
         name: String,
-
-        /// Pin a specific version, e.g. "1.4.4"
         #[arg(long)]
         version: Option<String>,
     },
-    /// Search the Arduino library registry
-    Search {
-        /// Search query (matches name, description, category)
-        query: String,
-    },
-    /// List all installed libraries
+    Search { query: String },
     List,
-    /// Show details about a library
-    Info {
-        /// Library name
-        name: String,
-    },
-    /// Refresh the local library index cache
+    Info { name: String },
     Update,
 }
 
-// ── Compile ───────────────────────────────────────────────────────────────────
+// ── Modules args ──────────────────────────────────────────────────────────────
 
 #[derive(Args)]
-struct CompileArgs {
-    /// Target board ID  (e.g. uno, nano, esp32)
-    #[arg(long, short = 'b')]
-    board: String,
-
-    /// Directory containing sketch source (.cpp / .ino files)
-    #[arg(long)]
-    sketch: PathBuf,
-
-    /// Output directory for .o, .elf, .hex files
-    #[arg(long)]
-    build_dir: PathBuf,
-
-    /// Project / sketch name (default: sketch dir name)
-    #[arg(long)]
-    name: Option<String>,
-
-    /// C++ standard  (default: c++11)
-    #[arg(long, default_value = "c++11")]
-    cpp_std: String,
-
-    /// Extra include directories  (comma-separated or repeated)
-    #[arg(long, value_delimiter = ',')]
-    include: Vec<PathBuf>,
+struct ModulesArgs {
+    #[command(subcommand)]
+    command: ModulesCmd,
 }
 
-// ── Upload ────────────────────────────────────────────────────────────────────
-
-#[derive(Args)]
-struct UploadArgs {
-    /// Target board ID
-    #[arg(long, short = 'b')]
-    board: String,
-
-    /// Serial port  (auto-detect if omitted)
-    #[arg(long, short = 'p')]
-    port: Option<String>,
-
-    /// Directory containing compiled firmware (.hex / .bin)
-    #[arg(long)]
-    build_dir: PathBuf,
-
-    /// Project name  (used to find <name>.hex etc.)
-    #[arg(long)]
-    name: Option<String>,
-
-    /// Override baud rate  (0 = use board default)
-    #[arg(long, default_value = "0")]
-    baud: u32,
-}
-
-// ── Run (compile + upload) ────────────────────────────────────────────────────
-
-#[derive(Args)]
-struct RunArgs {
-    /// Target board ID
-    #[arg(long, short = 'b')]
-    board: String,
-
-    /// Serial port  (auto-detect if omitted)
-    #[arg(long, short = 'p')]
-    port: Option<String>,
-
-    /// Directory containing sketch sources
-    #[arg(long)]
-    sketch: PathBuf,
-
-    /// Build/output directory
-    #[arg(long, default_value = "build/.cache")]
-    build_dir: PathBuf,
-
-    /// Project name
-    #[arg(long)]
-    name: Option<String>,
-
-    /// C++ standard
-    #[arg(long, default_value = "c++11")]
-    cpp_std: String,
-
-    /// Extra include directories
-    #[arg(long, value_delimiter = ',')]
-    include: Vec<PathBuf>,
-
-    /// Override baud rate
-    #[arg(long, default_value = "0")]
-    baud: u32,
+#[derive(Subcommand)]
+enum ModulesCmd {
+    /// Download + install an Arduino SDK core (avr | esp32 | esp8266 | sam | rp2040)
+    Install { arch: String },
+    /// List installed cores
+    List,
+    /// Force-refresh the package index cache
+    Update,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,13 +199,14 @@ fn main() {
     }
 
     let result = match cli.command {
-        Cmd::Compile(args) => cmd_compile(args, cli.verbose, cli.quiet),
-        Cmd::Upload(args)  => cmd_upload(args, cli.verbose, cli.quiet),
-        Cmd::Run(args)     => cmd_run(args, cli.verbose, cli.quiet),
-        Cmd::Detect        => cmd_detect(),
-        Cmd::Boards        => { cmd_boards(); Ok(()) }
+        Cmd::Compile(a)        => cmd_compile(a, cli.verbose, cli.quiet),
+        Cmd::Upload(a)         => cmd_upload(a, cli.verbose, cli.quiet),
+        Cmd::Run(a)            => cmd_run(a, cli.verbose, cli.quiet),
+        Cmd::Detect            => cmd_detect(),
+        Cmd::Boards            => { cmd_boards(); Ok(()) }
         Cmd::SdkInfo { board } => cmd_sdk_info(&board),
-        Cmd::Lib(args)     => cmd_lib(args, cli.verbose),
+        Cmd::Lib(a)            => cmd_lib(a, cli.verbose),
+        Cmd::Modules(a)        => cmd_modules(a, cli.verbose),
     };
 
     if let Err(e) = result {
@@ -236,12 +216,14 @@ fn main() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Command handlers
+//  Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
     let board = find_board(&args.board)?;
     let name  = args.name.unwrap_or_else(|| dir_name(&args.sketch));
+
+    ensure_modules_ready(args.use_modules, board.arch())?;
 
     if !quiet {
         println!(
@@ -249,51 +231,38 @@ fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
             "Compiling".cyan().bold(),
             format!("[board: {}]", board.id).dimmed(),
             format!("[{}]", board.name).dimmed(),
-            format!("[sdk: {}]", board.arch()).dimmed(),
+            sdk_label(args.use_modules, board.arch()).dimmed(),
         );
         println!("{}", "─".repeat(60).dimmed());
     }
 
     let t0 = Instant::now();
-
     let req = CompileRequest {
         sketch_dir:       args.sketch,
         build_dir:        args.build_dir,
-        project_name:     name.clone(),
+        project_name:     name,
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        use_modules:      args.use_modules,
         verbose,
     };
 
     match compile(&req, board) {
-        Ok(result) => {
-            let elapsed = t0.elapsed();
+        Ok(res) => {
             if !quiet {
-                println!("{} compiled in {:.2}s", "✓".green().bold(), elapsed.as_secs_f64());
-                if let Some(hex) = &result.hex_path {
-                    println!("  {} {}", "hex:".dimmed(), hex.display());
-                }
-                if let Some(bin) = &result.bin_path {
-                    println!("  {} {}", "bin:".dimmed(), bin.display());
-                }
-                if !result.size_info.is_empty() {
-                    println!("\n{}", result.size_info.dimmed());
-                }
+                println!("{} compiled in {:.2}s", "✓".green().bold(), t0.elapsed().as_secs_f64());
+                print_firmware_info(&res);
             }
             Ok(())
         }
-        Err(e) => {
-            render_compile_error(&e);
-            Err(e)
-        }
+        Err(e) => { render_compile_error(&e); Err(e) }
     }
 }
 
 fn cmd_upload(args: UploadArgs, verbose: bool, quiet: bool) -> Result<()> {
     let board = find_board(&args.board)?;
     let name  = args.name.unwrap_or_else(|| "firmware".into());
-
-    let port = resolve_port(args.port, quiet)?;
+    let port  = resolve_port(args.port, quiet)?;
 
     if !quiet {
         println!(
@@ -306,36 +275,32 @@ fn cmd_upload(args: UploadArgs, verbose: bool, quiet: bool) -> Result<()> {
     }
 
     let req = FlashRequest {
-        build_dir:    args.build_dir,
-        project_name: name,
-        port:         port.clone(),
+        build_dir:     args.build_dir,
+        project_name:  name,
+        port:          port.clone(),
         baud_override: args.baud,
         verbose,
     };
 
-    match flash(&req, board) {
-        Ok(()) => {
+    flash(&req, board)
+        .map_err(|e| { render_flash_error(&e, &port); e })
+        .map(|()| {
             if !quiet {
                 println!("{} firmware uploaded to {}", "✓".green().bold(), port.bold());
             }
-            Ok(())
-        }
-        Err(e) => {
-            render_flash_error(&e, &port);
-            Err(e)
-        }
-    }
+        })
 }
 
 fn cmd_run(args: RunArgs, verbose: bool, quiet: bool) -> Result<()> {
     let board = find_board(&args.board)?;
     let name  = args.name.unwrap_or_else(|| dir_name(&args.sketch));
 
-    // ── Compile ────────────────────────────────────────────────────────────
+    ensure_modules_ready(args.use_modules, board.arch())?;
+
     if !quiet {
         println!("{} {} {}", "Compiling".cyan().bold(),
             format!("[board: {}]", board.id).dimmed(),
-            format!("[{}]", board.name).dimmed());
+            sdk_label(args.use_modules, board.arch()).dimmed());
         println!("{}", "─".repeat(60).dimmed());
     }
 
@@ -346,65 +311,62 @@ fn cmd_run(args: RunArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name.clone(),
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        use_modules:      args.use_modules,
         verbose,
     };
 
-    let result = compile(&compile_req, board).map_err(|e| { render_compile_error(&e); e })?;
+    let res = compile(&compile_req, board)
+        .map_err(|e| { render_compile_error(&e); e })?;
 
     if !quiet {
         println!("{} compiled in {:.2}s", "✓".green().bold(), t0.elapsed().as_secs_f64());
     }
 
-    // ── Upload ─────────────────────────────────────────────────────────────
     let port = resolve_port(args.port, quiet)?;
 
     if !quiet {
-        println!("\n{} {}", "Uploading".cyan().bold(),
-            format!("[port: {}]", port).dimmed());
+        println!("\n{} {}", "Uploading".cyan().bold(), format!("[port: {}]", port).dimmed());
         println!("{}", "─".repeat(60).dimmed());
     }
 
     let flash_req = FlashRequest {
-        build_dir:    args.build_dir,
-        project_name: name,
-        port:         port.clone(),
+        build_dir:     args.build_dir,
+        project_name:  name,
+        port:          port.clone(),
         baud_override: args.baud,
         verbose,
     };
 
-    flash(&flash_req, board).map_err(|e| { render_flash_error(&e, &port); e })?;
+    flash(&flash_req, board)
+        .map_err(|e| { render_flash_error(&e, &port); e })?;
 
     if !quiet {
         println!("{} firmware uploaded to {}", "✓".green().bold(), port.bold());
-        if let Some(hex) = &result.hex_path {
+        if let Some(hex) = &res.hex_path {
             println!("  {} {}", "hex:".dimmed(), hex.display());
         }
     }
-
     Ok(())
 }
 
 fn cmd_detect() -> Result<()> {
     let ports = detect::detect_all();
-
     if ports.is_empty() {
         println!("{} No serial ports found", "!".yellow());
         return Ok(());
     }
-
     println!("{:<20} {:<15} {:<8}  {}", "PORT", "BOARD", "VID:PID", "NAME");
     println!("{}", "─".repeat(70).dimmed());
-
     for p in &ports {
-        let board_id  = p.board_id.unwrap_or("unknown");
-        let board_name = p.board_name.unwrap_or("—");
         let vid_pid = p.vid_pid
-            .map(|(v, p)| format!("{:04X}:{:04X}", v, p))
+            .map(|(v, pid)| format!("{:04X}:{:04X}", v, pid))
             .unwrap_or_else(|| "—".into());
-
-        println!("{:<20} {:<15} {:<8}  {}", p.port, board_id, vid_pid, board_name);
+        println!("{:<20} {:<15} {:<8}  {}",
+            p.port,
+            p.board_id.unwrap_or("unknown"),
+            vid_pid,
+            p.board_name.unwrap_or("—"));
     }
-
     Ok(())
 }
 
@@ -412,16 +374,14 @@ fn cmd_boards() {
     println!("{:<15} {:<32} {:<15} {:>7} {:>6}  {}",
         "ID", "NAME", "CPU / ARCH", "FLASH", "RAM", "FQBN");
     println!("{}", "─".repeat(95).dimmed());
-
     for b in Board::catalog() {
         let (cpu, arch) = match &b.toolchain {
-            boards::Toolchain::Avr { mcu, .. }    => (mcu.to_string(), "avr"),
-            boards::Toolchain::Sam { mcu, .. }     => (mcu.to_string(), "sam"),
-            boards::Toolchain::Rp2040              => ("cortex-m0+".into(), "rp2040"),
-            boards::Toolchain::Esp32 { variant }   => (variant.to_string(), "esp32"),
-            boards::Toolchain::Esp8266             => ("lx106".into(), "esp8266"),
+            boards::Toolchain::Avr { mcu, .. }   => (mcu.to_string(), "avr"),
+            boards::Toolchain::Sam { mcu, .. }    => (mcu.to_string(), "sam"),
+            boards::Toolchain::Rp2040             => ("cortex-m0+".into(), "rp2040"),
+            boards::Toolchain::Esp32 { variant }  => (variant.to_string(), "esp32"),
+            boards::Toolchain::Esp8266            => ("lx106".into(), "esp8266"),
         };
-
         println!("{:<15} {:<32} {:<7} ({:<6}) {:>5}K  {:>4}K  {}",
             b.id.bold(), b.name, cpu, arch,
             b.flash_kb, b.ram_kb, b.fqbn.dimmed());
@@ -441,9 +401,46 @@ fn cmd_sdk_info(board_id: &str) -> Result<()> {
             }
             Ok(())
         }
-        Err(e) => {
-            eprintln!("{} {}", "✗".red().bold(), e);
-            Err(e)
+        Err(e) => { eprintln!("{} {}", "✗".red().bold(), e); Err(e) }
+    }
+}
+
+fn cmd_modules(args: ModulesArgs, verbose: bool) -> Result<()> {
+    match args.command {
+        ModulesCmd::Install { arch } => modules::install(&arch, verbose),
+        ModulesCmd::List             => modules::list(),
+        ModulesCmd::Update           => modules::update(verbose),
+    }
+}
+
+fn cmd_lib(args: LibArgs, verbose: bool) -> Result<()> {
+    match args.command {
+        LibCmd::Install { name, version } => {
+            lib_manager::install(&name, version.as_deref(), verbose)?;
+            if let Ok(root) = lib_manager::libs_root() {
+                let p = root.join(&name);
+                if p.exists() {
+                    println!("\n  {} {}", "path:".dimmed(), p.display().to_string().dimmed());
+                    println!("  {} {}", "include hint:".dimmed(),
+                        format!("--include {}", p.display()).bold());
+                }
+            }
+            Ok(())
+        }
+        LibCmd::Search { query } => lib_manager::search(&query, verbose),
+        LibCmd::List              => lib_manager::list(),
+        LibCmd::Info { name }     => lib_manager::info(&name, verbose),
+        LibCmd::Update => {
+            if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                let cache = PathBuf::from(home)
+                    .join(".arduino15")
+                    .join(".tsuki_lib_index.json");
+                if cache.exists() { let _ = std::fs::remove_file(&cache); }
+            }
+            println!("{} Refreshing library index…", "→".cyan());
+            lib_manager::search("", verbose)?;
+            println!("{} Library index updated.", "✓".green().bold());
+            Ok(())
         }
     }
 }
@@ -458,17 +455,10 @@ fn find_board(id: &str) -> Result<&'static Board> {
 
 fn resolve_port(explicit: Option<String>, quiet: bool) -> Result<String> {
     if let Some(p) = explicit { return Ok(p); }
-
-    if !quiet {
-        print!("{} auto-detecting board… ", "→".cyan());
-    }
-
+    if !quiet { print!("{} auto-detecting board… ", "→".cyan()); }
     match detect::best_port() {
-        Some(p) => {
-            if !quiet { println!("{}", p.bold()); }
-            Ok(p)
-        }
-        None => Err(FlashError::NoBoardDetected),
+        Some(p) => { if !quiet { println!("{}", p.bold()); } Ok(p) }
+        None    => Err(FlashError::NoBoardDetected),
     }
 }
 
@@ -476,6 +466,45 @@ fn dir_name(path: &PathBuf) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "firmware".into())
+}
+
+fn sdk_label(use_modules: bool, arch: &str) -> String {
+    if use_modules {
+        format!("[sdk: {} via tsuki-modules]", arch)
+    } else {
+        format!("[sdk: {}]", arch)
+    }
+}
+
+/// If --use-modules is set, ensure the core is installed (auto-download if absent).
+/// Uses the fast-path avr module when arch == "avr"; falls back to generic install.
+fn ensure_modules_ready(use_modules: bool, arch: &str) -> Result<()> {
+    if !use_modules { return Ok(()); }
+    match arch {
+        "avr" => {
+            // avr::ensure() is a no-op (microseconds) when already installed.
+            modules::avr::ensure(false).map(|_| ())
+        }
+        _ => {
+            if modules::is_installed(arch) { return Ok(()); }
+            eprintln!(
+                "{} Core for arch '{}' is not installed in tsuki-modules.",
+                "✗".red().bold(), arch
+            );
+            eprintln!("  Run: {}", format!("tsuki-flash modules install {}", arch).bold());
+            Err(FlashError::SdkNotFound {
+                arch: arch.into(),
+                path: "~/.tsuki/modules".into(),
+                pkg:  format!("tsuki-flash modules install {}", arch),
+            })
+        }
+    }
+}
+
+fn print_firmware_info(res: &compile::CompileResult) {
+    if let Some(hex) = &res.hex_path { println!("  {} {}", "hex:".dimmed(), hex.display()); }
+    if let Some(bin) = &res.bin_path { println!("  {} {}", "bin:".dimmed(), bin.display()); }
+    if !res.size_info.is_empty()     { println!("\n{}", res.size_info.dimmed()); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,30 +516,24 @@ fn render_compile_error(e: &FlashError) {
     eprintln!("{}", "─".repeat(60).dimmed());
 
     match e {
-        FlashError::CompileFailed { output } |
-        FlashError::LinkFailed    { output } => {
+        FlashError::CompileFailed { output } | FlashError::LinkFailed { output } => {
             for line in output.lines() {
-                if line.contains("error:") {
-                    eprintln!("  {}", line.red());
-                } else if line.contains("warning:") {
-                    eprintln!("  {}", line.yellow());
-                } else if !line.trim().is_empty() {
-                    eprintln!("  {}", line.dimmed());
-                }
+                if line.contains("error:")        { eprintln!("  {}", line.red()); }
+                else if line.contains("warning:") { eprintln!("  {}", line.yellow()); }
+                else if !line.trim().is_empty()   { eprintln!("  {}", line.dimmed()); }
             }
         }
         FlashError::SdkNotFound { arch, path, pkg } => {
             eprintln!("  {} SDK not found for arch '{}'", "✗".red(), arch);
             eprintln!("  Expected at: {}", path.yellow());
-            eprintln!("  Install with: {}", format!("arduino-cli core install {}", pkg).bold());
-            eprintln!("  Or override:  {}", "TSUKI_SDK_ROOT=/path/to/sdk tsuki-flash …".bold());
+            eprintln!("  Install with tsuki-modules: {}",
+                format!("tsuki-flash modules install {}", arch).bold());
+            eprintln!("  Or via arduino-cli: {}",
+                format!("arduino-cli core install {}", pkg).bold());
         }
-        FlashError::ToolchainNotFound(msg) => {
-            eprintln!("  {} {}", "✗".red(), msg);
-        }
+        FlashError::ToolchainNotFound(msg) => eprintln!("  {} {}", "✗".red(), msg),
         _ => eprintln!("  {}", e),
     }
-
     eprintln!("{}", "─".repeat(60).dimmed());
 }
 
@@ -521,14 +544,10 @@ fn render_flash_error(e: &FlashError, port: &str) {
     match e {
         FlashError::FlashFailed { output, .. } => {
             for line in output.lines() {
-                if line.to_lowercase().contains("error") {
-                    eprintln!("  {}", line.red());
-                } else if !line.trim().is_empty() {
-                    eprintln!("  {}", line.dimmed());
-                }
+                if line.to_lowercase().contains("error") { eprintln!("  {}", line.red()); }
+                else if !line.trim().is_empty()          { eprintln!("  {}", line.dimmed()); }
             }
-            eprintln!();
-            eprintln!("  {}", "Hints:".bold());
+            eprintln!("\n  {}", "Hints:".bold());
             eprintln!("  • Ensure the board is in bootloader mode");
             eprintln!("  • Try a different USB cable / port");
             eprintln!("  • Pass --port explicitly: tsuki-flash upload --port /dev/ttyUSB0 …");
@@ -539,65 +558,5 @@ fn render_flash_error(e: &FlashError, port: &str) {
         }
         _ => eprintln!("  {}", e),
     }
-
     eprintln!("{}", "─".repeat(60).dimmed());
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  lib subcommand handler
-// ─────────────────────────────────────────────────────────────────────────────
-
-fn cmd_lib(args: LibArgs, verbose: bool) -> Result<()> {
-    match args.command {
-        LibCmd::Install { name, version } => {
-            let pin = version.as_deref();
-            lib_manager::install(&name, pin, verbose)?;
-
-            // Print the install path for the user's convenience.
-            if let Ok(root) = lib_manager::libs_root() {
-                let lib_path = root.join(&name);
-                if lib_path.exists() {
-                    println!(
-                        "\n  {} {}",
-                        "path:".dimmed(),
-                        lib_path.display().to_string().dimmed()
-                    );
-                    println!(
-                        "  {} {}",
-                        "include hint:".dimmed(),
-                        format!("--include {}", lib_path.display()).bold()
-                    );
-                }
-            }
-        }
-
-        LibCmd::Search { query } => {
-            lib_manager::search(&query, verbose)?;
-        }
-
-        LibCmd::List => {
-            lib_manager::list()?;
-        }
-
-        LibCmd::Info { name } => {
-            lib_manager::info(&name, verbose)?;
-        }
-
-        LibCmd::Update => {
-            // Force a cache refresh by deleting the cached index file.
-            if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-                let cache = std::path::PathBuf::from(home)
-                    .join(".arduino15")
-                    .join(".tsuki_lib_index.json");
-                if cache.exists() {
-                    std::fs::remove_file(&cache)?;
-                }
-            }
-            println!("{} Refreshing library index…", "→".cyan());
-            // Calling load_index is internal; just trigger an install-less search.
-            lib_manager::search("", verbose)?;
-            println!("{} Library index updated.", "✓".green().bold());
-        }
-    }
-    Ok(())
 }

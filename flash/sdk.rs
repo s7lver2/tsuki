@@ -39,7 +39,22 @@ pub fn resolve(arch: &str, variant: &str) -> Result<SdkPaths> {
         }
     }
 
-    // ── 2. arduino-cli package cache ──────────────────────────────────────
+    // ── 2. tsuki-modules  (~/.tsuki/modules/)  ─────────────────────────────
+    // Preferred when the user chose "tsuki-flash+cores".
+    // For AVR we use the dedicated avr module which returns SdkPaths directly
+    // without scanning — the fast path is a single Path::is_dir() check.
+    if arch == "avr" {
+        if let Ok(paths) = crate::modules::avr::sdk_paths(variant) {
+            return Ok(paths);
+        }
+    } else if let Some(home) = dirs_home() {
+        let tsuki_modules = home.join(".tsuki").join("modules");
+        if let Some(paths) = scan_arduino15(&tsuki_modules, arch, variant) {
+            return Ok(paths);
+        }
+    }
+
+    // ── 3. arduino-cli package cache ──────────────────────────────────────
     let arduino15_dirs = arduino15_candidates();
     for base in &arduino15_dirs {
         if let Some(paths) = scan_arduino15(base, arch, variant) {
@@ -47,7 +62,7 @@ pub fn resolve(arch: &str, variant: &str) -> Result<SdkPaths> {
         }
     }
 
-    // ── 3. Arduino IDE 1.x system install ─────────────────────────────────
+    // ── 4. Arduino IDE 1.x system install ─────────────────────────────────
     let system_dirs = [
         PathBuf::from("/usr/share/arduino"),
         PathBuf::from("/usr/local/share/arduino"),

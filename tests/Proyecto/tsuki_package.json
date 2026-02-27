@@ -1,0 +1,16 @@
+{
+  "name": "Proyecto",
+  "version": "0.1.0",
+  "board": "uno",
+  "go_version": "1.21",
+  "packages": [],
+  "build": {
+    "output_dir": "build",
+    "cpp_std": "c++11",
+    "optimize": "Os",
+    "extra_flags": [
+      "--arduino-cli"
+    ],
+    "source_map": false
+  }
+}

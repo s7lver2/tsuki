@@ -79,7 +79,8 @@ type backendChoice struct {
 }
 
 var backendChoices = []backendChoice{
-	{"tsuki-flash", "tsuki-flash  ✦ recommended", "fast · parallel · no arduino-cli needed"},
+	{"tsuki-flash", "tsuki-flash  ✦ recommended", "fast · parallel · needs existing .arduino15 cores"},
+	{"tsuki-flash+cores", "tsuki-flash + cores  ✦ fully standalone", "auto-downloads SDK · zero arduino-cli dependency"},
 	{"arduino-cli", "arduino-cli", "classic · requires arduino-cli install"},
 }
 
@@ -284,9 +285,9 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 		{"Creating project directory", func() error { return os.MkdirAll(srcDir, 0755) }},
 		{"Writing goduino.json", func() error {
 			m := manifest.Default(name, board.id)
-			if backend.id == "arduino-cli" {
-				m.Build.ExtraFlags = append(m.Build.ExtraFlags, "--arduino-cli")
-			}
+			// Store the chosen backend in the manifest so `tsuki build` and
+			// `tsuki upload` can use it without requiring a global config change.
+			m.Backend = backend.id
 			return m.Save(dir)
 		}},
 		{fmt.Sprintf("Writing src/%s", mainFile), func() error {
@@ -576,9 +577,12 @@ func printSuccess(name string, lang langChoice, board boardChoice, backend backe
 	wDim.Printf("  %s\n", board.note)
 
 	wDim.Printf("   %-14s", "backend")
-	if backend.id == "tsuki-flash" {
+	switch backend.id {
+	case "tsuki-flash":
 		wGreen.Printf("%s", backend.id)
-	} else {
+	case "tsuki-flash+cores":
+		color.New(color.FgHiMagenta, color.Bold).Printf("%s", backend.id)
+	default:
 		wYellow.Printf("%s", backend.id)
 	}
 	wDim.Printf("  %s\n", backend.note)

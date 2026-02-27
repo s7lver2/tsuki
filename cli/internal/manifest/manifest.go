@@ -35,6 +35,9 @@ type Manifest struct {
 	Board       string       `json:"board"`
 	GoVersion   string       `json:"go_version"`
 	Description string       `json:"description,omitempty"`
+	// Compiler backend: "tsuki-flash", "tsuki-flash+cores", or "arduino-cli".
+	// Empty string falls back to the global CLI config (cfg.Backend).
+	Backend     string       `json:"backend,omitempty"`
 	// External tsukilib packages used by this project.
 	Packages    []Package    `json:"packages"`
 	Build       BuildConfig  `json:"build"`

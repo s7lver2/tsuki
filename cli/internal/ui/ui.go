@@ -432,6 +432,44 @@ func (s *Spinner) Stop(ok bool, finalMsg string) {
 	}
 }
 
+// ── Flash Backend Badge ───────────────────────────────────────────────────────
+// FlashBadge prints a prominent orange badge at the top of the compile/upload
+// section showing the active flash backend.
+//
+// "tsuki-flash"           → orange badge "⚡ tsuki-flash"
+// "tsuki-flash+cores"     → orange badge "⚡ tsuki-flash + cores"
+// "arduino-cli" / ""      → silent (no badge)
+// anything else           → orange badge with the raw name
+func FlashBadge(mode string) {
+	if mode == "" || mode == "arduino-cli" {
+		return
+	}
+
+	var label string
+	// Orange: use BgYellow + FgBlack which renders as amber/orange in most terminals,
+	// or BgHiYellow for a brighter look. We combine with Bold for emphasis.
+	badgeColor := color.New(color.BgYellow, color.FgBlack, color.Bold)
+	textColor  := color.New(color.FgYellow, color.Bold)
+
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	switch {
+	case strings.Contains(normalized, "+cores") || (strings.Contains(normalized, "tsuki-flash") && strings.Contains(normalized, "modules")):
+		label = "⚡ tsuki-flash + cores"
+	case strings.HasPrefix(normalized, "tsuki-flash"):
+		label = "⚡ tsuki-flash"
+	default:
+		label = "⚡ " + mode
+	}
+
+	// Print as a compact inline badge rather than a box,
+	// so it sits naturally above the section divider.
+	fmt.Fprint(os.Stdout, "  ")
+	badgeColor.Fprintf(os.Stdout, " %s ", label)
+	fmt.Fprint(os.Stdout, "  ")
+	textColor.Fprintf(os.Stdout, "backend: %s", mode)
+	fmt.Fprintln(os.Stdout)
+}
+
 // ── Progress bar ──────────────────────────────────────────────────────────────
 
 func ProgressBar(label string, done, total int) {
