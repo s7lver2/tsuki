@@ -261,9 +261,14 @@ pub fn ensure_variant(variant: &str, verbose: bool) -> Result<SdkPaths> {
     }).collect();
 
     if !errors.is_empty() {
+        // Single-line message so it displays cleanly in both terminal and Go traceback.
+        let detail = errors.iter()
+            .map(|e| e.replace('\n', " ").replace("  ", " "))
+            .collect::<Vec<_>>()
+            .join(" | ");
         return Err(FlashError::Other(format!(
-            "AVR SDK install failed:\n  {}",
-            errors.join("\n  ")
+            "AVR SDK install failed — {}",
+            detail
         )));
     }
 

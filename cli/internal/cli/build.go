@@ -259,34 +259,30 @@ func compileTsukiFlash(
 
 	cmd := exec.Command(flashBin, args...)
 
-	// When using modules the first run downloads the SDK (~40 MB).
-	// Stream stdout directly so the download progress is visible,
-	// and capture stderr separately for error reporting.
+	// When using modules the first run may download the SDK (~40 MB).
+	// We let tsuki-flash own the terminal completely during this phase:
+	// no spinner (it would collide with the download progress lines),
+	// stdout streams through directly, stderr is captured for the traceback.
 	if useModules {
-		// Let stdout stream through (shows ↓ Downloading… progress).
-		cmd.Stdout = os.Stdout
 		var stderrBuf strings.Builder
+		cmd.Stdout = os.Stdout
 		cmd.Stderr = &stderrBuf
 
-		sp := ui.NewSpinner(fmt.Sprintf("tsuki-flash compile --board %s", board))
-		sp.Start()
-
 		cmdErr := cmd.Run()
-		if cmdErr == nil {
-			sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
-		} else {
-			sp.Stop(false, "compilation failed")
-		}
-
 		if cmdErr != nil {
-			errOutput := stderrBuf.String()
-			if errOutput == "" {
-				// stderr was empty — compose a helpful message from the last stdout lines
-				errOutput = "tsuki-flash exited with error (see output above)"
+			ui.Fail("compilation failed")
+			errOut := strings.TrimSpace(stderrBuf.String())
+			if errOut != "" {
+				renderTsukiFlashError(errOut)
+			} else {
+				// stderr was empty — the error was already printed to stdout above
+				ui.Traceback("CompileError", "tsuki-flash exited with error (see output above)", []ui.Frame{
+					{File: "tsuki-flash", Func: "compile", Code: []ui.CodeLine{{Number: 0, Text: "see output above", IsPointer: true}}},
+				})
 			}
-			renderTsukiFlashError(errOutput)
 			return fmt.Errorf("tsuki-flash compile failed")
 		}
+		ui.Success(fmt.Sprintf("firmware written to %s", buildCacheDir))
 		return nil
 	}
 
@@ -447,53 +443,51 @@ func renderTsukiFlashError(output string) {
 		if line == "" {
 			continue
 		}
-		// Match: ✗, error:, Error:, failed:, AVR SDK, SDK install, install failed
 		isErr := strings.HasPrefix(line, "✗") ||
 			strings.Contains(line, "error:") ||
 			strings.Contains(line, "Error:") ||
 			strings.Contains(line, "failed:") ||
 			strings.Contains(line, "Failed:") ||
+			strings.Contains(line, "failed —") ||
 			strings.Contains(line, "AVR SDK") ||
 			strings.Contains(line, "SDK install") ||
-			strings.Contains(line, "install failed")
+			strings.Contains(line, "Some downloads")
 
 		if isErr {
 			if errMsg == "" {
-				errMsg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(line, "✗ "), "error: "), "Error: ")
+				errMsg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(
+					line, "✗ "), "error: "), "Error: ")
 			}
 			frames = append(frames, ui.Frame{
 				File: "tsuki-flash", Func: "compile",
-				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: true}},
+				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: len(frames) == 0}},
 			})
 		}
 	}
 
 	if len(frames) == 0 {
-		// Fallback: show all non-empty lines
+		// Fallback: show first few non-empty lines
 		errMsg = strings.TrimSpace(output)
-		// Use up to first 3 lines as frames for readability
-		shown := 0
-		for _, line := range lines {
+		for i, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
-			isPtr := shown == 0
 			frames = append(frames, ui.Frame{
 				File: "tsuki-flash", Func: "compile",
-				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: isPtr}},
+				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: i == 0}},
 			})
-			shown++
-			if shown >= 5 {
+			if len(frames) >= 5 {
 				break
 			}
 		}
-		if len(frames) == 0 {
-			frames = []ui.Frame{{
-				File: "tsuki-flash", Func: "compile",
-				Code: []ui.CodeLine{{Number: 0, Text: errMsg, IsPointer: true}},
-			}}
-		}
+	}
+
+	if len(frames) == 0 {
+		frames = []ui.Frame{{
+			File: "tsuki-flash", Func: "compile",
+			Code: []ui.CodeLine{{Number: 0, Text: errMsg, IsPointer: true}},
+		}}
 	}
 	ui.Traceback("CompileError", errMsg, frames)
 }

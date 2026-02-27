@@ -221,8 +221,12 @@ pub fn install(arch: &str, verbose: bool) -> Result<()> {
         .collect();
 
     if !errors.is_empty() {
+        let detail = errors.iter()
+            .map(|e| e.replace('\n', " ").replace("  ", " "))
+            .collect::<Vec<_>>()
+            .join(" | ");
         return Err(FlashError::Other(format!(
-            "Some downloads failed:\n  {}", errors.join("\n  ")
+            "Some downloads failed — {}", detail
         )));
     }
 
