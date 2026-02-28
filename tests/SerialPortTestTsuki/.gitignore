@@ -1,5 +1,0 @@
-build/
-*.hex
-*.bin
-*.uf2
-.tsuki-cache.json
