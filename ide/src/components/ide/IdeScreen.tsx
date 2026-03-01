@@ -24,7 +24,7 @@ export default function IdeScreen() {
     sidebarOpen, sidebarTab, toggleSidebar,
     openTabs, activeTabIdx, closeTab, openFile,
     tree, toggleTheme, theme,
-    settings, setBottomTab,
+    settings, setBottomTab, saveActiveFile,
   } = useStore()
 
   const activeTab  = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
@@ -157,6 +157,21 @@ export default function IdeScreen() {
     if (settings.verbose) args.push('--verbose')
     dispatch(args)
   }
+
+  // ── Global keyboard shortcuts (after all handlers are defined) ────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (e.key === 'b' && !e.shiftKey) { e.preventDefault(); handleRun();     return }
+      if (e.key === 'B' && e.shiftKey)  { e.preventDefault(); handleBuild();   return }
+      if (e.key === 'T' && e.shiftKey)  { e.preventDefault(); handleCheck();   return }
+      if (e.key === 'U' && e.shiftKey)  { e.preventDefault(); handleFlash();   return }
+      if (e.key === 'm' && !e.shiftKey) { e.preventDefault(); handleMonitor(); return }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })   // no deps array → always fresh handlers, removes/re-adds each render (cheap)
 
   return (
     <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">

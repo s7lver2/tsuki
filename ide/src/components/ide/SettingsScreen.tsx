@@ -105,14 +105,14 @@ function CliTab() {
 
   async function detect(tool: string, key: keyof SettingsState) {
     setDetecting(tool)
-    // Simulate detection (in Tauri would call detectTool())
-    await new Promise(r => setTimeout(r, 800))
-    const found = Math.random() > 0.3
-    setToolStatus(s => ({ ...s, [tool]: found ? 'ok' : 'warn' }))
-    if (found) {
-      addLog('ok', `Detected ${tool} in PATH`)
-    } else {
-      addLog('warn', `${tool} not found — check your PATH or set the path manually`)
+    try {
+      const { detectTool } = await import('@/lib/tauri')
+      const result = await detectTool(tool === 'tsuki' ? settings.tsukiPath || 'tsuki' : settings.arduinoCliPath || tool)
+      setToolStatus(s => ({ ...s, [tool]: 'ok' }))
+      addLog('ok', `Detected ${tool}: ${result}`)
+    } catch (e) {
+      setToolStatus(s => ({ ...s, [tool]: 'warn' }))
+      addLog('warn', `${tool} not found — check PATH or set path manually`)
     }
     setDetecting(null)
   }

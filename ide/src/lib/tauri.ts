@@ -1,203 +1,43 @@
 /**
- * Tauri v1 bridge.
+ * Tauri v1 bridge — usa @tauri-apps/api directamente.
  *
- * En Tauri v1 el webview expone window.__TAURI__ con la siguiente estructura:
- *   window.__TAURI__.invoke(cmd, args)   ← forma principal en v1.x
- *   window.__TAURI__.tauri.invoke(...)   ← alias en algunas versiones
- *
- * IMPORTANTE: La función se llama en runtime, no en import-time, para que
- * Next.js SSR no pete (window no existe en el servidor).
+ * isTauri() es la única comprobación de entorno.
+ * Fuera de Tauri, las operaciones de disco/proceso lanzan error real
+ * (salvo settings que usa localStorage como fallback).
  */
 
-declare global {
-  interface Window {
-    __TAURI__?: any
-  }
-}
-
-// ── Detección robusta ─────────────────────────────────────────────────────────
-
-function getInvoke(): ((cmd: string, args?: unknown) => Promise<unknown>) | null {
-  if (typeof window === 'undefined') return null
-  const t = window.__TAURI__
-  if (!t) return null
-  // Tauri v1: invoke está directamente en __TAURI__
-  if (typeof t.invoke === 'function') return t.invoke.bind(t)
-  // Algunas builds lo ponen en __TAURI__.tauri.invoke
-  if (typeof t.tauri?.invoke === 'function') return t.tauri.invoke.bind(t.tauri)
-  return null
-}
-
-function getListen(): ((event: string, cb: (e: { payload: unknown }) => void) => Promise<() => void>) | null {
-  if (typeof window === 'undefined') return null
-  const t = window.__TAURI__
-  if (!t) return null
-  if (typeof t.event?.listen === 'function') return t.event.listen.bind(t.event)
-  return null
-}
+// ── Detección de entorno ──────────────────────────────────────────────────────
 
 export function isTauri(): boolean {
-  return getInvoke() !== null
+  return typeof window !== 'undefined' && '__TAURI__' in window
 }
 
-// Debug: loguea en consola al cargar para diagnosticar en la app compilada
+// Log diagnóstico en consola (visible en DevTools de la app compilada)
 if (typeof window !== 'undefined') {
-  setTimeout(() => {
-    const t = window.__TAURI__
-    if (t) {
-      console.log('[tsuki-ide] Tauri detected. Keys:', Object.keys(t))
-      console.log('[tsuki-ide] invoke:', typeof t.invoke, '| tauri.invoke:', typeof t.tauri?.invoke)
-    } else {
-      console.log('[tsuki-ide] No window.__TAURI__ — running in browser mode')
-    }
-  }, 0)
+  const inTauri = '__TAURI__' in window
+  console.log('[tsuki-ide] isTauri:', inTauri)
+  if (inTauri) {
+    console.log('[tsuki-ide] window.__TAURI__ keys:', Object.keys((window as any).__TAURI__ ?? {}))
+  }
 }
+
+// ── Invoke / Listen usando @tauri-apps/api ────────────────────────────────────
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const fn = getInvoke()
-  if (!fn) throw new Error('[tsuki-ide] Tauri invoke not available')
-  return fn(cmd, args) as Promise<T>
+  const { invoke: tauriInvoke } = await import('@tauri-apps/api/tauri')
+  return tauriInvoke<T>(cmd, args)
 }
 
-async function listen(event: string, cb: (payload: unknown) => void): Promise<() => void> {
-  const fn = getListen()
-  if (!fn) return () => {}
-  return fn(event, (e) => cb(e.payload))
+async function listen(
+  event: string,
+  cb: (payload: unknown) => void,
+): Promise<() => void> {
+  const { listen: tauriListen } = await import('@tauri-apps/api/event')
+  const unlisten = await tauriListen(event, (e) => cb(e.payload))
+  return unlisten
 }
 
-// ── Mock lines para dev en browser ───────────────────────────────────────────
-
-function mockLines(args: string[]): string[] {
-  const sub  = args[0] ?? ''
-  const rest = args.slice(1)
-
-  const boardIdx = rest.indexOf('--board')
-  const board    = boardIdx >= 0 ? rest[boardIdx + 1] ?? 'uno' : 'uno'
-  const baudIdx  = rest.indexOf('--baud')
-  const baud     = baudIdx >= 0 ? rest[baudIdx + 1] ?? '9600' : '9600'
-
-  // tsuki build  /  tsuki build --compile
-  if (sub === 'build') {
-    const compile = rest.includes('--compile')
-    const cppsStd = rest.find(a => a.startsWith('--cpp-std'))?.split('=')[1] ?? 'c++11'
-    const base = [
-      `tsuki: reading tsuki_package.json`,
-      `tsuki-core: parsing src/main.go…`,
-      `tsuki-core: transpile OK  → build/main.cpp  (8 ms)`,
-    ]
-    if (compile) return [...base,
-      `tsuki-flash: compiling for ${board}  std=${cppsStd}…`,
-      `tsuki-flash: core.a cached (SDK 1.8.6)`,
-      `tsuki-flash: sketch objects…`,
-      `tsuki-flash: linking…`,
-      `Sketch uses 1 284 bytes (3%) of program storage space. Maximum is 32 256 bytes.`,
-      `Global variables use 188 bytes (9%) of dynamic memory, leaving 1 860 bytes.`,
-      `✓  build/${board}.hex`,
-    ]
-    return [...base, `✓  build/main.cpp  (transpile only — use --compile for firmware)`]
-  }
-
-  // tsuki flash
-  if (sub === 'flash') return [
-    `tsuki: reading tsuki_package.json`,
-    `tsuki-flash: scanning serial ports…`,
-    `tsuki-flash: found  ${board}  COM3 / /dev/ttyUSB0  (1A86:7523)`,
-    `tsuki-flash: uploading build/${board}.hex  (1 284 bytes)…`,
-    `avrdude: AVR device initialized and ready to accept instructions`,
-    `avrdude: 1 284 bytes of flash written`,
-    `avrdude done.  Thank you.`,
-    `✓  flash complete`,
-  ]
-
-  // tsuki check
-  if (sub === 'check') return [
-    `tsuki: reading tsuki_package.json`,
-    `tsuki-core: parsing src/main.go…`,
-    `✓  syntax OK`,
-    `✓  setup() present`,
-    `✓  loop() present`,
-    `✓  0 errors, 0 warnings`,
-  ]
-
-  // tsuki monitor
-  if (sub === 'monitor') return [
-    `tsuki: opening serial monitor  ${baud} baud…`,
-    `tsuki-flash: port  COM3 / /dev/ttyUSB0  detected`,
-    `Connected. Ctrl+C to exit.`,
-    `[00:00:01] Hello from tsuki!`,
-    `[00:00:02] loop: tick`,
-    `[00:00:03] loop: tick`,
-  ]
-
-  // tsuki pkg install <n>
-  if (sub === 'pkg') {
-    const pkgSub  = rest[0] ?? ''
-    const pkgName = rest[1] ?? ''
-    if (pkgSub === 'install') return [
-      `Fetching ${pkgName} from registry…`,
-      `Verifying SHA-256…`,
-      `Installing → ~/.local/share/tsuki/libs/${pkgName}/1.0.0/godotinolib.toml`,
-      `✓  ${pkgName} v1.0.0 installed`,
-    ]
-    if (pkgSub === 'list') return [
-      `Installed packages:`,
-      `  dht     1.0.0   DHT11/DHT22 temperature & humidity`,
-      `  ws2812  1.0.0   NeoPixel / WS2812 LED strip`,
-      `  u8g2    1.0.0   OLED / LCD display`,
-    ]
-    if (pkgSub === 'search') return [
-      `Registry: https://raw.githubusercontent.com/s7lver2/GoDotIno/main/pkg/packages.json`,
-      `  dht       v1.0.0  DHT11/DHT22 sensor`,
-      `  ws2812    v1.0.0  NeoPixel LED strip`,
-      `  u8g2      v1.0.0  OLED display (SSD1306)`,
-      `  Servo     v1.0.0  Servo motor`,
-      `  IRremote  v1.0.0  IR receiver/transmitter`,
-      `  bme280    v1.0.0  BME280 pressure/humidity/temp`,
-    ]
-  }
-
-  // tsuki deps add/remove/list
-  if (sub === 'deps') {
-    const depSub  = rest[0] ?? ''
-    const depName = rest[1] ?? ''
-    if (depSub === 'add') return [
-      `Resolving ${depName}…`,
-      `✓  Added ${depName} ^1.0.0  → tsuki_package.json`,
-    ]
-    if (depSub === 'remove') return [`✓  Removed ${depName}  → tsuki_package.json updated`]
-    if (depSub === 'list') return [
-      `Dependencies in tsuki_package.json:`,
-      `  dht    ^1.0.0`,
-      `  ws2812 ^1.0.0`,
-    ]
-  }
-
-  // tsuki config
-  if (sub === 'config') {
-    const cfgSub = rest[0] ?? ''
-    if (cfgSub === 'list') return [
-      `libs_dir         ~/.local/share/tsuki/libs`,
-      `registry_url     https://raw.githubusercontent.com/s7lver2/GoDotIno/main/pkg/packages.json`,
-      `verify_sigs      false`,
-    ]
-    if (cfgSub === 'set') return [`✓  ${rest[1]} = ${rest[2]}`]
-  }
-
-  // tsuki clean
-  if (sub === 'clean') return [`Removing build/…`, `✓  clean`]
-
-  // tsuki init
-  if (sub === 'init') return [
-    `Creating ${rest[0] ?? 'project'}/…`,
-    `Writing tsuki_package.json`,
-    `Writing src/main.go`,
-    `✓  project ready`,
-  ]
-
-  return [`[mock] tsuki ${args.join(' ')}`]
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Process spawning ──────────────────────────────────────────────────────────
 
 export interface ProcessHandle {
   pid: number
@@ -208,17 +48,8 @@ export interface ProcessHandle {
 }
 
 /**
- * Spawn a process and stream its output line by line.
- *
- * En la app compilada (Tauri): lanza el proceso real vía spawn_process,
- * escucha los eventos proc://<id>:stdout|stderr|done.
- *
- * En browser dev: emite las líneas del mock con delays realistas.
- *
- * @param cmd   Ejecutable (p.ej. "tsuki" o el path completo)
- * @param args  Argumentos (p.ej. ["build", "--compile", "--board", "uno"])
- * @param cwd   Directorio del proyecto (root donde está tsuki_package.json)
- * @param onLine  Callback por cada línea — (text, isStderr)
+ * Lanza un proceso real vía Rust spawn_process y hace streaming línea a línea.
+ * Si no estamos en Tauri, lanza un error en consola y rechaza la promesa.
  */
 export async function spawnProcess(
   cmd: string,
@@ -226,81 +57,150 @@ export async function spawnProcess(
   cwd: string | undefined,
   onLine: (line: string, isErr: boolean) => void,
 ): Promise<ProcessHandle> {
-
-  // ── browser / dev mock ────────────────────────────────────────────────────
   if (!isTauri()) {
-    const lines = mockLines(args)  // args[0] = subcommand
-    let disposed = false
-    let resolveDone!: (code: number) => void
-    const done = new Promise<number>(r => { resolveDone = r })
-
-    lines.forEach((line, i) => {
-      setTimeout(() => {
-        if (disposed) return
-        onLine(line, false)
-        if (i === lines.length - 1) setTimeout(() => resolveDone(0), 60)
-      }, 60 + i * 80)
-    })
-
+    const msg = `[tsuki-ide] spawnProcess: no estamos en Tauri. Comando: ${cmd} ${args.join(' ')}`
+    console.error(msg)
+    onLine(`ERROR: ${msg}`, true)
+    // Devolver un handle dummy que resuelve inmediatamente con error
     return {
-      pid: Math.floor(Math.random() * 90000) + 10000,
-      done,
-      write: async (line) => { if (!disposed) onLine(`← ${line}`, false) },
-      kill:  async () => { disposed = true; resolveDone(130) },
-      dispose: () => { disposed = true },
+      pid: -1,
+      done: Promise.resolve(1),
+      write: async () => {},
+      kill: async () => {},
+      dispose: () => {},
     }
   }
 
-  // ── Tauri: proceso real con streaming ─────────────────────────────────────
   const eventId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   const unsubs: Array<() => void> = []
 
-  const outU  = await listen(`proc://${eventId}:stdout`, l => onLine(l as string, false))
-  const errU  = await listen(`proc://${eventId}:stderr`, l => onLine(l as string, true))
-  unsubs.push(outU, errU)
-
   let resolveDone!: (code: number) => void
-  const done = new Promise<number>(r => { resolveDone = r })
-  const doneU = await listen(`proc://${eventId}:done`, code => resolveDone(code as number))
-  unsubs.push(doneU)
+  const done = new Promise<number>((r) => { resolveDone = r })
 
-  const pid = await invoke<number>('spawn_process', {
-    cmd, args, cwd: cwd ?? null, eventId,
-  })
+  const outU  = await listen(`proc://${eventId}:stdout`, (l) => onLine(l as string, false))
+  const errU  = await listen(`proc://${eventId}:stderr`, (l) => onLine(l as string, true))
+  const doneU = await listen(`proc://${eventId}:done`,   (code) => resolveDone(code as number))
+  unsubs.push(outU, errU, doneU)
+
+  let pid: number
+  try {
+    pid = await invoke<number>('spawn_process', {
+      cmd,
+      args,
+      cwd: cwd ?? null,
+      eventId,
+    })
+  } catch (e) {
+    console.error('[tsuki-ide] spawn_process falló:', e)
+    onLine(`ERROR al lanzar proceso: ${e}`, true)
+    unsubs.forEach((f) => f())
+    resolveDone(1)
+    return {
+      pid: -1,
+      done,
+      write: async () => {},
+      kill: async () => {},
+      dispose: () => {},
+    }
+  }
 
   return {
     pid,
     done,
-    write:   async (line) => invoke<void>('write_stdin', { pid, data: line }),
-    kill:    async () => invoke<void>('kill_process', { pid }),
-    dispose: () => unsubs.forEach(f => f()),
+    write: async (line) => invoke<void>('write_stdin', { pid, data: line }),
+    kill:  async () => invoke<void>('kill_process', { pid }),
+    dispose: () => unsubs.forEach((f) => f()),
   }
 }
 
-// ── Utilidades simples ────────────────────────────────────────────────────────
+// ── Herramientas ──────────────────────────────────────────────────────────────
 
 export async function detectTool(name: string): Promise<string> {
-  if (!isTauri()) return `${name} v0.4.2`
+  if (!isTauri()) {
+    console.warn('[tsuki-ide] detectTool: no estamos en Tauri')
+    return `${name} (no Tauri)`
+  }
   return invoke<string>('detect_tool', { name })
 }
 
+// ── Diálogo de carpeta ────────────────────────────────────────────────────────
+
 export async function pickFolder(): Promise<string | null> {
-  if (!isTauri()) return null
-  return invoke<string | null>('pick_folder')
+  if (!isTauri()) {
+    console.warn('[tsuki-ide] pickFolder: no estamos en Tauri — devolviendo null')
+    return null
+  }
+  try {
+    const { open } = await import('@tauri-apps/api/dialog')
+    const result = await open({ directory: true, multiple: false, recursive: true })
+    if (!result || Array.isArray(result)) return null
+    return result as string
+  } catch (e) {
+    console.error('[tsuki-ide] pickFolder falló:', e)
+    return null
+  }
 }
 
+// ── Ficheros ──────────────────────────────────────────────────────────────────
+
 export async function readFile(path: string): Promise<string> {
-  if (!isTauri()) return ''
+  if (!isTauri()) {
+    console.error('[tsuki-ide] readFile: no estamos en Tauri, path:', path)
+    throw new Error('readFile no disponible fuera de Tauri')
+  }
   return invoke<string>('read_file', { path })
 }
 
 export async function writeFile(path: string, content: string): Promise<void> {
-  if (!isTauri()) return
+  if (!isTauri()) {
+    console.error('[tsuki-ide] writeFile: no estamos en Tauri, path:', path)
+    throw new Error('writeFile no disponible fuera de Tauri')
+  }
   return invoke<void>('write_file', { path, content })
 }
 
+export async function createDirectory(path: string): Promise<void> {
+  if (!isTauri()) {
+    console.error('[tsuki-ide] createDirectory: no estamos en Tauri, path:', path)
+    throw new Error('createDirectory no disponible fuera de Tauri')
+  }
+  return invoke<void>('create_dir', { path })
+}
+
+export async function deleteFile(path: string): Promise<void> {
+  if (!isTauri()) {
+    console.error('[tsuki-ide] deleteFile: no estamos en Tauri, path:', path)
+    return
+  }
+  return invoke<void>('delete_file', { path })
+}
+
+export async function renamePath(oldPath: string, newPath: string): Promise<void> {
+  if (!isTauri()) {
+    console.error('[tsuki-ide] renamePath: no estamos en Tauri')
+    return
+  }
+  return invoke<void>('rename_path', { oldPath, newPath })
+}
+
+// ── Directorio ────────────────────────────────────────────────────────────────
+
+export interface DirEntry { name: string; is_dir: boolean }
+
+export async function readDirEntries(path: string): Promise<DirEntry[]> {
+  if (!isTauri()) {
+    console.error('[tsuki-ide] readDirEntries: no estamos en Tauri, path:', path)
+    throw new Error('readDirEntries no disponible fuera de Tauri')
+  }
+  const json = await invoke<string>('read_dir_entries', { path })
+  return JSON.parse(json) as DirEntry[]
+}
+
+// ── Configuración ─────────────────────────────────────────────────────────────
+
 export async function loadSettings(): Promise<string> {
   if (!isTauri()) {
+    // Fallback a localStorage — aceptable fuera de Tauri
     try { return localStorage.getItem('gdi-settings') ?? '{}' } catch { return '{}' }
   }
   return invoke<string>('load_settings')
@@ -313,4 +213,14 @@ export async function saveSettings(settings: unknown): Promise<void> {
     return
   }
   return invoke<void>('save_settings', { settings: json })
+}
+
+// ── Git ───────────────────────────────────────────────────────────────────────
+
+export async function runGit(args: string[], cwd: string): Promise<string> {
+  if (!isTauri()) {
+    console.warn('[tsuki-ide] runGit: no estamos en Tauri, args:', args)
+    return ''
+  }
+  return invoke<string>('run_git', { args, cwd })
 }

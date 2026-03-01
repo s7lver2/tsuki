@@ -1,6 +1,6 @@
 'use client'
 import { useRef, useEffect, useCallback } from 'react'
-import { useStore } from '@/lib/store'
+import { useStore } from '@/lib/store' 
 import { highlightGo } from '@/lib/highlight'
 
 function LineNumbers({ count, fontSize }: { count: number; fontSize: number }) {
@@ -84,7 +84,7 @@ function lintGo(code: string, filename: string) {
 }
 
 export default function CodeEditor() {
-  const { openTabs, activeTabIdx, updateTabContent, setProblems, settings } = useStore()
+  const { openTabs, activeTabIdx, updateTabContent, saveFile, setProblems, settings } = useStore()
   const tab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
@@ -134,20 +134,23 @@ export default function CodeEditor() {
     // Save: Ctrl+S or Cmd+S
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault()
+      let contentToSave = content
+
       if (tab?.ext === 'go' && settings.formatOnSave) {
-        const formatted = formatGo(content, tabSize)
-        updateTabContent(activeTabIdx, formatted)
+        contentToSave = formatGo(contentToSave, tabSize)
+        updateTabContent(activeTabIdx, contentToSave)
       }
       if (settings.trimWhitespace) {
-        const trimmed = content.split('\n').map(l => l.trimEnd()).join('\n')
-        updateTabContent(activeTabIdx, trimmed)
+        contentToSave = contentToSave.split('\n').map(l => l.trimEnd()).join('\n')
+        updateTabContent(activeTabIdx, contentToSave)
       }
-      // Run lint on save
       if (tab?.ext === 'go') {
-        const probs = lintGo(tab.content, tab.name)
+        const probs = lintGo(contentToSave, tab.name)
         setProblems(probs)
       }
-      useStore.getState().addLog('info', `Saved ${tab?.name}`)
+      // ← Write to disk
+      saveFile(activeTabIdx)
+      return
     }
   }
 

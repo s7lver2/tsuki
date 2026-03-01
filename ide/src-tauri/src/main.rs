@@ -208,6 +208,44 @@ async fn read_dir_entries(path: String) -> Result<String, String> {
     Ok(serde_json::to_string(&list).unwrap())
 }
 
+// ── delete_file / delete_dir ──────────────────────────────────────────────────
+#[tauri::command]
+async fn delete_file(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if p.is_dir() {
+        std::fs::remove_dir_all(&path).map_err(|e| format!("Delete dir error: {}", e))
+    } else {
+        std::fs::remove_file(&path).map_err(|e| format!("Delete file error: {}", e))
+    }
+}
+
+// ── rename_path ───────────────────────────────────────────────────────────────
+#[tauri::command]
+async fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
+    std::fs::rename(&old_path, &new_path).map_err(|e| format!("Rename error: {}", e))
+}
+
+// ── create_dir ────────────────────────────────────────────────────────────────
+#[tauri::command]
+async fn create_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| format!("Create dir error: {}", e))
+}
+
+// ── run_git: run a git subcommand in a directory ──────────────────────────────
+#[tauri::command]
+async fn run_git(args: Vec<String>, cwd: String) -> Result<String, String> {
+    let mut c = Command::new("git");
+    c.args(&args).current_dir(&cwd);
+    let output = c.output().map_err(|e| format!("git not found: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(if stderr.trim().is_empty() { stdout } else { stderr })
+    }
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 fn main() {
     tauri::Builder::default()
@@ -224,6 +262,10 @@ fn main() {
             load_settings,
             save_settings,
             read_dir_entries,
+            delete_file,
+            rename_path,
+            create_dir,
+            run_git,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

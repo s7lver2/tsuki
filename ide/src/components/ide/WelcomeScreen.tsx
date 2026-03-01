@@ -32,14 +32,10 @@ const TEMPLATES = [
   { value: 'empty',  label: 'Empty project' },
 ]
 
-const RECENT = [
-  { name: 'blink',       path: '~/projects/blink',       board: 'uno',   tpl: 'blink',  backend: 'tsuki-flash' },
-  { name: 'thermometer', path: '~/projects/thermometer',  board: 'uno',   tpl: 'blink',  backend: 'tsuki-flash' },
-  { name: 'rainbow',     path: '~/projects/rainbow',      board: 'esp32', tpl: 'blink',  backend: 'tsuki-flash' },
-]
+const RECENT: never[] = []
 
 export default function WelcomeScreen() {
-  const { setScreen, loadProject, toggleTheme, theme } = useStore()
+  const { setScreen, loadProject, loadFromDisk, toggleTheme, theme, recentProjects } = useStore()
   const [name, setName] = useState('')
   const [board, setBoard] = useState('uno')
   const [template, setTemplate] = useState('blink')
@@ -47,31 +43,47 @@ export default function WelcomeScreen() {
   const [gitInit, setGitInit] = useState(true)
   const [opening, setOpening] = useState(false)
 
-  function create() {
-    loadProject(name.trim() || 'my-project', board, template, backend, gitInit, '')
+  async function create() {
+    const projName = name.trim() || 'my-project'
+    setOpening(true)
+    try {
+      const { pickFolder, isTauri } = await import('@/lib/tauri')
+
+      let projectPath = ''
+      if (isTauri()) {
+        // In Tauri: ask user where to save the project
+        const parentFolder = await pickFolder()
+        if (parentFolder) {
+          const sep = parentFolder.includes('\\') ? '\\' : '/'
+          projectPath = parentFolder + sep + projName
+        }
+        // If user cancelled the dialog, still create in-memory (projectPath stays '')
+      }
+
+      await loadProject(projName, board, template, backend, gitInit, projectPath)
+    } catch (e) {
+      console.error('Create project:', e)
+      // Any error → fallback to in-memory
+      await loadProject(name.trim() || 'my-project', board, template, backend, gitInit, '')
+    }
+    setOpening(false)
   }
 
   async function openFolder() {
     setOpening(true)
     try {
-      const { pickFolder, readFile } = await import('@/lib/tauri')
+      const { pickFolder, isTauri } = await import('@/lib/tauri')
+      if (!isTauri()) {
+        console.error('[tsuki-ide] openFolder: no estamos en Tauri')
+        setOpening(false)
+        return
+      }
       const folder = await pickFolder()
       if (!folder) { setOpening(false); return }
-
-      let projectName    = folder.split(/[/\\]/).pop() ?? 'project'
-      let projectBoard   = 'uno'
-      let projectBackend = 'tsuki-flash'
-
-      try {
-        const raw      = await readFile(`${folder}/tsuki_package.json`)
-        const manifest = JSON.parse(raw)
-        projectName    = manifest.name  ?? projectName
-        projectBoard   = manifest.board ?? projectBoard
-        if (manifest.build?.extra_flags?.includes('--arduino-cli')) projectBackend = 'arduino-cli'
-      } catch { /* no manifest — use defaults */ }
-
-      loadProject(projectName, projectBoard, 'empty', projectBackend, false, folder)
-    } catch (e) { console.error('Open folder:', e) }
+      await loadFromDisk(folder)
+    } catch (e) {
+      console.error('[tsuki-ide] openFolder error:', e)
+    }
     setOpening(false)
   }
 
@@ -142,10 +154,13 @@ export default function WelcomeScreen() {
                 <span className="text-2xs font-semibold text-[var(--fg-faint)] uppercase tracking-widest">Recent</span>
               </div>
               <div className="flex flex-col">
-                {RECENT.map(r => (
+                {recentProjects.length === 0 && (
+                  <p className="text-xs text-[var(--fg-faint)] px-2">No recent projects yet.</p>
+                )}
+                {recentProjects.map(r => (
                   <button
-                    key={r.name}
-                    onClick={() => loadProject(r.name, r.board, r.tpl, r.backend, true)}
+                    key={r.path}
+                    onClick={() => loadFromDisk(r.path)}
                     className="flex items-center gap-3 px-2.5 py-2 rounded-md hover:bg-[var(--hover)] transition-colors cursor-pointer border-0 bg-transparent text-left group"
                   >
                     <div className="w-7 h-7 rounded border border-[var(--border)] flex items-center justify-center text-[var(--fg-faint)] flex-shrink-0">
@@ -265,9 +280,10 @@ export default function WelcomeScreen() {
 
                 <button
                   onClick={create}
-                  className="w-full py-2 bg-[var(--fg)] text-[var(--accent-inv)] rounded-md text-sm font-semibold hover:opacity-80 transition-opacity cursor-pointer border-0"
+                  disabled={opening}
+                  className="w-full py-2 bg-[var(--fg)] text-[var(--accent-inv)] rounded-md text-sm font-semibold hover:opacity-80 transition-opacity cursor-pointer border-0 disabled:opacity-50"
                 >
-                  Create &amp; Open
+                  {opening ? 'Creating…' : 'Create & Open'}
                 </button>
               </div>
             </div>

@@ -34,7 +34,7 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
   activeFileId: string
   onOpen: (id: string) => void
 }) {
-  const { tree, renameNode, deleteActive, openTabs, activeTabIdx, closeTab } = useStore()
+  const { tree, renameNode, deleteNode, openTabs, closeTab } = useStore()
   const node = tree.find(n => n.id === nodeId)
   const [renaming, setRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState('')
@@ -42,53 +42,41 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
   const renameRef = useRef<HTMLInputElement>(null)
 
   if (!node) return null
+  // Re-assign to a non-nullable constant so closures below are type-safe
+  const n = node
 
-  const isActive = node.type === 'file' && node.id === activeFileId
-  const isDir = node.type === 'dir'
+  const isActive = n.type === 'file' && n.id === activeFileId
+  const isDir = n.type === 'dir'
   const pad = 8 + depth * 14
 
   function toggle() {
     if (renaming) return
     if (isDir) {
       useStore.setState(s => ({
-        tree: s.tree.map(n => n.id === nodeId ? { ...n, open: !n.open } : n)
+        tree: s.tree.map(nd => nd.id === nodeId ? { ...nd, open: !nd.open } : nd)
       }))
     } else {
-      onOpen(node.id)
+      onOpen(n.id)
     }
   }
 
   function startRename(e: React.MouseEvent) {
     e.stopPropagation()
-    setRenameVal(node.name)
+    setRenameVal(n.name)
     setRenaming(true)
     setTimeout(() => renameRef.current?.select(), 10)
   }
 
-  function confirmRename() {
-    if (renameVal.trim() && renameVal !== node.name) {
-      renameNode(nodeId, renameVal.trim())
+  async function confirmRename() {
+    if (renameVal.trim() && renameVal !== n.name) {
+      await renameNode(nodeId, renameVal.trim())
     }
     setRenaming(false)
   }
 
-  function deleteNode(e: React.MouseEvent) {
+  function handleDelete(e: React.MouseEvent) {
     e.stopPropagation()
-    // If this file is open in a tab, close it first
-    const tabIdx = openTabs.findIndex(t => t.fileId === nodeId)
-    if (tabIdx >= 0) {
-      closeTab(tabIdx)
-    }
-    // Remove from tree
-    useStore.setState(s => {
-      const newTree = s.tree
-        .filter(n => n.id !== nodeId)
-        .map(n => ({ ...n, children: n.children?.filter(c => c !== nodeId) }))
-      const gitChanges = node.type === 'file'
-        ? [...s.gitChanges, { letter: 'D' as const, name: node.name, path: `src/${node.name}` }]
-        : s.gitChanges
-      return { tree: newTree, gitChanges }
-    })
+    deleteNode(nodeId)
   }
 
   return (
@@ -111,13 +99,13 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
         {isDir ? (
           <ChevronRight
             size={10}
-            className={`flex-shrink-0 transition-transform text-[var(--fg-faint)] ${node.open ? 'rotate-90' : ''}`}
+            className={`flex-shrink-0 transition-transform text-[var(--fg-faint)] ${n.open ? 'rotate-90' : ''}`}
           />
         ) : (
           <span className="w-[10px] flex-shrink-0" />
         )}
 
-        <FileIcon node={node} />
+        <FileIcon node={n} />
 
         {renaming ? (
           <input
@@ -135,21 +123,21 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
             className="flex-1 bg-[var(--surface-3)] border border-[var(--fg-muted)] rounded px-1 text-xs outline-none text-[var(--fg)] min-w-0"
           />
         ) : (
-          <span className="flex-1 truncate text-xs">{node.name}</span>
+          <span className="flex-1 truncate text-xs">{n.name}</span>
         )}
 
-        {node.git && !renaming && (
+        {n.git && !renaming && (
           <span className={`text-2xs font-mono font-bold flex-shrink-0 ${ 
-            node.git === 'A' ? 'text-[var(--ok)]' :
-            node.git === 'M' ? 'text-[var(--warn)]' :
+            n.git === 'A' ? 'text-[var(--ok)]' :
+            n.git === 'M' ? 'text-[var(--warn)]' :
             'text-[var(--err)]'
-          }`}>{node.git}</span>
+          }`}>{n.git}</span>
         )}
 
         {/* Hover action buttons */}
-        {hovered && !renaming && node.id !== 'root' && (
+        {hovered && !renaming && n.id !== 'root' && (
           <div className="flex items-center gap-0.5 mr-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
-            {node.type === 'file' && (
+            {n.type === 'file' && (
               <button
                 onClick={startRename}
                 title="Rename"
@@ -158,9 +146,9 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
                 <Pencil size={9} />
               </button>
             )}
-            {node.id !== 'src' && node.id !== 'build' && node.id !== 'manifest' && node.id !== 'gitignore' && (
+            {n.id !== 'src' && n.id !== 'build' && n.id !== 'manifest' && n.id !== 'gitignore' && (
               <button
-                onClick={deleteNode}
+                onClick={handleDelete}
                 title="Delete"
                 className="w-4 h-4 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--err)] hover:bg-[var(--surface-4)] border-0 bg-transparent cursor-pointer"
               >
@@ -171,7 +159,7 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
         )}
       </div>
 
-      {isDir && node.open && node.children?.map(childId => (
+      {isDir && n.open && n.children?.map(childId => (
         <TreeNode key={childId} nodeId={childId} depth={depth + 1} activeFileId={activeFileId} onOpen={onOpen} />
       ))}
     </>
@@ -187,12 +175,12 @@ export default function FilesSidebar() {
   const activeFileId = activeTabIdx >= 0 ? openTabs[activeTabIdx]?.fileId : ''
   const root = tree.find(n => n.id === 'root')
 
-  function confirmNewFile() {
-    if (inputVal.trim()) addFile(inputVal.trim())
+  async function confirmNewFile() {
+    if (inputVal.trim()) await addFile(inputVal.trim())
     setCreatingFile(false); setInputVal('')
   }
-  function confirmNewFolder() {
-    if (inputVal.trim()) addFolder(inputVal.trim())
+  async function confirmNewFolder() {
+    if (inputVal.trim()) await addFolder(inputVal.trim())
     setCreatingFolder(false); setInputVal('')
   }
 

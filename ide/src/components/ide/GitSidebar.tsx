@@ -110,11 +110,14 @@ function GitTree() {
 export default function GitSidebar() {
   const { gitChanges, gitBranch, doCommit } = useStore()
   const [msg, setMsg] = useState('')
+  const [committing, setCommitting] = useState(false)
 
-  function commit() {
-    if (!msg.trim()) return
-    doCommit(msg.trim())
+  async function commit() {
+    if (!msg.trim() || committing) return
+    setCommitting(true)
+    await doCommit(msg.trim())
     setMsg('')
+    setCommitting(false)
   }
 
   return (
@@ -144,10 +147,12 @@ export default function GitSidebar() {
           size="sm"
           className="w-full justify-center gap-2"
           onClick={commit}
-          disabled={!msg.trim()}
+          disabled={!msg.trim() || committing}
         >
-          <Check size={12} />
-          Commit to {gitBranch}
+          {committing
+            ? <span className="animate-pulse">Committing…</span>
+            : <><Check size={12} /> Commit to {gitBranch}</>
+          }
         </Btn>
       </div>
 

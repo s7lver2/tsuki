@@ -7,3 +7,4 @@ Cargo.lock
 ide/node_modules
 ide/.next
 package-lock.json
+ide/out
