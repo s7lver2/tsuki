@@ -29,11 +29,25 @@ import (
 
 const FileName = "tsuki_package.json"
 
+// Language identifies which source language the project uses.
+// "go"  → tsuki-core transpiles .go → .cpp (default, original behaviour)
+// "cpp" → native C++ project; src/*.cpp are compiled directly
+// "ino" → Arduino .ino sketch project; src/*.ino are compiled directly
+type Language = string
+
+const (
+	LangGo  Language = "go"
+	LangCpp Language = "cpp"
+	LangIno Language = "ino"
+)
+
 type Manifest struct {
 	Name        string       `json:"name"`
 	Version     string       `json:"version"`
 	Board       string       `json:"board"`
-	GoVersion   string       `json:"go_version"`
+	GoVersion   string       `json:"go_version,omitempty"`
+	// Language selects the source language: "go" (default), "cpp", or "ino".
+	Language    string       `json:"language,omitempty"`
 	Description string       `json:"description,omitempty"`
 	// Compiler backend: "tsuki-flash", "tsuki-flash+cores", or "arduino-cli".
 	// Empty string falls back to the global CLI config (cfg.Backend).
@@ -41,6 +55,16 @@ type Manifest struct {
 	// External tsukilib packages used by this project.
 	Packages    []Package    `json:"packages"`
 	Build       BuildConfig  `json:"build"`
+}
+
+// EffectiveLanguage returns the project language, defaulting to "go".
+func (m *Manifest) EffectiveLanguage() string {
+	switch m.Language {
+	case LangCpp, LangIno:
+		return m.Language
+	default:
+		return LangGo
+	}
 }
 
 // Package is a single tsukilib dependency declared in the manifest.
@@ -59,14 +83,19 @@ type BuildConfig struct {
 	SourceMap  bool     `json:"source_map"`
 }
 
-// Default returns a manifest with sensible defaults.
+// Default returns a manifest with sensible defaults for Go projects.
 func Default(name, board string) *Manifest {
-	return &Manifest{
-		Name:      name,
-		Version:   "0.1.0",
-		Board:     board,
-		GoVersion: "1.21",
-		Packages:  []Package{},
+	return DefaultWithLanguage(name, board, LangGo)
+}
+
+// DefaultWithLanguage returns a manifest with sensible defaults for the given language.
+func DefaultWithLanguage(name, board, language string) *Manifest {
+	m := &Manifest{
+		Name:     name,
+		Version:  "0.1.0",
+		Board:    board,
+		Language: language,
+		Packages: []Package{},
 		Build: BuildConfig{
 			OutputDir:  "build",
 			CppStd:     "c++11",
@@ -75,6 +104,10 @@ func Default(name, board string) *Manifest {
 			SourceMap:  false,
 		},
 	}
+	if language == LangGo {
+		m.GoVersion = "1.21"
+	}
+	return m
 }
 
 // Load reads tsuki.json from the given directory.

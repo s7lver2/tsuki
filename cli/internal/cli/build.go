@@ -59,21 +59,28 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		board = m.Board
 	}
 
-	// Base build directory: <project>/build/
 	baseOutDir := opts.OutputDir
 	if baseOutDir == "" {
 		baseOutDir = filepath.Join(projectDir, m.Build.OutputDir)
 	}
 
-	// ── Arduino sketch directory ─────────────────────────────────────────────
-	// arduino-cli compile requires a sketch directory whose name matches the
-	// .ino file inside it:  build/<name>/<name>.ino
+	switch m.EffectiveLanguage() {
+	case manifest.LangCpp:
+		return runNative(projectDir, m, opts, board, baseOutDir, "cpp")
+	case manifest.LangIno:
+		return runNative(projectDir, m, opts, board, baseOutDir, "ino")
+	default:
+		return runGo(projectDir, m, opts, board, baseOutDir)
+	}
+}
+
+// runGo is the original Go → transpile → compile pipeline.
+func runGo(projectDir string, m *manifest.Manifest, opts Options, board, baseOutDir string) (*Result, error) {
 	sketchName := sanitizeSketchName(m.Name)
 	if sketchName == "" {
 		sketchName = "sketch"
 	}
 	sketchDir := filepath.Join(baseOutDir, sketchName)
-
 	if err := os.MkdirAll(sketchDir, 0755); err != nil {
 		return nil, fmt.Errorf("creating sketch dir: %w", err)
 	}
@@ -81,7 +88,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	transpiler := core.New(opts.CoreBin, opts.Verbose)
 	if !transpiler.Installed() {
 		return nil, fmt.Errorf(
-			"tsuki-core not found — install it or set core_binary in config\n"+
+			"tsuki-core not found \u2014 install it or set core_binary in config\n" +
 				"  tsuki config set core_binary /path/to/tsuki-core",
 		)
 	}
@@ -92,7 +99,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		return nil, fmt.Errorf("no .go files found in %s", srcDir)
 	}
 
-	// Resolve declared packages
 	pkgNames := m.PackageNames()
 	libsDir  := pkgmgr.LibsDir()
 
@@ -115,7 +121,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 
 	for _, goFile := range goFiles {
 		base    := strings.TrimSuffix(filepath.Base(goFile), ".go")
-		cppFile := filepath.Join(sketchDir, base+".cpp") // write INTO sketch dir
+		cppFile := filepath.Join(sketchDir, base+".cpp")
 
 		sp := ui.NewSpinner(fmt.Sprintf("%s → %s", filepath.Base(goFile), filepath.Base(cppFile)))
 		sp.Start()
@@ -142,8 +148,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		ui.Warn(w)
 	}
 
-	// ── Write the .ino stub ──────────────────────────────────────────────────
-	// arduino-cli needs <sketchDir>/<sketchName>.ino to exist.
 	if err := writeInoStub(sketchDir, sketchName, result.CppFiles); err != nil {
 		return nil, fmt.Errorf("writing .ino stub: %w", err)
 	}
@@ -153,33 +157,120 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		return result, nil
 	}
 
-	// ── Compile — dispatch to selected backend ────────────────────────────
+	return compileSketch(result, m, board, opts, sketchDir, baseOutDir)
+}
+
+// runNative handles native C++ and .ino projects without a transpilation step.
+func runNative(projectDir string, m *manifest.Manifest, opts Options, board, baseOutDir, lang string) (*Result, error) {
+	sketchName := sanitizeSketchName(m.Name)
+	if sketchName == "" {
+		sketchName = "sketch"
+	}
+	sketchDir := filepath.Join(baseOutDir, sketchName)
+	if err := os.MkdirAll(sketchDir, 0755); err != nil {
+		return nil, fmt.Errorf("creating sketch dir: %w", err)
+	}
+
+	srcDir := filepath.Join(projectDir, "src")
+	var pattern string
+	switch lang {
+	case "ino":
+		pattern = "*.ino"
+	default:
+		pattern = "*.cpp"
+	}
+
+	srcFiles, err := filepath.Glob(filepath.Join(srcDir, pattern))
+	if err != nil || len(srcFiles) == 0 {
+		return nil, fmt.Errorf("no .%s files found in %s", lang, srcDir)
+	}
+
+	// For C++, also bring over headers
+	var hFiles []string
+	if lang == "cpp" {
+		hFiles, _ = filepath.Glob(filepath.Join(srcDir, "*.h"))
+		h2, _ := filepath.Glob(filepath.Join(srcDir, "*.hpp"))
+		hFiles = append(hFiles, h2...)
+	}
+
+	langLabel := map[string]string{"cpp": "C++", "ino": "Arduino (.ino)"}[lang]
+	ui.SectionTitle(fmt.Sprintf("Preparing  [lang: %s]  [board: %s]", langLabel, board))
+
+	result := &Result{SketchDir: sketchDir}
+
+	for _, src := range append(srcFiles, hFiles...) {
+		dst := filepath.Join(sketchDir, filepath.Base(src))
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", src, err)
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return nil, fmt.Errorf("copying %s: %w", filepath.Base(src), err)
+		}
+		sp := ui.NewSpinner(fmt.Sprintf("copy %s", filepath.Base(src)))
+		sp.Start()
+		sp.Stop(true, fmt.Sprintf("src/%s  →  build/%s/%s",
+			filepath.Base(src), sketchName, filepath.Base(src)))
+		ext := strings.ToLower(filepath.Ext(src))
+		if ext == ".cpp" || ext == ".ino" {
+			result.CppFiles = append(result.CppFiles, dst)
+		}
+	}
+
+	if lang == "ino" {
+		// arduino-cli requires the primary .ino to match the sketch dir name
+		primary  := filepath.Join(sketchDir, filepath.Base(srcFiles[0]))
+		expected := filepath.Join(sketchDir, sketchName+".ino")
+		if primary != expected {
+			data, _ := os.ReadFile(primary)
+			_ = os.WriteFile(expected, data, 0644)
+			_ = os.Remove(primary)
+			for i, f := range result.CppFiles {
+				if f == primary {
+					result.CppFiles[i] = expected
+				}
+			}
+		}
+	} else {
+		if err := writeInoStub(sketchDir, sketchName, result.CppFiles); err != nil {
+			return nil, fmt.Errorf("writing .ino stub: %w", err)
+		}
+		ui.Step("sketch", fmt.Sprintf("wrote %s/%s.ino stub", sketchName, sketchName))
+	}
+
+	if !opts.Compile {
+		return result, nil
+	}
+
+	return compileSketch(result, m, board, opts, sketchDir, baseOutDir)
+}
+
+// compileSketch dispatches to the selected backend. Used by both runGo and runNative.
+func compileSketch(result *Result, m *manifest.Manifest, board string, opts Options, sketchDir, baseOutDir string) (*Result, error) {
 	backend := opts.Backend
 	if backend == "" {
 		backend = "arduino-cli"
 	}
 
-	// Show the backend badge before the section title so it's visible at the
-	// top of the compile phase for tsuki-flash / tsuki-flash+cores.
 	ui.FlashBadge(backend)
 	ui.SectionTitle("Compiling")
+
+	pkgNames := m.PackageNames()
+	libsDir  := pkgmgr.LibsDir()
 
 	buildCacheDir := filepath.Join(baseOutDir, ".cache")
 	_ = os.MkdirAll(buildCacheDir, 0755)
 
 	switch backend {
 	case "tsuki-flash":
-		// Uses .arduino15 (or TSUKI_SDK_ROOT) as the SDK source.
 		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir, false); err != nil {
 			return result, err
 		}
 	case "tsuki-flash+cores":
-		// Fully standalone: tsuki-modules provides the SDK — no arduino-cli, no .arduino15.
-		// Auto-installs the SDK on first run via `tsuki-flash modules install avr` internally.
 		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir, true); err != nil {
 			return result, err
 		}
-	default: // "arduino-cli" or anything unrecognised
+	default:
 		if err := compileArduinoCLI(result, board, opts, sketchDir, buildCacheDir); err != nil {
 			return result, err
 		}
@@ -236,6 +327,8 @@ func compileTsukiFlash(
 		cppStd = "c++11"
 	}
 
+	lang := m.EffectiveLanguage()
+
 	args := []string{
 		"compile",
 		"--board", board,
@@ -243,6 +336,7 @@ func compileTsukiFlash(
 		"--build-dir", buildCacheDir,
 		"--name", sanitizeSketchName(m.Name),
 		"--cpp-std", cppStd,
+		"--language", lang,
 	}
 	for _, inc := range includeArgs {
 		args = append(args, "--include", inc)

@@ -14,14 +14,15 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
 	"github.com/tsuki/cli/internal/manifest"
 	"github.com/tsuki/cli/internal/ui"
 )
@@ -46,7 +47,9 @@ type langChoice struct {
 }
 
 var langChoices = []langChoice{
-	{"go", "Go  ✦", "statically typed · compiled · fast"},
+	{"go",  "Go  ❆",  "statically typed · compiled · fast"},
+	{"cpp", "C++",       "native Arduino C++ · full control"},
+	{"ino", "Arduino",   "classic .ino sketch · beginner-friendly"},
 }
 
 // ── Board catalog ─────────────────────────────────────────────────────────────
@@ -90,6 +93,13 @@ type templateChoice struct {
 	id   string
 	name string
 	code string
+}
+
+// templateChoice holds starter code indexed by language.
+type templateChoiceEntry struct {
+	id      string
+	name    string
+	default_ map[string]string // lang -> code
 }
 
 var templateChoices = []templateChoice{
@@ -143,6 +153,108 @@ func loop() {
 }
 `,
 	},
+}
+
+// templateChoicesCpp contains starter C++ templates.
+var templateChoicesCpp = []templateChoice{
+	{
+		id:   "blink",
+		name: "Blink  (LED)",
+		code: `#include <Arduino.h>
+
+void setup() {
+    pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(500);
+}
+`,
+	},
+	{
+		id:   "serial",
+		name: "Serial Hello",
+		code: `#include <Arduino.h>
+
+void setup() {
+    Serial.begin(9600);
+}
+
+void loop() {
+    Serial.println("Hello from tsuki!");
+    delay(1000);
+}
+`,
+	},
+	{
+		id:   "empty",
+		name: "Empty project",
+		code: `#include <Arduino.h>
+
+void setup() {
+}
+
+void loop() {
+}
+`,
+	},
+}
+
+// templateChoicesIno contains starter .ino templates.
+var templateChoicesIno = []templateChoice{
+	{
+		id:   "blink",
+		name: "Blink  (LED)",
+		code: `void setup() {
+    pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(500);
+}
+`,
+	},
+	{
+		id:   "serial",
+		name: "Serial Hello",
+		code: `void setup() {
+    Serial.begin(9600);
+}
+
+void loop() {
+    Serial.println("Hello from tsuki!");
+    delay(1000);
+}
+`,
+	},
+	{
+		id:   "empty",
+		name: "Empty project",
+		code: `void setup() {
+}
+
+void loop() {
+}
+`,
+	},
+}
+
+// templatesForLang returns the right set of templates for the selected language.
+func templatesForLang(langID string) []templateChoice {
+	switch langID {
+	case "cpp":
+		return templateChoicesCpp
+	case "ino":
+		return templateChoicesIno
+	default:
+		return templateChoices
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,12 +356,13 @@ func runWizard(prefillName, prefillBoard, prefillBackend, prefillLanguage string
 
 	// ── 5. Starter template ─────────────────────────────────────────────────
 	var tmpl templateChoice
+	templates := templatesForLang(lang.id)
 	if acceptDefaults {
-		tmpl = templateChoices[0]
+		tmpl = templates[0]
 		stepDone(5, "Starter template", tmpl.name+" (default)")
 	} else {
-		idx := promptArrowSelect(5, "How should we start your project?", templateLabels(), 0)
-		tmpl = templateChoices[idx]
+		idx := promptArrowSelect(5, "How should we start your project?", templateLabelsFor(templates), 0)
+		tmpl = templates[idx]
 	}
 
 	// ── 6. Git init ──────────────────────────────────────────────────────────
@@ -276,17 +389,23 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 	dir := filepath.Join(projectDir(), name)
 	srcDir := filepath.Join(dir, "src")
 
-	mainFile := "main.go"
+	var mainFile string
+	switch lang.id {
+	case "cpp":
+		mainFile = "main.cpp"
+	case "ino":
+		mainFile = name + ".ino"
+	default:
+		mainFile = "main.go"
+	}
 
 	steps := []struct {
 		label string
 		fn    func() error
 	}{
 		{"Creating project directory", func() error { return os.MkdirAll(srcDir, 0755) }},
-		{"Writing goduino.json", func() error {
-			m := manifest.Default(name, board.id)
-			// Store the chosen backend in the manifest so `tsuki build` and
-			// `tsuki upload` can use it without requiring a global config change.
+		{"Writing tsuki_package.json", func() error {
+			m := manifest.DefaultWithLanguage(name, board.id, lang.id)
 			m.Backend = backend.id
 			return m.Save(dir)
 		}},
@@ -312,8 +431,7 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 			fn    func() error
 		}{"Initializing git repository", func() error {
 			if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
-				cmd := fmt.Sprintf("git -C %q init -q", dir)
-				_ = cmd
+				return exec.Command("git", "-C", dir, "init", "-q").Run()
 			}
 			return nil
 		}})
@@ -338,37 +456,10 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 //  Arrow-key interactive select (raw terminal mode)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// termios mirrors the Linux termios struct for raw-mode manipulation.
-type termios struct {
-	Iflag  uint32
-	Oflag  uint32
-	Cflag  uint32
-	Lflag  uint32
-	Cc     [20]byte
-	Ispeed uint32
-	Ospeed uint32
-}
-
-func tcgetattr(fd uintptr, t *termios) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(t)))
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
-func tcsetattr(fd uintptr, t *termios) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(t)))
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
 // promptArrowSelect shows a live arrow-key navigable menu.
 // Falls back to a numbered list when stdin is not a TTY (e.g. pipes, CI).
-func promptArrowSelect(step int, question string, choices []string, defaultIdx int) int {
-	stepLabel(step, question)
+func promptArrowSelect(stepNum int, question string, choices []string, defaultIdx int) int {
+	stepLabel(stepNum, question)
 	fmt.Println()
 
 	// ── Non-interactive fallback ──────────────────────────────────────────
@@ -396,22 +487,21 @@ func promptArrowSelect(step int, question string, choices []string, defaultIdx i
 			}
 		}
 		fmt.Println()
-		stepDone(step, question, choices[idx])
+		stepDone(stepNum, question, choices[idx])
 		return idx
 	}
 
-	// ── Raw-mode setup ────────────────────────────────────────────────────
-	fd := os.Stdin.Fd()
-	var orig termios
-	if err := tcgetattr(fd, &orig); err != nil {
+	// ── Raw-mode setup (portable via golang.org/x/term) ───────────────────
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		// Can't enter raw mode — fall through to the fallback above would be
+		// ideal, but we already printed the question header. Return default.
 		return defaultIdx
 	}
-	raw := orig
-	raw.Lflag &^= syscall.ICANON | syscall.ECHO
-	raw.Cc[syscall.VMIN] = 1
-	raw.Cc[syscall.VTIME] = 0
-	_ = tcsetattr(fd, &raw)
-	defer tcsetattr(fd, &orig)
+	// NOTE: defer won't fire on os.Exit, so we call term.Restore explicitly
+	// in the Ctrl-C branch before exiting.
+	defer term.Restore(fd, oldState) //nolint:errcheck
 
 	// Hide cursor while navigating.
 	fmt.Print("\033[?25l")
@@ -451,14 +541,16 @@ func promptArrowSelect(step int, question string, choices []string, defaultIdx i
 			// Move cursor below the list before printing stepDone.
 			fmt.Printf("\033[%dB", n)
 			fmt.Println()
-			stepDone(step, question, choices[cur])
+			stepDone(stepNum, question, choices[cur])
 			return cur
 
 		// Ctrl-C → restore terminal and exit cleanly.
+		// Defers don't run on os.Exit, so we restore manually first.
 		case buf[0] == 3:
 			fmt.Printf("\033[%dB", n)
 			fmt.Println()
-			tcsetattr(fd, &orig)
+			fmt.Print("\033[?25h") // show cursor
+			term.Restore(fd, oldState) //nolint:errcheck
 			os.Exit(1)
 
 		// Escape sequences (arrow keys: ESC [ A/B).
@@ -591,7 +683,16 @@ func printSuccess(name string, lang langChoice, board boardChoice, backend backe
 	wBold.Println("  Next steps")
 	fmt.Println()
 	printStep("cd", name)
-	printStep("edit", "src/main.go")
+	var editFile string
+	switch lang.id {
+	case "cpp":
+		editFile = "src/main.cpp"
+	case "ino":
+		editFile = "src/" + name + ".ino"
+	default:
+		editFile = "src/main.go"
+	}
+	printStep("edit", editFile)
 	printStep("tsuki build", "--compile")
 	printStep("tsuki upload", "")
 	fmt.Println()
@@ -639,8 +740,12 @@ func backendChoicesLabels() []string {
 }
 
 func templateLabels() []string {
-	out := make([]string, len(templateChoices))
-	for i, t := range templateChoices {
+	return templateLabelsFor(templateChoices)
+}
+
+func templateLabelsFor(choices []templateChoice) []string {
+	out := make([]string, len(choices))
+	for i, t := range choices {
 		out[i] = t.name
 	}
 	return out

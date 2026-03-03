@@ -4,3 +4,10 @@ bin/
 test/
 Cargo.lock
 *.zip
+ide/node_modules
+ide/.next
+package-lock.json
+ide/out
+releases/
+cli/go.sum
+*.iss

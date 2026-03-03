@@ -1,0 +1,47 @@
+[package]
+name = "tsuki-ide"
+version = "0.1.0"
+description = "tsuki IDE — Write Go, Flash Arduino"
+authors = ["s7lver"]
+license = "MIT"
+repository = ""
+default-run = "tsuki-ide"
+edition = "2021"
+rust-version = "1.60"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.6", features = [
+  "shell-execute",
+  "shell-open",
+  "fs-read-file",
+  "fs-write-file",
+  "fs-read-dir",
+  "fs-create-dir",
+  "fs-remove-dir",
+  "fs-remove-file",
+  "fs-rename-file",
+  "fs-exists",
+  "dialog-open",
+  "dialog-save",
+  "path-all",
+  "window-close",
+  "window-hide",
+  "window-show",
+  "window-maximize",
+  "window-minimize",
+  "window-unmaximize",
+  "window-unminimize",
+  "window-start-dragging",
+] }
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+tokio       = { version = "1", features = ["full"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

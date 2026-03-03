@@ -8,7 +8,7 @@ mod detect;
 mod error;
 mod flash;
 mod lib_manager;
-mod modules;
+mod cores;
 mod sdk;
 
 use clap::{Args, Parser, Subcommand};
@@ -91,6 +91,10 @@ struct CompileArgs {
     #[arg(long, value_delimiter = ',')]
     include: Vec<PathBuf>,
 
+    /// Source language: go (default), cpp, or ino
+    #[arg(long, default_value = "go")]
+    language: String,
+
     /// Use the tsuki-modules SDK store instead of .arduino15
     #[arg(long, default_value_t = false)]
     use_modules: bool,
@@ -140,6 +144,10 @@ struct RunArgs {
 
     #[arg(long, value_delimiter = ',')]
     include: Vec<PathBuf>,
+
+    /// Source language: go (default), cpp, or ino
+    #[arg(long, default_value = "go")]
+    language: String,
 
     #[arg(long, default_value_t = false)]
     use_modules: bool,
@@ -227,10 +235,11 @@ fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!(
-            "{} {} {} {}",
+            "{} {} {} {} {}",
             "Compiling".cyan().bold(),
             format!("[board: {}]", board.id).dimmed(),
             format!("[{}]", board.name).dimmed(),
+            format!("[lang: {}]", args.language).dimmed(),
             sdk_label(args.use_modules, board.arch()).dimmed(),
         );
         println!("{}", "─".repeat(60).dimmed());
@@ -243,6 +252,7 @@ fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name,
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        language:         compile::Language::from_str(&args.language),
         use_modules:      args.use_modules,
         verbose,
     };
@@ -311,6 +321,7 @@ fn cmd_run(args: RunArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name.clone(),
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        language:         compile::Language::from_str(&args.language),
         use_modules:      args.use_modules,
         verbose,
     };
@@ -407,9 +418,9 @@ fn cmd_sdk_info(board_id: &str) -> Result<()> {
 
 fn cmd_modules(args: ModulesArgs, verbose: bool) -> Result<()> {
     match args.command {
-        ModulesCmd::Install { arch } => modules::install(&arch, verbose),
-        ModulesCmd::List             => modules::list(),
-        ModulesCmd::Update           => modules::update(verbose),
+        ModulesCmd::Install { arch } => cores::install(&arch, verbose),
+        ModulesCmd::List             => cores::list(),
+        ModulesCmd::Update           => cores::update(verbose),
     }
 }
 
@@ -483,10 +494,10 @@ fn ensure_modules_ready(use_modules: bool, arch: &str) -> Result<()> {
     match arch {
         "avr" => {
             // avr::ensure() is a no-op (microseconds) when already installed.
-            modules::avr::ensure(false).map(|_| ())
+            cores::avr::ensure(false).map(|_| ())
         }
         _ => {
-            if modules::is_installed(arch) { return Ok(()); }
+            if cores::is_installed(arch) { return Ok(()); }
             eprintln!(
                 "{} Core for arch '{}' is not installed in tsuki-modules.",
                 "✗".red().bold(), arch

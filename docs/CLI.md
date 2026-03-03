@@ -106,10 +106,10 @@ my-robot/
 Transpile Go → C++, then optionally compile with `arduino-cli`.
 
 ```
-goduino build
-goduino build --board mega
-goduino build --compile                    # also run arduino-cli compile
-goduino build --compile --output build/
+tsuki build
+tsuki build --board mega
+tsuki build --compile                    # also run arduino-cli compile
+tsuki build --compile --output build/
 ```
 
 **Flags:**

@@ -44,7 +44,7 @@ pub fn resolve(arch: &str, variant: &str) -> Result<SdkPaths> {
     // For AVR we use the dedicated avr module which returns SdkPaths directly
     // without scanning — the fast path is a single Path::is_dir() check.
     if arch == "avr" {
-        if let Ok(paths) = crate::modules::avr::sdk_paths(variant) {
+        if let Ok(paths) = crate::cores::avr::sdk_paths(variant) {
             return Ok(paths);
         }
     } else if let Some(home) = dirs_home() {
