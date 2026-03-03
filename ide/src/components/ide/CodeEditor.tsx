@@ -1,7 +1,7 @@
 'use client'
 import { useRef, useEffect, useCallback } from 'react'
 import { useStore } from '@/lib/store' 
-import { highlightGo } from '@/lib/highlight'
+import { highlightByExt } from '@/lib/highlight'
 
 function LineNumbers({ count, fontSize }: { count: number; fontSize: number }) {
   const lineH = Math.round(fontSize * 1.62)
@@ -187,8 +187,8 @@ export default function CodeEditor() {
     )
   }
 
-  const highlighted = tab.ext === 'go'
-    ? highlightGo(content)
+  const highlighted = tab.ext
+    ? highlightByExt(content, tab.ext)
     : content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   const editorStyle = {

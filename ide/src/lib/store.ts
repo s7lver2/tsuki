@@ -111,7 +111,7 @@ interface AppState {
   setBoard: (b: string) => void
   setBackend: (b: string) => void
   setProjectPath: (p: string) => void
-  loadProject: (name: string, board: string, template: string, backend?: string, gitInit?: boolean, path?: string) => Promise<void>
+  loadProject: (name: string, board: string, template: string, backend?: string, gitInit?: boolean, path?: string, language?: string) => Promise<void>
   loadFromDisk: (folder: string) => Promise<void>
   sidebarOpen: boolean
   sidebarTab: SidebarTab
@@ -153,11 +153,12 @@ interface AppState {
   setPackageInstalling: (name: string, installing: boolean) => void
   recentProjects: RecentProject[]
   addRecentProject: (p: RecentProject) => void
+  refreshTree: () => Promise<void>
 }
 
 // ── Templates ─────────────────────────────────────────────────────────────────
 
-const TEMPLATES: Record<string, string> = {
+const TEMPLATES_GO: Record<string, string> = {
   blink: `package main\n\nimport "arduino"\n\nconst ledPin = 13\nconst interval = 500 // ms\n\nfunc setup() {\n    arduino.PinMode(ledPin, arduino.OUTPUT)\n    arduino.Serial.Begin(9600)\n    arduino.Serial.Println("Blink ready!")\n}\n\nfunc loop() {\n    arduino.DigitalWrite(ledPin, arduino.HIGH)\n    arduino.Delay(interval)\n    arduino.DigitalWrite(ledPin, arduino.LOW)\n    arduino.Delay(interval)\n}`,
   sensor: `package main\n\nimport (\n    "arduino"\n    "fmt"\n)\n\nfunc setup() {\n    arduino.Serial.Begin(9600)\n}\n\nfunc loop() {\n    val := arduino.AnalogRead(arduino.A0)\n    fmt.Println("sensor:", val)\n    arduino.Delay(500)\n}`,
   serial: `package main\n\nimport (\n    "arduino"\n    "fmt"\n)\n\nfunc setup() {\n    arduino.Serial.Begin(115200)\n    fmt.Println("Serial ready!")\n}\n\nfunc loop() {\n    if arduino.Serial.Available() > 0 {\n        b := arduino.Serial.Read()\n        fmt.Print(string(b))\n    }\n}`,
@@ -165,8 +166,33 @@ const TEMPLATES: Record<string, string> = {
   empty: `package main\n\nimport "arduino"\n\nfunc setup() {\n    // setup code here\n}\n\nfunc loop() {\n    // main loop\n}`,
 }
 
-function manifest(name: string, board: string, backend = 'tsuki-flash') {
-  return JSON.stringify({ name, version: '0.1.0', board, backend, go_version: '1.21', packages: [] }, null, 2)
+const TEMPLATES_CPP: Record<string, string> = {
+  blink: `#include <Arduino.h>\n\nconst int ledPin = LED_BUILTIN;\nconst int interval = 500;\n\nvoid setup() {\n    pinMode(ledPin, OUTPUT);\n    Serial.begin(9600);\n    Serial.println("Blink ready!");\n}\n\nvoid loop() {\n    digitalWrite(ledPin, HIGH);\n    delay(interval);\n    digitalWrite(ledPin, LOW);\n    delay(interval);\n}`,
+  serial: `#include <Arduino.h>\n\nvoid setup() {\n    Serial.begin(115200);\n    Serial.println("Serial ready!");\n}\n\nvoid loop() {\n    if (Serial.available() > 0) {\n        char c = Serial.read();\n        Serial.print(c);\n    }\n}`,
+  empty: `#include <Arduino.h>\n\nvoid setup() {\n    // setup code here\n}\n\nvoid loop() {\n    // main loop\n}`,
+}
+
+const TEMPLATES_INO: Record<string, string> = {
+  blink: `const int ledPin = LED_BUILTIN;\nconst int interval = 500;\n\nvoid setup() {\n    pinMode(ledPin, OUTPUT);\n    Serial.begin(9600);\n    Serial.println("Blink ready!");\n}\n\nvoid loop() {\n    digitalWrite(ledPin, HIGH);\n    delay(interval);\n    digitalWrite(ledPin, LOW);\n    delay(interval);\n}`,
+  serial: `void setup() {\n    Serial.begin(115200);\n    Serial.println("Serial ready!");\n}\n\nvoid loop() {\n    if (Serial.available() > 0) {\n        char c = Serial.read();\n        Serial.print(c);\n    }\n}`,
+  empty: `void setup() {\n    // setup code here\n}\n\nvoid loop() {\n    // main loop\n}`,
+}
+
+// Legacy alias — kept for backwards-compat with any old callers
+const TEMPLATES = TEMPLATES_GO
+
+function templatesForLang(lang: string): Record<string, string> {
+  switch (lang) {
+    case 'cpp': return TEMPLATES_CPP
+    case 'ino': return TEMPLATES_INO
+    default:    return TEMPLATES_GO
+  }
+}
+
+function manifest(name: string, board: string, backend = 'tsuki-flash', language = 'go') {
+  const base: Record<string, unknown> = { name, version: '0.1.0', board, backend, language, packages: [] }
+  if (language === 'go') base.go_version = '1.21'
+  return JSON.stringify(base, null, 2)
 }
 
 function ts() {
@@ -308,9 +334,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   // ── loadProject ────────────────────────────────────────────────────────────
 
-  loadProject: async (name, board, template, backend = 'tsuki-flash', gitInit = true, path = '') => {
-    const mainContent = TEMPLATES[template] || TEMPLATES.blink
-    const manifestContent = manifest(name, board, backend)
+  loadProject: async (name, board, template, backend = 'tsuki-flash', gitInit = true, path = '', language = 'go') => {
+    const langTemplates = templatesForLang(language)
+    const mainContent = langTemplates[template] ?? langTemplates.blink ?? TEMPLATES_GO.blink
+    const manifestContent = manifest(name, board, backend, language)
     const gitignoreContent = 'build/\n*.hex\n*.bin\n*.elf\n'
 
     const tree: FileNode[] = [
@@ -319,8 +346,8 @@ export const useStore = create<AppState>((set, get) => ({
         children: ['manifest', 'src', 'build', 'gitignore'],
       },
       {
-        id: 'manifest', name: 'goduino.json', type: 'file', ext: 'json',
-        content: manifestContent, path: path ? pathJoin(path, 'goduino.json') : undefined, git: 'A',
+        id: 'manifest', name: 'tsuki_package.json', type: 'file', ext: 'json',
+        content: manifestContent, path: path ? pathJoin(path, 'tsuki_package.json') : undefined, git: 'A',
       },
       {
         id: 'src', name: 'src', type: 'dir', open: true,
@@ -328,8 +355,13 @@ export const useStore = create<AppState>((set, get) => ({
         children: ['main'],
       },
       {
-        id: 'main', name: 'main.go', type: 'file', ext: 'go',
-        content: mainContent, path: path ? pathJoin(path, 'src', 'main.go') : undefined, git: 'A',
+        id: 'main',
+        name: language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go',
+        type: 'file',
+        ext:  language === 'cpp' ? 'cpp' : language === 'ino' ? 'ino' : 'go',
+        content: mainContent,
+        path: path ? pathJoin(path, 'src', language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go') : undefined,
+        git: 'A',
       },
       {
         id: 'build', name: 'build', type: 'dir', open: false,
@@ -342,10 +374,11 @@ export const useStore = create<AppState>((set, get) => ({
       },
     ]
 
+    const mainFileName = language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go'
     const gitChanges: GitChange[] = [
-      { letter: 'A', name: 'main.go',      path: 'src/main.go'  },
-      { letter: 'A', name: 'goduino.json', path: 'goduino.json' },
-      { letter: 'A', name: '.gitignore',   path: '.gitignore'   },
+      { letter: 'A', name: mainFileName,           path: `src/${mainFileName}`   },
+      { letter: 'A', name: 'tsuki_package.json',   path: 'tsuki_package.json'   },
+      { letter: 'A', name: '.gitignore',            path: '.gitignore'           },
     ]
 
     set({
@@ -360,8 +393,9 @@ export const useStore = create<AppState>((set, get) => ({
         await createDirectory(path)
         await createDirectory(pathJoin(path, 'src'))
         await createDirectory(pathJoin(path, 'build'))
-        await writeFile(pathJoin(path, 'goduino.json'), manifestContent)
-        await writeFile(pathJoin(path, 'src', 'main.go'), mainContent)
+        await writeFile(pathJoin(path, 'tsuki_package.json'), manifestContent)
+        const mainFileName = language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go'
+        await writeFile(pathJoin(path, 'src', mainFileName), mainContent)
         await writeFile(pathJoin(path, '.gitignore'), gitignoreContent)
         if (gitInit) {
           await runGit(['init'], path).catch(() => {})
@@ -376,7 +410,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     setTimeout(() => get().openFile('main'), 50)
-    get().addLog('info', `Project "${name}" loaded · Board: ${board} · Backend: ${backend}`)
+    get().addLog('info', `Project "${name}" loaded · Lang: ${language} · Board: ${board} · Backend: ${backend}`)
     get().addLog('ok', gitInit ? 'Git repo initialized · Ready.' : 'Ready (no git).')
   },
 
@@ -701,6 +735,34 @@ export const useStore = create<AppState>((set, get) => ({
     const updated = [project, ...current].slice(0, 10)
     set({ recentProjects: updated })
     saveRecentProjects(updated)
+  },
+
+  // ── refreshTree ────────────────────────────────────────────────────────────
+  // Re-scans the project folder from disk and merges in-memory edits so open
+  // tabs (and their unsaved content) are preserved after the refresh.
+  refreshTree: async () => {
+    const { projectPath, tree: oldTree } = get()
+    if (!projectPath) return
+
+    try {
+      const nodes: FileNode[] = []
+      const rootNode = await scanDir(projectPath, projectPath.split(/[/\\]/).pop() ?? 'project', nodes, 0)
+      rootNode.id = 'root'
+      const allNodes = [rootNode, ...nodes]
+
+      // Preserve in-memory content for files that are already open / edited
+      const contentMap = new Map<string, string>()
+      for (const n of oldTree) {
+        if (n.path && n.content !== undefined) contentMap.set(n.path, n.content)
+      }
+      const merged = allNodes.map(n =>
+        (n.path && contentMap.has(n.path)) ? { ...n, content: contentMap.get(n.path) } : n
+      )
+
+      set({ tree: merged })
+    } catch (e) {
+      get().addLog('err', `refreshTree failed: ${e}`)
+    }
   },
 }))
 

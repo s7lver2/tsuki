@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { IconBtn } from '@/components/ui/primitives'
 import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Square } from 'lucide-react'
 import { clsx } from 'clsx'
-import { spawnProcess, spawnShell, listShells, type ProcessHandle, type ShellInfo } from '@/lib/tauri'
+import { spawnShell, listShells, type ProcessHandle, type ShellInfo } from '@/lib/tauri'
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
@@ -208,18 +208,20 @@ const typeClass: Record<TerminalLine['type'], string> = {
 }
 
 function SessionView({ session, projectPath, onUpdate, onSpawn }: SessionViewProps) {
-  const { addLog, setBottomTab } = useStore()
+  const { addLog, setBottomTab, refreshTree } = useStore()
   const [input, setInput] = useState('')
 
   const endRef   = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Stable refs
-  const sessionRef     = useRef(session)
-  const addLogRef      = useRef(addLog)
+  const sessionRef      = useRef(session)
+  const addLogRef       = useRef(addLog)
   const setBottomTabRef = useRef(setBottomTab)
-  const projectPathRef = useRef(projectPath)
-  const onUpdateRef    = useRef(onUpdate)
+  const projectPathRef  = useRef(projectPath)
+  const onUpdateRef     = useRef(onUpdate)
+  // When a button command is running, this intercepts shell output lines
+  const interceptRef    = useRef<((line: string, isErr: boolean) => void) | null>(null)
 
   useEffect(() => { sessionRef.current     = session   }, [session])
   useEffect(() => { addLogRef.current      = addLog    }, [addLog])
@@ -239,44 +241,76 @@ function SessionView({ session, projectPath, onUpdate, onSpawn }: SessionViewPro
     })
   }
 
-  // ── Spawn a process inside this session ────────────────────────────────
+  // ── Send a command to this session ─────────────────────────────────────
+  // Instead of spawning a separate process (which has PATH issues on Windows),
+  // we write the command line directly into the shell's stdin — exactly as if
+  // the user typed it.  The shell resolves the executable, inherits its own
+  // PATH, and output streams back through the existing listeners.
   const spawnInSession = useCallback(async (
     cmd: string,
     args: string[],
-    cwd?: string,
+    _cwd?: string,
   ): Promise<ProcessHandle> => {
     const sess = sessionRef.current
-    const cwd_ = cwd ?? projectPathRef.current ?? undefined
-
-    // Kill existing process if any
-    if (sess.process) {
-      await sess.process.kill()
-      sess.process.dispose()
-    }
 
     const label = [cmd, ...args].join(' ')
     addLine(`❯ ${label}`, 'prompt')
-    onUpdateRef.current({ running: true })
     setBottomTabRef.current('terminal')
 
-    const handle = await spawnProcess(
-      cmd, args, cwd_,
-      (line, isErr) => {
-        addLine(line, isErr ? 'err' : 'out')
-        addLogRef.current(isErr ? 'err' : 'ok', line)
-      },
-    )
+    // Build a promise that resolves when the command finishes.
+    // We detect completion via a sentinel echo printed after the command.
+    // The sentinel is unique per invocation so concurrent calls don't mix up.
+    const sentinel = `__tsuki_done_${Date.now()}__`
 
-    onUpdateRef.current({ process: handle })
+    let resolveDone!: (code: number) => void
+    const done = new Promise<number>(r => { resolveDone = r })
 
-    handle.done.then(code => {
-      onUpdateRef.current({ process: null, running: false })
-      if (code !== 0 && code !== 130) {
+    // Intercept lines looking for the sentinel before forwarding to display
+    const origOnLine = (line: string, isErr: boolean) => {
+      if (line.includes(sentinel)) {
+        resolveDone(0)
+        refreshTree().catch(() => {})
+        return
+      }
+      addLine(line, isErr ? 'err' : 'out')
+      addLogRef.current(isErr ? 'err' : 'ok', line)
+    }
+
+    // Temporarily patch the session's process onLine — we do this by
+    // storing a callback ref the listeners can consult.
+    interceptRef.current = origOnLine
+
+    onUpdateRef.current({ running: true })
+
+    if (sess.process) {
+      // Shell is live — write the command + sentinel echo into stdin
+      const shellId = sess.shell.id
+      const echoCmd = (shellId === 'cmd')
+        ? `${label} & echo ${sentinel}`
+        : `${label}; echo ${sentinel}`
+      await sess.process.write(echoCmd)
+    } else {
+      addLine('[no shell running — cannot execute command]', 'err')
+      resolveDone(1)
+    }
+
+    done.then(code => {
+      interceptRef.current = null
+      onUpdateRef.current({ running: false })
+      if (code !== 0) {
         addLine(`[exit ${code}]`, 'err')
         addLogRef.current('err', `process exited with code ${code}`)
       }
     })
 
+    // Return a compatible ProcessHandle
+    const handle: ProcessHandle = {
+      pid: sess.process?.pid ?? -1,
+      done,
+      write: async () => {},
+      kill:  async () => { sess.process?.write('\x03').catch(() => {}) },
+      dispose: () => {},
+    }
     return handle
   }, []) // eslint-disable-line
 
@@ -293,8 +327,13 @@ function SessionView({ session, projectPath, onUpdate, onSpawn }: SessionViewPro
     setBottomTabRef.current('terminal')
 
     spawnShell(shell, cwd_, (line, isErr) => {
-      addLine(line, isErr ? 'err' : 'out')
-      addLogRef.current(isErr ? 'err' : 'ok', line)
+      // If a button command is running, let its interceptor handle the line
+      if (interceptRef.current) {
+        interceptRef.current(line, isErr)
+      } else {
+        addLine(line, isErr ? 'err' : 'out')
+        addLogRef.current(isErr ? 'err' : 'ok', line)
+      }
     }).then(handle => {
       onUpdateRef.current({ process: handle })
       handle.done.then(code => {

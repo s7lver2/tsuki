@@ -7,6 +7,31 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use tauri::Window;
 
+// ── Debug logger ──────────────────────────────────────────────────────────────
+// windows_subsystem="windows" suppresses stderr entirely, so we log to a file
+// in %TEMP% (or /tmp) that can be tailed while the app is running.
+fn dbg(msg: &str) {
+    #[cfg(windows)]
+    let path = {
+        let tmp = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Temp".into());
+        format!("{}\\tsuki-ide-debug.log", tmp)
+    };
+    #[cfg(not(windows))]
+    let path = "/tmp/tsuki-ide-debug.log".to_string();
+
+    // Include a timestamp so entries are easy to correlate
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{}] {}", ts, msg);
+
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{}", line);
+    }
+    eprintln!("{}", line);
+}
+
 // On Windows every Command::new().no_window() would flash a console window unless we set
 // CREATE_NO_WINDOW. We add a tiny extension trait so we can call .no_window()
 // on any Command in a platform-agnostic way.
@@ -228,12 +253,49 @@ async fn spawn_shell(
     Ok(pid)
 }
 
+// ── enriched_path (Windows only) ─────────────────────────────────────────────
+// Returns the current PATH plus common per-user install directories so that
+// tools like tsuki, Go, arduino-cli, etc. are always found even when Tauri is
+// launched from a context with a limited PATH (e.g. the Windows Start menu).
+#[cfg(windows)]
+fn enriched_path() -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let user = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    let extra = [
+        // tsuki default install location
+        format!(r"{}\Programs\tsuki\bin", user),
+        // Go default install
+        r"C:\Program Files\Go\bin".to_string(),
+        format!(r"{}\go\bin", home),
+        // arduino-cli common locations
+        format!(r"{}\Programs\arduino-cli", user),
+        r"C:\Program Files\arduino-cli".to_string(),
+        // Git bin (for git.exe)
+        r"C:\Program Files\Git\bin".to_string(),
+        r"C:\Program Files\Git\cmd".to_string(),
+    ];
+    let mut parts: Vec<String> = current.split(';').map(|s| s.to_string()).collect();
+    for e in &extra {
+        if !e.is_empty() && !parts.iter().any(|p| p.eq_ignore_ascii_case(e)) {
+            parts.push(e.clone());
+        }
+    }
+    parts.join(";")
+}
+
 // ── run_shell ─────────────────────────────────────────────────────────────────
 #[tauri::command]
 async fn run_shell(cmd: String, args: Vec<String>, cwd: Option<String>) -> Result<String, String> {
     let cmd = normalise_cmd(&cmd);
-    let mut c = Command::new(&cmd);
+
+    // Spawn the executable directly with an enriched PATH so per-user
+    // installs (tsuki, Go, arduino-cli, etc.) are found on Windows too.
+    // CREATE_NO_WINDOW + Stdio::piped() guarantees no console window appears.
+    let mut c = Command::new(&cmd).no_window();
     c.args(&args);
+    #[cfg(windows)]
+    { c.env("PATH", enriched_path()); }
     if let Some(dir) = &cwd { c.current_dir(dir); }
     let output = c.output().map_err(|e| format!("Failed to run '{}': {}", cmd, e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -252,9 +314,11 @@ async fn run_shell(cmd: String, args: Vec<String>, cwd: Option<String>) -> Resul
 fn normalise_cmd(raw: &str) -> String {
     let s = raw.trim().trim_matches('"').trim().to_string();
     #[cfg(windows)]
-    { s.replace('/', "\\") }
+    let result = s.replace('/', "\\");
     #[cfg(not(windows))]
-    { s }
+    let result = s;
+    dbg(&format!("[normalise_cmd] {:?} -> {:?}", raw, result));
+    result
 }
 
 // ── spawn_process ─────────────────────────────────────────────────────────────
@@ -268,17 +332,33 @@ async fn spawn_process(
     event_id: String,
 ) -> Result<u32, String> {
     let cmd = normalise_cmd(&cmd);
-    // NOTE: no CREATE_NO_WINDOW here — Stdio::piped() already prevents a console
-    // window, and the flag can cause CreateProcessW to fail on some binaries.
-    let mut c = Command::new(&cmd);
+
+    // ── DEBUG ────────────────────────────────────────────────────────────────
+    dbg(&format!("[spawn_process] cmd   = {:?}", cmd));
+    dbg(&format!("[spawn_process] args  = {:?}", args));
+    dbg(&format!("[spawn_process] cwd   = {:?}", cwd));
+    dbg(&format!("[spawn_process] exists= {}", std::path::Path::new(&cmd).exists()));
+    #[cfg(windows)]
+    dbg(&format!("[spawn_process] PATH  = {}", enriched_path()));
+    // ─────────────────────────────────────────────────────────────────────────
+
+    let mut c = Command::new(&cmd).no_window();
     c.args(&args)
      .stdin(Stdio::piped())
      .stdout(Stdio::piped())
      .stderr(Stdio::piped());
+    #[cfg(windows)]
+    { c.env("PATH", enriched_path()); }
     if let Some(dir) = &cwd { c.current_dir(dir); }
 
-    let mut child = c.spawn()
-        .map_err(|e| format!("spawn failed for '{}': {}", cmd, e))?;
+    let mut child = c.spawn().map_err(|e| {
+        let exists = std::path::Path::new(&cmd).exists();
+        let kind   = e.kind();
+        format!(
+            "spawn failed for {:?}: {} (os_error={:?}, file_exists={})",
+            cmd, e, kind, exists
+        )
+    })?;
 
     let pid    = child.id();
     let stdin  = child.stdin.take().unwrap();
@@ -351,18 +431,19 @@ async fn detect_tool(name: String) -> Result<String, String> {
         }
         name.clone()
     } else {
-        // On Windows use `cmd /C where <name>` so we inherit the FULL user PATH,
-        // not just the limited system PATH that the Tauri process sees.
+        // On Windows use where.exe directly -- it is a system binary that
+        // never opens a visible window, and we pass our enriched PATH so
+        // per-user installs are found.
         #[cfg(windows)]
         {
-            let out = Command::new("cmd").no_window()
-                .args(["/C", &format!("where {}", name)])
+            let out = Command::new("where").no_window()
+                .arg(&name)
+                .env("PATH", enriched_path())
                 .output()
                 .map_err(|_| format!("'{}' not found in PATH", name))?;
             if !out.status.success() {
                 return Err(format!("'{}' not found in PATH", name));
             }
-            // where can return multiple lines; take the first .exe
             let stdout = String::from_utf8_lossy(&out.stdout);
             stdout.lines()
                 .map(|l| l.trim().to_string())
@@ -477,6 +558,9 @@ async fn run_git(args: Vec<String>, cwd: String) -> Result<String, String> {
 
 // ── main ──────────────────────────────────────────────────────────────────────
 fn main() {
+    dbg("=== tsuki-ide started ===");
+    #[cfg(windows)]
+    dbg(&format!("[main] TEMP={}", std::env::var("TEMP").unwrap_or_default()));
     tauri::Builder::default()
         .manage(AppState { processes: Arc::new(Mutex::new(HashMap::new())) })
         .invoke_handler(tauri::generate_handler![

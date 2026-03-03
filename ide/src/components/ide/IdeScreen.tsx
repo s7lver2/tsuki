@@ -94,7 +94,6 @@ export default function IdeScreen() {
   function handleBuild() {
     const args = ['build', '--compile']
     if (board)            args.push('--board', board)
-    if (settings.cppStd)  args.push(`--cpp-std=${settings.cppStd}`)
     if (settings.verbose) args.push('--verbose')
     dispatch(args)
   }
@@ -121,7 +120,6 @@ export default function IdeScreen() {
 
     const buildArgs = ['build', '--compile']
     if (board)            buildArgs.push('--board', board)
-    if (settings.cppStd)  buildArgs.push(`--cpp-std=${settings.cppStd}`)
     if (settings.verbose) buildArgs.push('--verbose')
 
     const flashArgs = ['flash']

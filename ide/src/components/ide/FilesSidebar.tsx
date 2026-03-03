@@ -167,10 +167,11 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
 }
 
 export default function FilesSidebar() {
-  const { tree, openTabs, activeTabIdx, openFile, addFile, addFolder } = useStore()
+  const { tree, openTabs, activeTabIdx, openFile, addFile, addFolder, refreshTree } = useStore()
   const [creatingFile, setCreatingFile] = useState(false)
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [inputVal, setInputVal] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
 
   const activeFileId = activeTabIdx >= 0 ? openTabs[activeTabIdx]?.fileId : ''
   const root = tree.find(n => n.id === 'root')
@@ -182,6 +183,12 @@ export default function FilesSidebar() {
   async function confirmNewFolder() {
     if (inputVal.trim()) await addFolder(inputVal.trim())
     setCreatingFolder(false); setInputVal('')
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    await refreshTree()
+    setRefreshing(false)
   }
 
   return (
@@ -198,8 +205,8 @@ export default function FilesSidebar() {
           <IconBtn tooltip="New Folder" onClick={() => { setCreatingFolder(true); setCreatingFile(false); setInputVal('') }}>
             <FolderPlus size={12} />
           </IconBtn>
-          <IconBtn tooltip="Refresh" onClick={() => {}}>
-            <RotateCcw size={11} />
+          <IconBtn tooltip="Refresh files" onClick={handleRefresh}>
+            <RotateCcw size={11} className={refreshing ? 'animate-spin' : ''} />
           </IconBtn>
         </div>
       </div>

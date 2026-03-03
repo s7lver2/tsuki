@@ -138,7 +138,7 @@ def clean():
       for d in OTHER_RESIDUAL_DIRS:
         if os.path.exists(d):
           shutil.rmtree(d)
-      
+      subprocess.run(["cargo", "clean"], text=True)
     else:
       for d in [BUILD_DIR, RELEASE_DIR]:
         if os.path.exists(d):
@@ -162,7 +162,7 @@ def build_go(platform_key, version, commit, date):
         f"-X {GO_MODULE}/internal/cli.BuildDate={date}"
     )
     env = {**os.environ, "GOOS": plat["goos"], "GOARCH": plat["goarch"], "CGO_ENABLED": "0"}
-    run(["go", "build", "-trimpath", f"-ldflags={ldflags}", "-o", out, "./cmd/tsuki"],
+    run(["go", "build", "-trimpath", "-ldflags", ldflags, "-o", out, "./cmd/tsuki"],
         cwd=os.path.join(PROJECT_ROOT, "cli"), env=env)
     info(f"Go CLI → {os.path.basename(out)}")
     return out

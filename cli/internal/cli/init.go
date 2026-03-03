@@ -47,7 +47,9 @@ type langChoice struct {
 }
 
 var langChoices = []langChoice{
-	{"go", "Go  ✦", "statically typed · compiled · fast"},
+	{"go",  "Go  ❆",  "statically typed · compiled · fast"},
+	{"cpp", "C++",       "native Arduino C++ · full control"},
+	{"ino", "Arduino",   "classic .ino sketch · beginner-friendly"},
 }
 
 // ── Board catalog ─────────────────────────────────────────────────────────────
@@ -91,6 +93,13 @@ type templateChoice struct {
 	id   string
 	name string
 	code string
+}
+
+// templateChoice holds starter code indexed by language.
+type templateChoiceEntry struct {
+	id      string
+	name    string
+	default_ map[string]string // lang -> code
 }
 
 var templateChoices = []templateChoice{
@@ -144,6 +153,108 @@ func loop() {
 }
 `,
 	},
+}
+
+// templateChoicesCpp contains starter C++ templates.
+var templateChoicesCpp = []templateChoice{
+	{
+		id:   "blink",
+		name: "Blink  (LED)",
+		code: `#include <Arduino.h>
+
+void setup() {
+    pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(500);
+}
+`,
+	},
+	{
+		id:   "serial",
+		name: "Serial Hello",
+		code: `#include <Arduino.h>
+
+void setup() {
+    Serial.begin(9600);
+}
+
+void loop() {
+    Serial.println("Hello from tsuki!");
+    delay(1000);
+}
+`,
+	},
+	{
+		id:   "empty",
+		name: "Empty project",
+		code: `#include <Arduino.h>
+
+void setup() {
+}
+
+void loop() {
+}
+`,
+	},
+}
+
+// templateChoicesIno contains starter .ino templates.
+var templateChoicesIno = []templateChoice{
+	{
+		id:   "blink",
+		name: "Blink  (LED)",
+		code: `void setup() {
+    pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(500);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(500);
+}
+`,
+	},
+	{
+		id:   "serial",
+		name: "Serial Hello",
+		code: `void setup() {
+    Serial.begin(9600);
+}
+
+void loop() {
+    Serial.println("Hello from tsuki!");
+    delay(1000);
+}
+`,
+	},
+	{
+		id:   "empty",
+		name: "Empty project",
+		code: `void setup() {
+}
+
+void loop() {
+}
+`,
+	},
+}
+
+// templatesForLang returns the right set of templates for the selected language.
+func templatesForLang(langID string) []templateChoice {
+	switch langID {
+	case "cpp":
+		return templateChoicesCpp
+	case "ino":
+		return templateChoicesIno
+	default:
+		return templateChoices
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,12 +356,13 @@ func runWizard(prefillName, prefillBoard, prefillBackend, prefillLanguage string
 
 	// ── 5. Starter template ─────────────────────────────────────────────────
 	var tmpl templateChoice
+	templates := templatesForLang(lang.id)
 	if acceptDefaults {
-		tmpl = templateChoices[0]
+		tmpl = templates[0]
 		stepDone(5, "Starter template", tmpl.name+" (default)")
 	} else {
-		idx := promptArrowSelect(5, "How should we start your project?", templateLabels(), 0)
-		tmpl = templateChoices[idx]
+		idx := promptArrowSelect(5, "How should we start your project?", templateLabelsFor(templates), 0)
+		tmpl = templates[idx]
 	}
 
 	// ── 6. Git init ──────────────────────────────────────────────────────────
@@ -277,17 +389,23 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 	dir := filepath.Join(projectDir(), name)
 	srcDir := filepath.Join(dir, "src")
 
-	mainFile := "main.go"
+	var mainFile string
+	switch lang.id {
+	case "cpp":
+		mainFile = "main.cpp"
+	case "ino":
+		mainFile = name + ".ino"
+	default:
+		mainFile = "main.go"
+	}
 
 	steps := []struct {
 		label string
 		fn    func() error
 	}{
 		{"Creating project directory", func() error { return os.MkdirAll(srcDir, 0755) }},
-		{"Writing goduino.json", func() error {
-			m := manifest.Default(name, board.id)
-			// Store the chosen backend in the manifest so `tsuki build` and
-			// `tsuki upload` can use it without requiring a global config change.
+		{"Writing tsuki_package.json", func() error {
+			m := manifest.DefaultWithLanguage(name, board.id, lang.id)
 			m.Backend = backend.id
 			return m.Save(dir)
 		}},
@@ -565,7 +683,16 @@ func printSuccess(name string, lang langChoice, board boardChoice, backend backe
 	wBold.Println("  Next steps")
 	fmt.Println()
 	printStep("cd", name)
-	printStep("edit", "src/main.go")
+	var editFile string
+	switch lang.id {
+	case "cpp":
+		editFile = "src/main.cpp"
+	case "ino":
+		editFile = "src/" + name + ".ino"
+	default:
+		editFile = "src/main.go"
+	}
+	printStep("edit", editFile)
 	printStep("tsuki build", "--compile")
 	printStep("tsuki upload", "")
 	fmt.Println()
@@ -613,8 +740,12 @@ func backendChoicesLabels() []string {
 }
 
 func templateLabels() []string {
-	out := make([]string, len(templateChoices))
-	for i, t := range templateChoices {
+	return templateLabelsFor(templateChoices)
+}
+
+func templateLabelsFor(choices []templateChoice) []string {
+	out := make([]string, len(choices))
+	for i, t := range choices {
 		out[i] = t.name
 	}
 	return out

@@ -11,6 +11,27 @@ use crate::boards::{Board, Toolchain};
 use crate::error::{FlashError, Result};
 use crate::sdk;
 
+/// Source language for the project.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Language {
+    /// Go project — sources were already transpiled to .cpp by tsuki-core.
+    Go,
+    /// Native C++ project — src/*.cpp compiled directly.
+    Cpp,
+    /// Native Arduino .ino sketch — src/*.ino compiled directly.
+    Ino,
+}
+
+impl Language {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "cpp" => Language::Cpp,
+            "ino" => Language::Ino,
+            _     => Language::Go,
+        }
+    }
+}
+
 /// Inputs to a compile run.
 #[derive(Debug)]
 pub struct CompileRequest {
@@ -24,6 +45,11 @@ pub struct CompileRequest {
     pub cpp_std:          String,
     /// Extra -I dirs (tsuki libraries, passed via --include).
     pub lib_include_dirs: Vec<PathBuf>,
+    /// Source language — determines how the sketch dir is treated.
+    /// For Go and Cpp projects the pipeline is identical (the CLI already
+    /// transpiled .go → .cpp or copied .cpp into the sketch dir before calling
+    /// tsuki-flash). For Ino projects the .ino file acts as the entry point.
+    pub language:         Language,
     /// When true the tsuki-modules SDK store (~/.tsuki/modules) is preferred
     /// over .arduino15. sdk::resolve() handles this transparently; the flag
     /// is here for documentation and future per-request overrides.
@@ -80,6 +106,7 @@ fn augment_lib_includes(req: &CompileRequest) -> CompileRequest {
         project_name:     req.project_name.clone(),
         cpp_std:          req.cpp_std.clone(),
         lib_include_dirs: dirs,
+        language:         req.language.clone(),
         use_modules:      req.use_modules,
         verbose:          req.verbose,
     }

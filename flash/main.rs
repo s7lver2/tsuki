@@ -91,6 +91,10 @@ struct CompileArgs {
     #[arg(long, value_delimiter = ',')]
     include: Vec<PathBuf>,
 
+    /// Source language: go (default), cpp, or ino
+    #[arg(long, default_value = "go")]
+    language: String,
+
     /// Use the tsuki-modules SDK store instead of .arduino15
     #[arg(long, default_value_t = false)]
     use_modules: bool,
@@ -140,6 +144,10 @@ struct RunArgs {
 
     #[arg(long, value_delimiter = ',')]
     include: Vec<PathBuf>,
+
+    /// Source language: go (default), cpp, or ino
+    #[arg(long, default_value = "go")]
+    language: String,
 
     #[arg(long, default_value_t = false)]
     use_modules: bool,
@@ -227,10 +235,11 @@ fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!(
-            "{} {} {} {}",
+            "{} {} {} {} {}",
             "Compiling".cyan().bold(),
             format!("[board: {}]", board.id).dimmed(),
             format!("[{}]", board.name).dimmed(),
+            format!("[lang: {}]", args.language).dimmed(),
             sdk_label(args.use_modules, board.arch()).dimmed(),
         );
         println!("{}", "─".repeat(60).dimmed());
@@ -243,6 +252,7 @@ fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name,
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        language:         compile::Language::from_str(&args.language),
         use_modules:      args.use_modules,
         verbose,
     };
@@ -311,6 +321,7 @@ fn cmd_run(args: RunArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name.clone(),
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        language:         compile::Language::from_str(&args.language),
         use_modules:      args.use_modules,
         verbose,
     };

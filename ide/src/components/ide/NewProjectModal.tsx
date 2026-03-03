@@ -1,62 +1,87 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useStore } from '@/lib/store'
-import { Input, Select } from '@/components/ui/primitives'
+import { Input } from '@/components/ui/primitives'
 import {
   X, FolderOpen, GitBranch, ChevronRight, Check,
-  Cpu, Wrench, FileCode, Folder,
+  Cpu, Wrench, FileCode, Folder, Code2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { pickFolder, isTauri } from '@/lib/tauri'
 
-// ── Data mirrors init.go ──────────────────────────────────────────────────────
+// ── Data ──────────────────────────────────────────────────────────────────────
+
+const LANGUAGES = [
+  {
+    id: 'go',
+    label: 'Go  \u2746',
+    desc: 'Statically typed \u00b7 tsuki transpiles Go \u2192 C++ automatically.',
+    badge: 'recommended' as const,
+  },
+  {
+    id: 'cpp',
+    label: 'C++',
+    desc: 'Native Arduino C++ with #include <Arduino.h> \u2014 full control, no transpilation.',
+    badge: null,
+  },
+  {
+    id: 'ino',
+    label: 'Arduino (.ino)',
+    desc: 'Classic .ino sketch \u2014 beginner-friendly, identical to the Arduino IDE.',
+    badge: null,
+  },
+]
 
 const BOARDS = [
-  { id: 'uno',         label: 'Arduino Uno',        note: 'ATmega328P · 16 MHz · 32 KB' },
-  { id: 'nano',        label: 'Arduino Nano',        note: 'ATmega328P · 16 MHz · compact' },
-  { id: 'mega',        label: 'Arduino Mega 2560',   note: 'ATmega2560 · 16 MHz · 256 KB' },
-  { id: 'leonardo',    label: 'Arduino Leonardo',    note: 'ATmega32u4 · 16 MHz · native USB' },
-  { id: 'micro',       label: 'Arduino Micro',       note: 'ATmega32u4 · 16 MHz · native USB' },
-  { id: 'pro_mini_5v', label: 'Pro Mini 5 V',        note: 'ATmega328P · 16 MHz · breadboard' },
-  { id: 'esp32',       label: 'ESP32 Dev Module',    note: 'Dual-core · 240 MHz · WiFi + BT' },
-  { id: 'esp8266',     label: 'ESP8266 Generic',     note: 'Single-core · 80 MHz · WiFi' },
-  { id: 'd1_mini',     label: 'Wemos D1 Mini',       note: 'ESP8266 · compact · popular' },
-  { id: 'pico',        label: 'Raspberry Pi Pico',   note: 'RP2040 · 133 MHz · 2 MB' },
+  { id: 'uno',         label: 'Arduino Uno',        note: 'ATmega328P \u00b7 16 MHz \u00b7 32 KB' },
+  { id: 'nano',        label: 'Arduino Nano',        note: 'ATmega328P \u00b7 16 MHz \u00b7 compact' },
+  { id: 'mega',        label: 'Arduino Mega 2560',   note: 'ATmega2560 \u00b7 16 MHz \u00b7 256 KB' },
+  { id: 'leonardo',    label: 'Arduino Leonardo',    note: 'ATmega32u4 \u00b7 16 MHz \u00b7 native USB' },
+  { id: 'micro',       label: 'Arduino Micro',       note: 'ATmega32u4 \u00b7 16 MHz \u00b7 native USB' },
+  { id: 'pro_mini_5v', label: 'Pro Mini 5 V',        note: 'ATmega328P \u00b7 16 MHz \u00b7 breadboard' },
+  { id: 'esp32',       label: 'ESP32 Dev Module',    note: 'Dual-core \u00b7 240 MHz \u00b7 WiFi + BT' },
+  { id: 'esp8266',     label: 'ESP8266 Generic',     note: 'Single-core \u00b7 80 MHz \u00b7 WiFi' },
+  { id: 'd1_mini',     label: 'Wemos D1 Mini',       note: 'ESP8266 \u00b7 compact \u00b7 popular' },
+  { id: 'pico',        label: 'Raspberry Pi Pico',   note: 'RP2040 \u00b7 133 MHz \u00b7 2 MB' },
 ]
 
 const BACKENDS = [
-  { id: 'tsuki-flash',       label: 'tsuki-flash',             note: 'fast · parallel · recommended ✦', badge: 'recommended' },
-  { id: 'tsuki-flash+cores', label: 'tsuki-flash + cores',     note: 'fully standalone · downloads SDK', badge: 'standalone' },
-  { id: 'arduino-cli',       label: 'arduino-cli',             note: 'classic · requires arduino-cli install', badge: null },
+  { id: 'tsuki-flash',       label: 'tsuki-flash',         note: 'fast \u00b7 parallel \u00b7 recommended \u2746',        badge: 'recommended' as const },
+  { id: 'tsuki-flash+cores', label: 'tsuki-flash + cores', note: 'fully standalone \u00b7 downloads SDK',        badge: 'standalone'  as const },
+  { id: 'arduino-cli',       label: 'arduino-cli',         note: 'classic \u00b7 requires arduino-cli install',  badge: null },
 ]
 
-const TEMPLATES = [
-  {
-    id: 'blink',
-    label: 'Blink  (LED)',
-    desc: 'Classic blink — toggle the built-in LED every 500 ms.',
-    icon: '💡',
-  },
-  {
-    id: 'serial',
-    label: 'Serial Hello',
-    desc: 'Print "Hello from tsuki!" over the serial port every second.',
-    icon: '📡',
-  },
-  {
-    id: 'empty',
-    label: 'Empty project',
-    desc: 'Blank setup() + loop() — start from scratch.',
-    icon: '📄',
-  },
+type TemplateItem = { id: string; label: string; desc: string; icon: string }
+
+const TEMPLATES_GO: TemplateItem[] = [
+  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Toggle LED_BUILTIN every 500 ms using arduino.DigitalWrite.', icon: '\ud83d\udca1' },
+  { id: 'serial', label: 'Serial Hello',  desc: 'Print "Hello from tsuki!" over serial every second.',         icon: '\ud83d\udce1' },
+  { id: 'empty',  label: 'Empty project', desc: 'Blank setup() + loop() \u2014 start from scratch.',                icon: '\ud83d\udcc4' },
 ]
+
+const TEMPLATES_CPP: TemplateItem[] = [
+  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Native C++ blink with digitalWrite() and delay().',           icon: '\ud83d\udca1' },
+  { id: 'serial', label: 'Serial Hello',  desc: 'Native C++ Serial.println() hello world.',                    icon: '\ud83d\udce1' },
+  { id: 'empty',  label: 'Empty project', desc: '#include <Arduino.h> with empty setup/loop.',                 icon: '\ud83d\udcc4' },
+]
+
+const TEMPLATES_INO: TemplateItem[] = [
+  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Classic Arduino blink .ino sketch.',                          icon: '\ud83d\udca1' },
+  { id: 'serial', label: 'Serial Hello',  desc: 'Hello world over Serial \u2014 classic Arduino style.',            icon: '\ud83d\udce1' },
+  { id: 'empty',  label: 'Empty project', desc: 'Blank .ino sketch, ready to fill in.',                        icon: '\ud83d\udcc4' },
+]
+
+const TEMPLATES_BY_LANG: Record<string, TemplateItem[]> = {
+  go: TEMPLATES_GO, cpp: TEMPLATES_CPP, ino: TEMPLATES_INO,
+}
 
 // ── Step IDs ──────────────────────────────────────────────────────────────────
 
-type StepId = 'name' | 'board' | 'backend' | 'template' | 'options'
+type StepId = 'name' | 'language' | 'board' | 'backend' | 'template' | 'options'
 
 const STEPS: { id: StepId; label: string; icon: React.ReactNode }[] = [
   { id: 'name',     label: 'Project',  icon: <Folder    size={12} /> },
+  { id: 'language', label: 'Language', icon: <Code2     size={12} /> },
   { id: 'board',    label: 'Board',    icon: <Cpu       size={12} /> },
   { id: 'backend',  label: 'Backend',  icon: <Wrench    size={12} /> },
   { id: 'template', label: 'Template', icon: <FileCode  size={12} /> },
@@ -66,10 +91,7 @@ const STEPS: { id: StepId; label: string; icon: React.ReactNode }[] = [
 // ── RadioCard ─────────────────────────────────────────────────────────────────
 
 function RadioCard({
-  selected,
-  onClick,
-  children,
-  className,
+  selected, onClick, children, className,
 }: {
   selected: boolean
   onClick: () => void
@@ -101,7 +123,6 @@ function StepName({
   location: string; setLocation: (v: string) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
-
   useEffect(() => { inputRef.current?.focus() }, [])
 
   async function browse() {
@@ -110,10 +131,8 @@ function StepName({
     if (folder) setLocation(folder)
   }
 
-  const sep       = location.includes('\\') ? '\\' : '/'
-  const fullPath  = location
-    ? `${location}${sep}${name.trim() || 'my-tsuki-project'}`
-    : ''
+  const sep      = location.includes('\\') ? '\\' : '/'
+  const fullPath = location ? `${location}${sep}${name.trim() || 'my-tsuki-project'}` : ''
 
   return (
     <div className="flex flex-col gap-5">
@@ -132,7 +151,6 @@ function StepName({
           Letters, numbers, dashes and underscores only.
         </p>
       </div>
-
       <div>
         <label className="text-xs font-semibold text-[var(--fg-muted)] uppercase tracking-widest block mb-2">
           Location
@@ -141,7 +159,7 @@ function StepName({
           <Input
             value={location}
             onChange={e => setLocation(e.target.value)}
-            placeholder={isTauri() ? 'Click Browse to choose a folder…' : '/home/user/projects'}
+            placeholder={isTauri() ? 'Click Browse to choose a folder\u2026' : '/home/user/projects'}
             className="font-mono text-xs flex-1"
           />
           <button
@@ -159,6 +177,36 @@ function StepName({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function StepLanguage({
+  language, setLanguage,
+}: {
+  language: string; setLanguage: (v: string) => void
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-xs font-semibold text-[var(--fg-muted)] uppercase tracking-widest block mb-1">
+        Programming language
+      </label>
+      {LANGUAGES.map(l => (
+        <RadioCard key={l.id} selected={language === l.id} onClick={() => setLanguage(l.id)}>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-[var(--fg)] font-mono">{l.label}</span>
+              {l.badge && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-green-500/15 text-green-400">
+                  {l.badge}
+                </span>
+              )}
+            </div>
+            {language === l.id && <Check size={12} className="text-green-400 flex-shrink-0" />}
+          </div>
+          <p className="text-xs text-[var(--fg-faint)] mt-1">{l.desc}</p>
+        </RadioCard>
+      ))}
     </div>
   )
 }
@@ -215,13 +263,19 @@ function StepBackend({ backend, setBackend }: { backend: string; setBackend: (v:
   )
 }
 
-function StepTemplate({ template, setTemplate }: { template: string; setTemplate: (v: string) => void }) {
+function StepTemplate({
+  template, setTemplate, templates,
+}: {
+  template: string
+  setTemplate: (v: string) => void
+  templates: TemplateItem[]
+}) {
   return (
     <div className="flex flex-col gap-2">
       <label className="text-xs font-semibold text-[var(--fg-muted)] uppercase tracking-widest block mb-1">
         Starter template
       </label>
-      {TEMPLATES.map(t => (
+      {templates.map(t => (
         <RadioCard key={t.id} selected={template === t.id} onClick={() => setTemplate(t.id)}>
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
@@ -259,7 +313,9 @@ function StepOptions({
               </div>
               {gitInit && <Check size={12} className="text-green-400" />}
             </div>
-            <p className="text-xs text-[var(--fg-faint)] mt-1">Runs <span className="font-mono">git init</span> in the project directory.</p>
+            <p className="text-xs text-[var(--fg-faint)] mt-1">
+              Runs <span className="font-mono">git init</span> in the project directory.
+            </p>
           </RadioCard>
           <RadioCard selected={!gitInit} onClick={() => setGitInit(false)} className="flex-1">
             <div className="flex items-center justify-between">
@@ -297,6 +353,7 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
   const [step,     setStep    ] = useState<StepId>('name')
   const [name,     setName    ] = useState('')
   const [location, setLocation] = useState('')
+  const [language, setLanguage] = useState('go')
   const [board,    setBoard   ] = useState('uno')
   const [backend,  setBackend ] = useState('tsuki-flash')
   const [template, setTemplate] = useState('blink')
@@ -307,7 +364,13 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
   const stepIdx    = STEPS.findIndex(s => s.id === step)
   const isLastStep = stepIdx === STEPS.length - 1
 
-  // Close on Escape
+  function handleSetLanguage(lang: string) {
+    setLanguage(lang)
+    setTemplate('blink')
+  }
+
+  const currentTemplates = TEMPLATES_BY_LANG[language] ?? TEMPLATES_GO
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape' && !creating) onClose()
@@ -322,11 +385,8 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
   }
 
   function goNext() {
-    if (isLastStep) {
-      handleCreate()
-    } else {
-      setStep(STEPS[stepIdx + 1].id)
-    }
+    if (isLastStep) handleCreate()
+    else setStep(STEPS[stepIdx + 1].id)
   }
 
   function goPrev() {
@@ -337,11 +397,10 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
     setCreating(true)
     setError('')
     const projName = sanitize(name || 'my-tsuki-project')
-
     try {
-      const sep = location.includes('\\') ? '\\' : '/'
+      const sep      = location.includes('\\') ? '\\' : '/'
       const fullPath = location ? `${location}${sep}${projName}` : ''
-      await loadProject(projName, board, template, backend, gitInit, fullPath)
+      await loadProject(projName, board, template, backend, gitInit, fullPath, language)
       onClose()
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -349,26 +408,24 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
     }
   }
 
-  // Derived display values for summary
-  const sep           = location.includes('\\') ? '\\' : '/'
-  const fullPath      = location
+  const sep      = location.includes('\\') ? '\\' : '/'
+  const fullPath = location
     ? `${location}${sep}${sanitize(name || 'my-tsuki-project')}`
     : sanitize(name || 'my-tsuki-project')
 
+  const langLabel = LANGUAGES.find(l => l.id === language)?.label ?? language
+
   return (
-    /* Backdrop */
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
       onMouseDown={e => { if (e.target === e.currentTarget && !creating) onClose() }}
     >
-      {/* Card */}
       <div
         className="relative flex w-[700px] max-w-[96vw] max-h-[90vh] rounded-xl border border-[var(--border)] bg-[var(--surface-1)] shadow-2xl overflow-hidden"
         style={{ boxShadow: '0 24px 64px rgba(0,0,0,0.5)' }}
       >
-
-        {/* ── Left sidebar: steps ── */}
+        {/* ── Left sidebar ── */}
         <div className="w-44 flex-shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col py-6 px-3">
           <div className="flex items-center gap-2 px-2 mb-6">
             <div className="w-5 h-5 rounded bg-[var(--fg)] flex items-center justify-center">
@@ -411,11 +468,11 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
             })}
           </div>
 
-          {/* Summary preview */}
           <div className="mt-auto pt-4">
             <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
               <p className="text-[10px] text-[var(--fg-faint)] uppercase tracking-widest mb-1.5">Summary</p>
               <SummaryRow label="Name"     value={sanitize(name || 'my-tsuki-project')} />
+              <SummaryRow label="Lang"     value={langLabel} />
               <SummaryRow label="Board"    value={BOARDS.find(b => b.id === board)?.id ?? board} />
               <SummaryRow label="Backend"  value={backend} />
               <SummaryRow label="Template" value={template} />
@@ -424,17 +481,12 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
           </div>
         </div>
 
-        {/* ── Right: content ── */}
+        {/* ── Right content ── */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] flex-shrink-0">
             <div>
-              <h2 className="text-sm font-semibold text-[var(--fg)]">
-                {STEPS[stepIdx].label}
-              </h2>
-              <p className="text-xs text-[var(--fg-faint)] mt-0.5">
-                Step {stepIdx + 1} of {STEPS.length}
-              </p>
+              <h2 className="text-sm font-semibold text-[var(--fg)]">{STEPS[stepIdx].label}</h2>
+              <p className="text-xs text-[var(--fg-faint)] mt-0.5">Step {stepIdx + 1} of {STEPS.length}</p>
             </div>
             <button
               onClick={onClose}
@@ -445,30 +497,25 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
             </button>
           </div>
 
-          {/* Step content */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
-            {step === 'name'     && <StepName     name={name} setName={setName} location={location} setLocation={setLocation} />}
-            {step === 'board'    && <StepBoard    board={board} setBoard={setBoard} />}
-            {step === 'backend'  && <StepBackend  backend={backend} setBackend={setBackend} />}
-            {step === 'template' && <StepTemplate template={template} setTemplate={setTemplate} />}
-            {step === 'options'  && <StepOptions  gitInit={gitInit} setGitInit={setGitInit} />}
+            {step === 'name'     && <StepName name={name} setName={setName} location={location} setLocation={setLocation} />}
+            {step === 'language' && <StepLanguage language={language} setLanguage={handleSetLanguage} />}
+            {step === 'board'    && <StepBoard board={board} setBoard={setBoard} />}
+            {step === 'backend'  && <StepBackend backend={backend} setBackend={setBackend} />}
+            {step === 'template' && <StepTemplate template={template} setTemplate={setTemplate} templates={currentTemplates} />}
+            {step === 'options'  && <StepOptions gitInit={gitInit} setGitInit={setGitInit} />}
           </div>
 
-          {/* Footer */}
           <div className="flex items-center justify-between px-6 py-4 border-t border-[var(--border)] flex-shrink-0 bg-[var(--surface)]">
-            {error && (
+            {error ? (
               <p className="text-xs text-red-400 flex-1 mr-4 truncate">{error}</p>
-            )}
-            {!error && (
+            ) : (
               <div className="flex-1">
                 {isLastStep && (
-                  <div className="text-xs text-[var(--fg-faint)] font-mono truncate">
-                    → {fullPath}
-                  </div>
+                  <div className="text-xs text-[var(--fg-faint)] font-mono truncate">\u2192 {fullPath}</div>
                 )}
               </div>
             )}
-
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={goPrev}
@@ -489,20 +536,11 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
                 )}
               >
                 {creating ? (
-                  <>
-                    <span className="animate-spin inline-block">⟳</span>
-                    Creating…
-                  </>
+                  <><span className="animate-spin inline-block">\u27f3</span> Creating\u2026</>
                 ) : isLastStep ? (
-                  <>
-                    <Check size={13} />
-                    Create Project
-                  </>
+                  <><Check size={13} /> Create Project</>
                 ) : (
-                  <>
-                    Next
-                    <ChevronRight size={13} />
-                  </>
+                  <>Next <ChevronRight size={13} /></>
                 )}
               </button>
             </div>
