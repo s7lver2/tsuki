@@ -6,7 +6,7 @@
     "distDir": "../out"
   },
   "package": {
-    "productName": "GoDotIno IDE",
+    "productName": "Tsuki IDE",
     "version": "0.1.0"
   },
   "tauri": {
@@ -53,7 +53,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "dev.godotino.ide",
+      "identifier": "dev.tsuki.ide",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -67,7 +67,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "GoDotIno IDE",
+        "title": "Tsuki IDE",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

@@ -189,7 +189,7 @@ const DEFAULT_PACKAGES: PackageEntry[] = [
 ]
 
 const DEFAULT_SETTINGS: SettingsState = {
-  tsukiPath: 'tsuki',
+  tsukiPath: '',
   tsukiCorePath: '',
   arduinoCliPath: 'arduino-cli',
   avrDudePath: '',
@@ -703,3 +703,16 @@ export const useStore = create<AppState>((set, get) => ({
     saveRecentProjects(updated)
   },
 }))
+
+if (typeof window !== 'undefined') {
+  import('./tauri').then(({ loadSettings }) =>
+    loadSettings().then(raw => {
+      try {
+        const saved = JSON.parse(raw)
+        if (saved && typeof saved === 'object') {
+          useStore.setState({ settings: { ...DEFAULT_SETTINGS, ...saved } })
+        }
+      } catch {}
+    }).catch(() => {})
+  )
+}

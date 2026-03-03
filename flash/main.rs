@@ -8,7 +8,7 @@ mod detect;
 mod error;
 mod flash;
 mod lib_manager;
-mod modules;
+mod cores;
 mod sdk;
 
 use clap::{Args, Parser, Subcommand};
@@ -407,9 +407,9 @@ fn cmd_sdk_info(board_id: &str) -> Result<()> {
 
 fn cmd_modules(args: ModulesArgs, verbose: bool) -> Result<()> {
     match args.command {
-        ModulesCmd::Install { arch } => modules::install(&arch, verbose),
-        ModulesCmd::List             => modules::list(),
-        ModulesCmd::Update           => modules::update(verbose),
+        ModulesCmd::Install { arch } => cores::install(&arch, verbose),
+        ModulesCmd::List             => cores::list(),
+        ModulesCmd::Update           => cores::update(verbose),
     }
 }
 
@@ -483,10 +483,10 @@ fn ensure_modules_ready(use_modules: bool, arch: &str) -> Result<()> {
     match arch {
         "avr" => {
             // avr::ensure() is a no-op (microseconds) when already installed.
-            modules::avr::ensure(false).map(|_| ())
+            cores::avr::ensure(false).map(|_| ())
         }
         _ => {
-            if modules::is_installed(arch) { return Ok(()); }
+            if cores::is_installed(arch) { return Ok(()); }
             eprintln!(
                 "{} Core for arch '{}' is not installed in tsuki-modules.",
                 "✗".red().bold(), arch

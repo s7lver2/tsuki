@@ -1,5 +1,6 @@
 'use client'
 import { useStore } from '@/lib/store'
+import NewProjectModal from '@/components/ide/NewProjectModal'
 import { useState, useEffect } from 'react'
 import { Btn, Divider } from '@/components/ui/primitives'
 import FilesSidebar from './FilesSidebar'
@@ -8,7 +9,7 @@ import PackagesSidebar from './PackagesSidebar'
 import CodeEditor from './CodeEditor'
 import BottomPanel from './BottomPanel'
 import {
-  Files, GitBranch, Settings, Home, Check, Zap, Upload, Play,
+  Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
   Terminal, Sun, Moon, X, ChevronRight, Package,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -27,6 +28,8 @@ export default function IdeScreen() {
     settings, setBottomTab, saveActiveFile,
   } = useStore()
 
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false)
+
   const activeTab  = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
   const activeNode = activeTab ? tree.find(n => n.id === activeTab.fileId) : null
   const parentNode = activeNode
@@ -34,7 +37,8 @@ export default function IdeScreen() {
     : null
 
   // tsuki binary: puede ser ruta completa o solo "tsuki" si está en PATH
-  const tsuki = settings.tsukiPath?.trim() || 'tsuki'
+  // Strip surrounding quotes that can sneak in from auto-detect or copy-paste
+  const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^"|"$/g, '')
   const cwd   = projectPath || undefined
 
   /**
@@ -173,6 +177,27 @@ export default function IdeScreen() {
     return () => window.removeEventListener('keydown', onKey)
   })   // no deps array → always fresh handlers, removes/re-adds each render (cheap)
 
+  useEffect(() => {
+    const currentPath = settings.tsukiPath?.trim()
+    // Solo auto-detectar si no hay ruta absoluta guardada
+    const isAbsolutePath = currentPath?.includes('\\') || currentPath?.includes('/')
+    
+    if (!isAbsolutePath) {
+      import('@/lib/tauri').then(({ detectTool }) => {
+        detectTool('tsuki')
+          .then(resolved => {
+            useStore.getState().updateSetting('tsukiPath', resolved)
+            useStore.getState().addLog('ok', `tsuki found: ${resolved}`)
+          })
+          .catch(() => {
+            useStore.getState().addLog('warn',
+              'tsuki not found in PATH. Go to Settings → CLI Tools → set full path.'
+            )
+          })
+      })
+    }
+  }, [])
+
   return (
     <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
 
@@ -186,7 +211,7 @@ export default function IdeScreen() {
           </div>
           <div className="min-w-0">
             <div className="font-semibold text-sm tracking-tight leading-none truncate">
-              {projectName || 'GoDotIno'}
+              {projectName || 'Tsuki'}
             </div>
             {projectPath && (
               <div className="text-[9px] text-[var(--fg-faint)] font-mono leading-none mt-0.5 truncate">
@@ -252,6 +277,9 @@ export default function IdeScreen() {
         </Btn>
         <Btn variant="ghost" size="xs" onClick={() => setScreen('settings')}>
           <Settings size={13} />
+        </Btn>
+        <Btn variant="ghost" size="xs" title="New project" onClick={() => setShowNewProjectModal(true)}>
+          <Plus size={13} />
         </Btn>
         <Btn variant="ghost" size="xs" onClick={() => setScreen('welcome')}>
           <Home size={13} />
@@ -357,6 +385,11 @@ export default function IdeScreen() {
       </div>
 
       <StatusBar tsuki={tsuki} />
+
+      {/* New project modal */}
+      {showNewProjectModal && (
+        <NewProjectModal onClose={() => setShowNewProjectModal(false)} />
+      )}
     </div>
   )
 }

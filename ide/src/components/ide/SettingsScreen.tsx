@@ -1,7 +1,7 @@
 'use client'
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
 import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/ui/primitives'
-import { ArrowLeft, Terminal, Sliders, Code2, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen } from 'lucide-react'
 import { useState } from 'react'
 
 const NAV: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
@@ -107,21 +107,32 @@ function CliTab() {
     setDetecting(tool)
     try {
       const { detectTool } = await import('@/lib/tauri')
-      const result = await detectTool(tool === 'tsuki' ? settings.tsukiPath || 'tsuki' : settings.arduinoCliPath || tool)
+      // Pass the stored path if it looks like an absolute path, else the binary name.
+      // This lets detect_tool validate a full path without needing it in PATH.
+      const stored = (tool === 'tsuki' ? settings.tsukiPath : settings.arduinoCliPath)?.trim() ?? ''
+      const nameToResolve = stored || tool
+      const resolved = await detectTool(nameToResolve)
+      updateSetting(key, resolved)
       setToolStatus(s => ({ ...s, [tool]: 'ok' }))
-      addLog('ok', `Detected ${tool}: ${result}`)
+      addLog('ok', `Detected ${tool}: ${resolved}`)
     } catch (e) {
       setToolStatus(s => ({ ...s, [tool]: 'warn' }))
-      addLog('warn', `${tool} not found — check PATH or set path manually`)
+      addLog('warn', `${tool} not found — set the full path manually or use Browse`)
     }
     setDetecting(null)
+  }
+
+  async function browseExe(key: keyof SettingsState) {
+    const { pickFile } = await import('@/lib/tauri')
+    const path = await pickFile()
+    if (path) updateSetting(key, path)
   }
 
   return (
     <div>
       <SectionHeader title="CLI Tools" desc="Configure paths to the tsuki CLI and toolchain binaries." />
       <GroupHeader title="Tool Paths" />
-      <SettingsField name="tsuki CLI path" desc="Path to the main tsuki/godotino CLI binary">
+      <SettingsField name="tsuki CLI path" desc="Path to the main tsuki CLI binary">
         <div className="flex gap-2">
           <Input
             value={settings.tsukiPath}
@@ -131,6 +142,9 @@ function CliTab() {
           />
           <Btn variant="outline" size="xs" onClick={() => detect('tsuki', 'tsukiPath')} disabled={detecting === 'tsuki'}>
             {detecting === 'tsuki' ? <RefreshCw size={11} className="animate-spin" /> : 'Detect'}
+          </Btn>
+          <Btn variant="outline" size="xs" onClick={() => browseExe('tsukiPath')} title="Browse to tsuki.exe">
+            <FolderOpen size={11} />
           </Btn>
         </div>
       </SettingsField>
@@ -150,6 +164,9 @@ function CliTab() {
           />
           <Btn variant="outline" size="xs" onClick={() => detect('arduino', 'arduinoCliPath')} disabled={detecting === 'arduino'}>
             {detecting === 'arduino' ? <RefreshCw size={11} className="animate-spin" /> : 'Detect'}
+          </Btn>
+          <Btn variant="outline" size="xs" onClick={() => browseExe('arduinoCliPath')} title="Browse to arduino-cli.exe">
+            <FolderOpen size={11} />
           </Btn>
         </div>
       </SettingsField>
@@ -252,7 +269,7 @@ function PackagesTab() {
 
   return (
     <div>
-      <SectionHeader title="Packages" desc="Manage the GoDotIno package registry and installed libraries." />
+      <SectionHeader title="Packages" desc="Manage the Tsuki package registry and installed libraries." />
       <GroupHeader title="Registry" />
       <SettingsField name="libs_dir" desc="Local install path">
         <Input value={settings.libsDir} onChange={e => updateSetting('libsDir', e.target.value)} />

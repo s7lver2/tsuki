@@ -120,7 +120,17 @@ export async function detectTool(name: string): Promise<string> {
     console.warn('[tsuki-ide] detectTool: no estamos en Tauri')
     return `${name} (no Tauri)`
   }
-  return invoke<string>('detect_tool', { name })
+  const resolved = await invoke<string>('detect_tool', { name })
+  
+  // Guardia: rechazar si Rust devolvió un string de versión en lugar de ruta
+  const looksLikePath = resolved.includes('\\') || resolved.includes('/') || resolved.startsWith(name)
+  const looksLikeVersion = /v?\d+\.\d+/.test(resolved) && !looksLikePath
+  
+  if (!resolved || looksLikeVersion) {
+    throw new Error(`detect_tool returned invalid path: "${resolved}"`)
+  }
+  
+  return resolved.trim()
 }
 
 // ── Diálogo de carpeta ────────────────────────────────────────────────────────
@@ -139,6 +149,14 @@ export async function pickFolder(): Promise<string | null> {
     console.error('[tsuki-ide] pickFolder falló:', e)
     return null
   }
+}
+
+export async function pickFile(): Promise<string | null> {
+  if (!isTauri()) {
+    console.warn('[tsuki-ide] pickFile: no estamos en Tauri — devolviendo null')
+    return null
+  }
+  return invoke<string | null>('pick_file')
 }
 
 // ── Ficheros ──────────────────────────────────────────────────────────────────
@@ -213,6 +231,81 @@ export async function saveSettings(settings: unknown): Promise<void> {
     return
   }
   return invoke<void>('save_settings', { settings: json })
+}
+
+// ── Shell management ──────────────────────────────────────────────────────────
+
+export interface ShellInfo {
+  id:   string
+  name: string
+  path: string
+  icon: string
+}
+
+/**
+ * Returns the list of shells available on the current OS.
+ * Windows: cmd, powershell, pwsh, git-bash
+ * Linux/macOS: bash, zsh, fish, sh
+ */
+export async function listShells(): Promise<ShellInfo[]> {
+  if (!isTauri()) {
+    console.warn('[tsuki-ide] listShells: no estamos en Tauri')
+    return []
+  }
+  return invoke<ShellInfo[]>('list_shells')
+}
+
+/**
+ * Spawns an interactive shell session and streams its output line by line.
+ * Returns a ProcessHandle identical to spawnProcess — the frontend can
+ * write commands via handle.write() and kill via handle.kill().
+ */
+export async function spawnShell(
+  shell:   ShellInfo,
+  cwd:     string | undefined,
+  onLine:  (line: string, isErr: boolean) => void,
+): Promise<ProcessHandle> {
+  if (!isTauri()) {
+    const msg = `[tsuki-ide] spawnShell: no estamos en Tauri (shell=${shell.id})`
+    console.error(msg)
+    onLine(`ERROR: ${msg}`, true)
+    return { pid: -1, done: Promise.resolve(1), write: async () => {}, kill: async () => {}, dispose: () => {} }
+  }
+
+  const eventId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const unsubs: Array<() => void> = []
+
+  let resolveDone!: (code: number) => void
+  const done = new Promise<number>((r) => { resolveDone = r })
+
+  const outU  = await listen(`proc://${eventId}:stdout`, (l) => onLine(l as string, false))
+  const errU  = await listen(`proc://${eventId}:stderr`, (l) => onLine(l as string, true))
+  const doneU = await listen(`proc://${eventId}:done`,   (code) => resolveDone(code as number))
+  unsubs.push(outU, errU, doneU)
+
+  let pid: number
+  try {
+    pid = await invoke<number>('spawn_shell', {
+      shellId:   shell.id,
+      shellPath: shell.path,
+      cwd:       cwd ?? null,
+      eventId,
+    })
+  } catch (e) {
+    console.error('[tsuki-ide] spawn_shell falló:', e)
+    onLine(`ERROR al lanzar shell: ${e}`, true)
+    unsubs.forEach((f) => f())
+    resolveDone(1)
+    return { pid: -1, done, write: async () => {}, kill: async () => {}, dispose: () => {} }
+  }
+
+  return {
+    pid,
+    done,
+    write:   async (line) => invoke<void>('write_stdin', { pid, data: line }),
+    kill:    async ()     => invoke<void>('kill_process', { pid }),
+    dispose: ()           => unsubs.forEach((f) => f()),
+  }
 }
 
 // ── Git ───────────────────────────────────────────────────────────────────────

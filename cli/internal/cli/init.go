@@ -14,14 +14,15 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
 	"github.com/tsuki/cli/internal/manifest"
 	"github.com/tsuki/cli/internal/ui"
 )
@@ -312,8 +313,7 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 			fn    func() error
 		}{"Initializing git repository", func() error {
 			if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
-				cmd := fmt.Sprintf("git -C %q init -q", dir)
-				_ = cmd
+				return exec.Command("git", "-C", dir, "init", "-q").Run()
 			}
 			return nil
 		}})
@@ -338,37 +338,10 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 //  Arrow-key interactive select (raw terminal mode)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// termios mirrors the Linux termios struct for raw-mode manipulation.
-type termios struct {
-	Iflag  uint32
-	Oflag  uint32
-	Cflag  uint32
-	Lflag  uint32
-	Cc     [20]byte
-	Ispeed uint32
-	Ospeed uint32
-}
-
-func tcgetattr(fd uintptr, t *termios) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(t)))
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
-func tcsetattr(fd uintptr, t *termios) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(t)))
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
 // promptArrowSelect shows a live arrow-key navigable menu.
 // Falls back to a numbered list when stdin is not a TTY (e.g. pipes, CI).
-func promptArrowSelect(step int, question string, choices []string, defaultIdx int) int {
-	stepLabel(step, question)
+func promptArrowSelect(stepNum int, question string, choices []string, defaultIdx int) int {
+	stepLabel(stepNum, question)
 	fmt.Println()
 
 	// ── Non-interactive fallback ──────────────────────────────────────────
@@ -396,22 +369,21 @@ func promptArrowSelect(step int, question string, choices []string, defaultIdx i
 			}
 		}
 		fmt.Println()
-		stepDone(step, question, choices[idx])
+		stepDone(stepNum, question, choices[idx])
 		return idx
 	}
 
-	// ── Raw-mode setup ────────────────────────────────────────────────────
-	fd := os.Stdin.Fd()
-	var orig termios
-	if err := tcgetattr(fd, &orig); err != nil {
+	// ── Raw-mode setup (portable via golang.org/x/term) ───────────────────
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		// Can't enter raw mode — fall through to the fallback above would be
+		// ideal, but we already printed the question header. Return default.
 		return defaultIdx
 	}
-	raw := orig
-	raw.Lflag &^= syscall.ICANON | syscall.ECHO
-	raw.Cc[syscall.VMIN] = 1
-	raw.Cc[syscall.VTIME] = 0
-	_ = tcsetattr(fd, &raw)
-	defer tcsetattr(fd, &orig)
+	// NOTE: defer won't fire on os.Exit, so we call term.Restore explicitly
+	// in the Ctrl-C branch before exiting.
+	defer term.Restore(fd, oldState) //nolint:errcheck
 
 	// Hide cursor while navigating.
 	fmt.Print("\033[?25l")
@@ -451,14 +423,16 @@ func promptArrowSelect(step int, question string, choices []string, defaultIdx i
 			// Move cursor below the list before printing stepDone.
 			fmt.Printf("\033[%dB", n)
 			fmt.Println()
-			stepDone(step, question, choices[cur])
+			stepDone(stepNum, question, choices[cur])
 			return cur
 
 		// Ctrl-C → restore terminal and exit cleanly.
+		// Defers don't run on os.Exit, so we restore manually first.
 		case buf[0] == 3:
 			fmt.Printf("\033[%dB", n)
 			fmt.Println()
-			tcsetattr(fd, &orig)
+			fmt.Print("\033[?25h") // show cursor
+			term.Restore(fd, oldState) //nolint:errcheck
 			os.Exit(1)
 
 		// Escape sequences (arrow keys: ESC [ A/B).
