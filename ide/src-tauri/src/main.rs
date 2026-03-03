@@ -208,7 +208,7 @@ async fn spawn_shell(
         _                   => vec![],
     };
 
-    let mut c = Command::new(&shell_path);
+    let mut c = Command::new(&shell_path).no_window();
     c.args(&args)
      .stdin(Stdio::piped())
      .stdout(Stdio::piped())
