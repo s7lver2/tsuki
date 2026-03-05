@@ -35,7 +35,7 @@ jobs:
           # python build.py --platform ${{ matrix.os }}-${{ matrix.arch }} --skip-go --skip-rust --skip-ide
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: tsuki-${{ matrix.os }}-${{ matrix.arch }}
           path: releases/* # Asumiendo que build.py guarda los instaladores en la carpeta "releases"
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           path: artifacts
 
