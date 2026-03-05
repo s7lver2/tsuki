@@ -46,7 +46,8 @@ jobs:
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v3
-        path: artifacts
+        with:
+          path: artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -54,4 +55,4 @@ jobs:
         with:
           files: artifacts/**/* # Ajusta la ruta si es necesario
           generate_release_notes: true
-        working-directory: artifacts # Especifica el directorio de trabajo
+          working-directory: artifacts # Especifica el directorio de trabajo
