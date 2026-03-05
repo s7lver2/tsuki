@@ -128,7 +128,10 @@ def get_version(forced=None):
 
 def clean():
     step("Limpiando directorios de build")
-    question = input("Do you want to remove all cache dirs? N/y")
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        question = 'N'  # Respuesta predeterminada para GitHub Actions
+    else:
+        question = input("Do you want to remove all cache dirs? N/y")
     if question == "y" or question == "y":
       # Normal Directory Cleaning process
       for d in [BUILD_DIR, RELEASE_DIR]:
