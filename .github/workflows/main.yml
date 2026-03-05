@@ -1,0 +1,57 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        arch: [x64] # Puedes agregar 'arm64' si tu proyecto lo soporta
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x' # O la versión que uses en tu script
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt # Si tienes un archivo de requirements
+
+      - name: Build for ${{ matrix.os }} ${{ matrix.arch }}
+        run: |
+          python build.py --platform ${{ matrix.os }}-${{ matrix.arch }}
+          # Si quieres omitir alguna parte del build, puedes usar:
+          # python build.py --platform ${{ matrix.os }}-${{ matrix.arch }} --skip-go --skip-rust --skip-ide
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: tsuki-${{ matrix.os }}-${{ matrix.arch }}
+          path: releases/* # Asumiendo que build.py guarda los instaladores en la carpeta "releases"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          files: artifacts/**/* # Ajusta la ruta si es necesario
+          generate_release_notes: true
+        working-directory: artifacts # Especifica el directorio de trabajo
