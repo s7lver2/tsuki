@@ -12,7 +12,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -28,11 +28,24 @@ jobs:
       #- name: Install Python dependencies
       #  run: pip install -r requirements.txt # Si tienes un archivo de requirements
 
+      - name: Map platform names
+        id: platform_mapping
+        run: |
+          PLATFORM=""
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            PLATFORM="linux-amd64"
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            PLATFORM="windows-amd64"
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            PLATFORM="darwin-amd64"
+          fi
+          echo "::set-output name=platform::$PLATFORM"
+
       - name: Build for ${{ matrix.os }} ${{ matrix.arch }}
         run: |
-          python build.py --platform ${{ matrix.os }}-${{ matrix.arch }}
+          python build.py --platform ${{ steps.platform_mapping.outputs.platform }}
           # Si quieres omitir alguna parte del build, puedes usar:
-          # python build.py --platform ${{ matrix.os }}-${{ matrix.arch }} --skip-go --skip-rust --skip-ide
+          # python build.py --platform ${{ steps.platform_mapping.outputs.platform }} --skip-go --skip-rust --skip-ide
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -45,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
