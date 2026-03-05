@@ -25,8 +25,8 @@ jobs:
         with:
           python-version: '3.x' # O la versión que uses en tu script
 
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt # Si tienes un archivo de requirements
+      #- name: Install Python dependencies
+      #  run: pip install -r requirements.txt # Si tienes un archivo de requirements
 
       - name: Build for ${{ matrix.os }} ${{ matrix.arch }}
         run: |
