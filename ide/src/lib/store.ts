@@ -1,11 +1,11 @@
 'use client'
 import { create } from 'zustand'
-import { applyTheme, applyUiScale } from './themes'
+import { applyTheme, applyUiScale, applyFontRendering } from './themes'
 
-export type Screen = 'welcome' | 'ide' | 'settings'
+export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'sandbox'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox'
 
 export interface FileNode {
   id: string
@@ -105,6 +105,22 @@ export interface SettingsState {
   syntaxTheme: string   // id from SYNTAX_THEMES
   uiScale: number       // 0.80 – 1.25, default 1
   showCurrentFlow: boolean  // show current-flow animation on active wires
+  // ── Experiments ──────────────────────────────────────────────────────────
+  experimentsEnabled: boolean
+  // Per-experiment toggles
+  expSandboxEnabled: boolean
+  // ── Docs ─────────────────────────────────────────────────────────────────
+  docsLang: 'en' | 'es'
+  // ── Advanced ─────────────────────────────────────────────────────────────
+  fontRendering: 'auto' | 'crisp' | 'smooth' | 'subpixel'
+  tsukiFlashPath: string
+  insertSpaces: boolean
+  autoCloseBrackets: boolean
+  showLineNumbers: boolean
+  highlightActiveLine: boolean
+  saveOnFocusLoss: boolean
+  compileOnSave: boolean
+  lspEnabled: boolean
 }
 
 interface AppState {
@@ -249,6 +265,20 @@ const DEFAULT_SETTINGS: SettingsState = {
   syntaxTheme: 'material',
   uiScale: 1,
   showCurrentFlow: false,
+  // experiments
+  experimentsEnabled: false,
+  expSandboxEnabled: false,
+  // advanced
+  tsukiFlashPath: '',
+  insertSpaces: true,
+  autoCloseBrackets: true,
+  showLineNumbers: true,
+  highlightActiveLine: true,
+  saveOnFocusLoss: false,
+  compileOnSave: false,
+  lspEnabled: false,
+  docsLang: 'en',
+  fontRendering: 'auto',
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -644,6 +674,9 @@ export const useStore = create<AppState>((set, get) => ({
         if (key === 'uiScale') {
           applyUiScale(value as number)
         }
+        if (key === 'fontRendering') {
+          applyFontRendering(value as 'auto' | 'crisp' | 'smooth' | 'subpixel')
+        }
       }
 
       return { settings: next }
@@ -691,6 +724,7 @@ if (typeof window !== 'undefined') {
           // Apply theme from disk immediately
           applyTheme(merged.ideTheme, merged.syntaxTheme)
           applyUiScale(merged.uiScale)
+          applyFontRendering(merged.fontRendering)
           // Sync legacy theme flag
           const { IDE_THEMES } = require('./themes') as typeof import('./themes')
           const base = IDE_THEMES.find(t => t.id === merged.ideTheme)?.base ?? 'dark'

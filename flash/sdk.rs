@@ -30,7 +30,7 @@ pub struct SdkPaths {
 }
 
 /// Resolve SDK paths for a given board architecture + variant.
-pub fn resolve(arch: &str, variant: &str) -> Result<SdkPaths> {
+pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
     // ── 1. TSUKI_SDK_ROOT override ─────────────────────────────────────────
     if let Ok(root) = std::env::var("TSUKI_SDK_ROOT") {
         let base = PathBuf::from(&root);
@@ -39,22 +39,21 @@ pub fn resolve(arch: &str, variant: &str) -> Result<SdkPaths> {
         }
     }
 
-    // ── 2. tsuki-modules  (~/.tsuki/modules/)  ─────────────────────────────
-    // Preferred when the user chose "tsuki-flash+cores".
-    // For AVR we use the dedicated avr module which returns SdkPaths directly
-    // without scanning — the fast path is a single Path::is_dir() check.
-    if arch == "avr" {
-        if let Ok(paths) = crate::cores::avr::sdk_paths(variant) {
-            return Ok(paths);
-        }
-    } else if let Some(home) = dirs_home() {
-        let tsuki_modules = home.join(".tsuki").join("modules");
-        if let Some(paths) = scan_arduino15(&tsuki_modules, arch, variant) {
-            return Ok(paths);
+    // ── 2. tsuki-modules (~/.tsuki/modules/) ─────────────────────────────────
+    // For ALL architectures, ensure_arch() auto-downloads the SDK on first use
+    // using pure-Rust extraction (no system tar/bzip2/xz, no arduino-cli needed).
+    // Fast path: already installed → returns in microseconds, zero network I/O.
+    // If download fails (no network, offline env) we fall through to arduino-cli.
+    match crate::cores::ensure_arch(arch, variant, verbose) {
+        Ok(paths) => return Ok(paths),
+        Err(e) => {
+            if verbose {
+                eprintln!("  [sdk] tsuki-modules unavailable ({}), trying .arduino15…", e);
+            }
         }
     }
 
-    // ── 3. arduino-cli package cache ──────────────────────────────────────
+    // ── 3. arduino-cli package cache (fallback) ────────────────────────────
     let arduino15_dirs = arduino15_candidates();
     for base in &arduino15_dirs {
         if let Some(paths) = scan_arduino15(base, arch, variant) {
@@ -137,7 +136,16 @@ fn dirs_home_windows() -> Option<PathBuf> {
 }
 
 /// Scan ~/.arduino15/packages/<vendor>/hardware/<arch>/<version>/ structure.
-fn scan_arduino15(base: &Path, arch: &str, variant: &str) -> Option<SdkPaths> {
+/// Scan the tsuki-modules layout for an already-installed arch SDK.
+/// This is a thin wrapper around scan_arduino15 using the modules root.
+/// Called by cores::ensure_arch() for the fast path and by cores::ensure_arch()
+/// after a fresh install to return SdkPaths.
+pub(crate) fn scan_tsuki_modules(root: &Path, arch: &str, variant: &str) -> Option<SdkPaths> {
+    scan_arduino15(root, arch, variant)
+}
+
+
+pub(crate) fn scan_arduino15(base: &Path, arch: &str, variant: &str) -> Option<SdkPaths> {
     let packages = base.join("packages");
     if !packages.is_dir() { return None; }
 

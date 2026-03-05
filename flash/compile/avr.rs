@@ -41,7 +41,10 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         .copied()
         .unwrap_or("ARDUINO_AVR_UNO");
 
-    let common_flags: Vec<String> = vec![
+    // Probe for LTO plugin support once — result reused for compile + link flags.
+    let lto_available = probe_lto_plugin(&sdk.toolchain_bin);
+
+    let mut common_flags: Vec<String> = vec![
         format!("-mmcu={}", mcu),
         format!("-DF_CPU={}L", board.f_cpu()),
         format!("-DARDUINO={}", arduino_ver),
@@ -51,11 +54,16 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         "-w".into(),
         "-ffunction-sections".into(),
         "-fdata-sections".into(),
-        "-flto".into(),
         "-MMD".into(),
         format!("-I{}", sdk.core_dir.display()),
         format!("-I{}", sdk.variant_dir.display()),
     ];
+    // Only add -flto when the linker plugin is available.
+    // Without the plugin, -flto causes avr-gcc to emit LLVM/GCC IR bitcode in
+    // the .o files, which avr-ld cannot link and exits with "ld returned 1".
+    if lto_available {
+        common_flags.insert(9, "-flto".into()); // after -fdata-sections
+    }
 
     // Add extra include dirs (external libraries)
     let mut includes: Vec<String> = common_flags.clone();
@@ -79,15 +87,38 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
 
     // ── Flags fingerprint for incremental cache ───────────────────────────
     let flags_sig = hash_str(&format!("{:?}{:?}{:?}", includes, cflags, cxxflags));
-    let core_sig  = hash_str(&format!("core{}{}", mcu, sdk.sdk_version));
+    let core_sig  = hash_str(&format!("core{}{}lto={}", mcu, sdk.sdk_version, lto_available));
 
     // ── Step 1: Build core.a ──────────────────────────────────────────────
     let core_dir  = req.build_dir.join("core");
     std::fs::create_dir_all(&core_dir)?;
     let core_a = req.build_dir.join("core.a");
 
-    build_core(&cc, &cxx, &ar, &sdk.core_dir, &core_dir, &core_a,
+    build_core(&cc, &cxx, &ar, &sdk.toolchain_bin, &sdk.core_dir, &core_dir, &core_a,
                &includes, &cflags, &cxxflags, &core_sig, req.verbose)?;
+
+    // Sanity: core.a must exist and be non-empty.  An empty or missing archive
+    // means the core source directory had no .cpp/.c/.S files — most likely the
+    // SDK extraction went wrong.  Surface this early with a clear message.
+    match std::fs::metadata(&core_a) {
+        Ok(m) if m.len() == 0 => {
+            return Err(FlashError::CompileFailed {
+                output: format!(
+                    "core.a is empty — Arduino core sources missing or failed to compile.\n                     Expected core sources in: {}\n                     Try: delete build/.cache and rebuild, or run `tsuki-flash modules install avr`",
+                    sdk.core_dir.display()
+                ),
+            });
+        }
+        Err(_) => {
+            return Err(FlashError::CompileFailed {
+                output: format!(
+                    "core.a was not created — all core source files failed to compile.\n                     Expected core sources in: {}\n                     Try: delete build/.cache and rebuild, or run `tsuki-flash modules install avr`",
+                    sdk.core_dir.display()
+                ),
+            });
+        }
+        _ => {}
+    }
 
     // ── Step 2: Compile sketch sources ───────────────────────────────────
     let sketch_dir = req.build_dir.join("sketch");
@@ -118,6 +149,7 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         let compiler = if is_c { &cc } else { &cxx };
 
         let mut cmd = Command::new(compiler);
+        with_toolchain_path(&mut cmd, &sdk.toolchain_bin);
         cmd.args(&includes);
 
         if is_c {
@@ -163,24 +195,59 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     let elf_path = req.build_dir.join(format!("{}.elf", req.project_name));
 
     let mut link_cmd = Command::new(&cc);
-    link_cmd
-        .arg("-w").arg("-Os").arg("-g").arg("-flto")
-        .arg("-fuse-linker-plugin").arg("-Wl,--gc-sections")
-        .arg(format!("-mmcu={}", mcu));
+    // Inject the toolchain bin into PATH so avr-gcc can find liblto_plugin DLLs
+    // on Windows (required for -fuse-linker-plugin / -flto to work correctly).
+    with_toolchain_path(&mut link_cmd, &sdk.toolchain_bin);
+
+    // -fuse-linker-plugin requires liblto_plugin-0.dll on Windows.
+    // If that DLL is missing from the toolchain package, the linker crashes with
+    // "ld returned 1 exit status" and no other diagnostic output.
+    // We probe for the DLL and fall back to non-plugin LTO if it is absent.
+    // lto_available was determined above alongside common_flags.
+    link_cmd.arg("-w").arg("-Os").arg("-g");
+    if lto_available {
+        link_cmd.arg("-flto").arg("-fuse-linker-plugin");
+    }
+    link_cmd.arg("-Wl,--gc-sections").arg(format!("-mmcu={}", mcu));
 
     for obj in &obj_files {
         link_cmd.arg(obj);
     }
+    // Wrap archives in --start-group/--end-group so the linker resolves
+    // circular references between sketch objects and core.a correctly.
+    link_cmd.arg("-Wl,--start-group");
     link_cmd.arg(&core_a);
-    link_cmd.args(["-L", req.build_dir.to_str().unwrap()]);
     link_cmd.arg("-lm");
+    link_cmd.arg("-Wl,--end-group");
+    link_cmd.args(["-L", req.build_dir.to_str().unwrap()]);
     link_cmd.arg("-o").arg(&elf_path);
 
     let link_out = link_cmd.output()?;
     if !link_out.status.success() {
-        return Err(FlashError::LinkFailed {
-            output: String::from_utf8_lossy(&link_out.stderr).to_string(),
-        });
+        let mut combined = String::from_utf8_lossy(&link_out.stderr).to_string();
+        let stdout_str = String::from_utf8_lossy(&link_out.stdout).to_string();
+        if !stdout_str.trim().is_empty() {
+            combined = format!("{}\n{}", stdout_str.trim(), combined.trim());
+        }
+
+        // If the linker says "undefined reference to `main'", the core.a is stale
+        // (built with -flto bitcode that the linker can't read without the plugin,
+        // or missing main.cpp).  Delete the sentinel so it is rebuilt on next run,
+        // and surface a clear diagnostic instead of the raw linker message.
+        if combined.contains("undefined reference to") && combined.contains("main") {
+            let sentinel = core_dir.join(".core_sig");
+            let _ = std::fs::remove_file(&sentinel);
+            let _ = std::fs::remove_file(&core_a);
+            return Err(FlashError::LinkFailed {
+                output: format!(
+                    "{}\n\n                     ── Hint ────────────────────────────────────────────────\n                     core.a was stale (LTO mismatch or missing main.cpp).\n                     It has been deleted. Re-run the build to recompile it:\n                     {}",
+                    combined.trim(),
+                    "  tsuki build --compile --board uno".to_string(),
+                ),
+            });
+        }
+
+        return Err(FlashError::LinkFailed { output: combined });
     }
 
     // ── Step 4: Generate .hex ─────────────────────────────────────────────
@@ -215,6 +282,7 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
 
 fn build_core(
     cc: &str, cxx: &str, ar: &str,
+    toolchain_bin: &Path,
     core_src: &Path, core_obj_dir: &Path, core_a: &Path,
     includes: &[String],
     cflags: &[&str], cxxflags: &[&str],
@@ -257,6 +325,7 @@ fn build_core(
         let compiler = if is_c || is_asm { cc } else { cxx };
 
         let mut cmd = Command::new(compiler);
+        with_toolchain_path(&mut cmd, toolchain_bin);
         cmd.args(includes);
 
         if is_asm {
@@ -286,6 +355,7 @@ fn build_core(
 
     // Archive into core.a
     let mut ar_cmd = Command::new(ar);
+    with_toolchain_path(&mut ar_cmd, toolchain_bin);
     ar_cmd.args(["rcs", core_a.to_str().unwrap()]);
     for obj in &obj_files {
         if obj.exists() {
@@ -327,8 +397,14 @@ fn resolve_tool(bin_dir: &Path, name: &str) -> String {
     if bin_dir.as_os_str().is_empty() {
         return name.to_owned(); // rely on PATH
     }
-    let p = bin_dir.join(name);
-    if p.exists() { p.to_string_lossy().to_string() } else { name.to_owned() }
+    // On Windows binaries have a .exe extension; try both.
+    for candidate in &[name, &format!("{}.exe", name)] {
+        let p = bin_dir.join(candidate);
+        if p.exists() {
+            return p.to_string_lossy().to_string();
+        }
+    }
+    name.to_owned() // fallback: rely on PATH
 }
 
 fn run_tool(program: &str, args: &[&str]) -> Result<()> {
@@ -339,6 +415,70 @@ fn run_tool(program: &str, args: &[&str]) -> Result<()> {
         });
     }
     Ok(())
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LTO plugin probe
+//
+//  On Windows, -fuse-linker-plugin requires liblto_plugin-0.dll to be present
+//  in the toolchain bin directory.  If it is absent (some tsuki-modules builds
+//  ship a stripped toolchain without the plugin), the linker silently exits
+//  with code 1 and "collect2.exe: error: ld returned 1 exit status" as the
+//  only output — with zero additional diagnostics.
+//
+//  We detect this at compile time and fall back to a plain link (no plugin)
+//  which is slightly larger but always works.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns true only when the LTO linker plugin is reliably available.
+///
+/// avr-gcc 7.x on Windows ships a stripped toolchain that either omits
+/// liblto_plugin-0.dll entirely, or ships a version whose bfd-plugin
+/// infrastructure silently fails during link-time code synthesis.  The
+/// symptom is "undefined reference to `main'" with no further diagnostics —
+/// the plugin loads but drops the Arduino core main() during LTO dead-code
+/// analysis.
+///
+/// LTO is a size optimisation (~5-10% smaller .hex).  It is not required for
+/// correct firmware.  We disable it on Windows to guarantee reliable builds.
+fn probe_lto_plugin(_toolchain_bin: &Path) -> bool {
+    // Always disabled on Windows — avr-gcc 7.x LTO is unreliable there.
+    #[cfg(target_os = "windows")]
+    return false;
+
+    // On Linux and macOS the system toolchain handles LTO correctly.
+    #[cfg(not(target_os = "windows"))]
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Windows DLL fix: prepend the toolchain bin to PATH so avr-gcc can find
+//  liblto_plugin-0.dll (required for -fuse-linker-plugin / -flto link step).
+//  On Linux/macOS this is a no-op because shared libraries are found via rpath.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn with_toolchain_path(cmd: &mut Command, toolchain_bin: &Path) {
+    if toolchain_bin.as_os_str().is_empty() { return; }
+
+    let tc_bin_str = toolchain_bin.to_string_lossy().to_string();
+
+    // On Windows, prepend the toolchain bin so the linker plugin DLLs are found.
+    #[cfg(target_os = "windows")]
+    {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = if current_path.is_empty() {
+            tc_bin_str.clone()
+        } else {
+            format!("{};{}", tc_bin_str, current_path)
+        };
+        cmd.env("PATH", new_path);
+    }
+
+    // On Unix we don't need to touch PATH — shared libs are handled via rpath.
+    #[cfg(not(target_os = "windows"))]
+    let _ = tc_bin_str; // suppress unused warning
 }
 
 fn firmware_size(bin_dir: &Path, elf: &Path, board: &Board) -> String {

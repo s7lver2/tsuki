@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef, useCallback, useEffect, useReducer } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Cpu, Zap, Plus, Trash2, RotateCcw, Play, Square,
   FileText, Download, Upload, X, Pencil,
@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '@/lib/store'
-import { useSimulator } from '@/lib/useSimulator'
+import { getTmpGoPath, writeFile, type ProcessHandle } from '@/lib/tauri'
 import {
   buildPinMap, applyStepResult,
   getAnalogInputPins, getDigitalInputPins,
@@ -244,7 +244,7 @@ interface WireInProgress {
 }
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
-  const { openTabs, activeTabIdx, board, settings } = useStore()
+  const { openTabs, activeTabIdx, board, settings, projectPath } = useStore()
   const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
 
   // View state
@@ -264,24 +264,66 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
   // Wire-in-progress
   const [wip, setWip] = useState<WireInProgress | null>(null)
 
-  // ── WASM Simulator ──
-  const sim = useSimulator()
-
-  // Sim state — simRunning is DERIVED from sim.status, no separate state
-  const simRunning = sim.status === 'running'
+  // ── Simulator state (via __terminalSpawn, same mechanism as Flash) ──
+  type SimStatus = 'idle' | 'loading' | 'running' | 'error'
+  const [simStatus, setSimStatus] = useState<SimStatus>('idle')
+  const simRunning = simStatus === 'running'
   const [simPinValues, setSimPinValues] = useState<Record<string, number>>({})
-  // Ref keeps the LATEST pin values so the onStep closure never uses a stale snapshot
   const simPinValuesRef = useRef<Record<string, number>>({})
   const [simLog, setSimLog] = useState<LogEntry[]>([])
   const [simMs, setSimMs] = useState(0)
-  const [simTick, setSimTick] = useState(0)
   const [simLoadError, setSimLoadError] = useState('')
-  // External inputs (analog sliders 0-1023, digital toggles)
   const [analogInputs, setAnalogInputs] = useState<Record<number, number>>({})
   const [digitalInputs, setDigitalInputs] = useState<Record<number, boolean>>({})
-  // Current-flow visualization — read from Zustand settings (toggled in Settings → Sandbox)
   const showCurrentFlow = settings.showCurrentFlow
 
+  // Accumulator for throttled UI updates (same logic as useSimulator)
+  const accumRef = useRef<{
+    latestPins: Record<string, number>
+    peakPins:   Record<string, number>
+    serial:     string[]
+    ms:         number
+    dirty:      boolean
+  }>({ latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false })
+  const tickRef     = useRef<ReturnType<typeof setInterval> | null>(null)
+  const simHandleRef = useRef<any>(null)
+
+  // Flush accumulator to React state every 150ms
+  const flushAccum = useCallback(() => {
+    const acc = accumRef.current
+    if (!acc.dirty) return
+    acc.dirty = false
+    const pinMap = buildPinMap(circuit)
+    const merged: StepResult = {
+      ok: true, events: [],
+      pins:   { ...acc.latestPins, ...acc.peakPins },
+      serial: acc.serial.splice(0),
+      ms:     acc.ms,
+    }
+    const bridged = applyStepResult(merged, simPinValuesRef.current, pinMap, [])
+    const prev = simPinValuesRef.current
+    const next = bridged.pinValues
+    const changed = Object.keys(next).some(k => next[k] !== prev[k]) ||
+                    Object.keys(prev).some(k => !(k in next))
+    simPinValuesRef.current = next
+    if (changed) setSimPinValues(next)
+    setSimMs(merged.ms)
+    if (bridged.log.length > 0)
+      setSimLog(p => [...p, ...bridged.log].slice(-200))
+    acc.peakPins = { ...acc.latestPins }
+  }, [circuit]) // eslint-disable-line
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    ;(window as any).__sandboxJsonHandler = null
+    if (tickRef.current) clearInterval(tickRef.current)
+    simHandleRef.current?.kill?.().catch(() => {})
+  }, [])
+
+  // ── Sync text ↔ circuit ──
+  useEffect(() => {
+    if (view === 'text') setTextDraft(circuitToText(circuit))
+  }, [view])
 
   // Dragging
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null)
@@ -290,43 +332,6 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
 
   // Category palette
   const [paletteOpen, setPaletteOpen] = useState(true)
-
-  // ── Sync text ↔ circuit ──
-  useEffect(() => {
-    if (view === 'text') setTextDraft(circuitToText(circuit))
-  }, [view])
-
-  // ── onStep — subscribe once; results arrive whenever the process is running ──
-  useEffect(() => {
-    const pinMap = buildPinMap(circuit)
-    const unsub = sim.onStep((result: StepResult) => {
-      const bridged = applyStepResult(result, simPinValuesRef.current, pinMap, [])
-
-      // Only trigger a React re-render when pin values actually changed
-      const prev = simPinValuesRef.current
-      const next = bridged.pinValues
-      const changed = Object.keys(next).some(k => next[k] !== prev[k]) ||
-                      Object.keys(prev).some(k => !(k in next))
-      simPinValuesRef.current = next
-      if (changed) setSimPinValues(next)
-
-      setSimMs(result.ms)
-      // Note: setSimTick removed — it caused a full re-render every 150ms for no visual benefit
-
-      if (bridged.log.length > 0) {
-        setSimLog(prev => [...prev, ...bridged.log].slice(-200))
-      }
-    })
-    return unsub
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [circuit])
-
-  // ── Surface simulator errors directly into the log panel ──────────────────
-  useEffect(() => {
-    if (sim.errorMsg) {
-      setSimLog(prev => [...prev, { t: 0, level: 'err' as const, msg: `⚠ ${sim.errorMsg}` }].slice(-200))
-    }
-  }, [sim.errorMsg])
 
   // ── Canvas helpers ──
   function svgPoint(e: React.PointerEvent | React.MouseEvent) {
@@ -491,7 +496,7 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
   function clearCanvas() {
     if (confirm('Clear the circuit? This cannot be undone.')) {
       setCircuit({ ...DEFAULT_CIRCUIT, name: circuit.name, board: circuit.board })
-      setSimPinValues({}); setSimLog([]); sim.reset()
+      setSimPinValues({}); setSimLog([]); simPinValuesRef.current = {}; setSimStatus('idle')
     }
   }
 
@@ -790,53 +795,87 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
         const analogPins  = getAnalogInputPins(circuit)
         const digitalPins = getDigitalInputPins(circuit)
 
+        const handleStop = () => {
+          ;(window as any).__sandboxJsonHandler = null
+          simHandleRef.current?.kill?.().catch(() => {})
+          simHandleRef.current = null
+          if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
+          simPinValuesRef.current = {}
+          setSimPinValues({})
+          setSimStatus('idle')
+        }
+
+        const handleReset = () => {
+          handleStop()
+          accumRef.current = { latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false }
+          setSimLog([])
+          setSimMs(0)
+          setSimLoadError('')
+        }
+
         const handleRun = async () => {
-          if (simRunning) {
-            await sim.pause()
-            setSimPinValues({})
-            return
-          }
+          if (simRunning) { handleStop(); return }
           const code = activeTab?.content ?? ''
           if (!code.trim()) {
             setSimLog([{ t: 0, level: 'err', msg: '⚠ No file open — open a .go file first' }])
             return
           }
+          setSimStatus('loading')
           setSimLoadError('')
           setSimLog([])
-          setSimTick(0)
           setSimPinValues({})
+          simPinValuesRef.current = {}
+          accumRef.current = { latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false }
           setSimMs(0)
-          await sim.reset()
-
-          const err = await sim.load(code)
-          if (err) {
-            setSimLoadError(err)
-            setSimLog([{ t: 0, level: 'err', msg: `⚠ ${err}` }])
-            return
+          try {
+            const tmpPath = await getTmpGoPath()
+            await writeFile(tmpPath, code)
+            const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^\"|\"$/g, '')
+            const boardName = board || 'uno'
+            // Register JSON interceptor — BottomPanel will call this for each JSON line
+            ;(window as any).__sandboxJsonHandler = (result: StepResult) => {
+              const acc = accumRef.current
+              for (const [p, v] of Object.entries(result.pins)) {
+                acc.latestPins[p] = v
+                if ((acc.peakPins[p] ?? 0) < v) acc.peakPins[p] = v
+              }
+              if (result.serial?.length) acc.serial.push(...result.serial)
+              acc.ms    = result.ms
+              acc.dirty = true
+              if (!result.ok) {
+                ;(window as any).__sandboxJsonHandler = null
+                if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
+                setSimLoadError(result.error ?? 'Simulation error')
+                setSimStatus('error')
+              }
+            }
+            // Start throttle flush timer
+            if (tickRef.current) clearInterval(tickRef.current)
+            tickRef.current = setInterval(flushAccum, 150)
+            setSimStatus('running')
+            setSimLog([{ t: 0, level: 'info', msg: `Loaded — ${circuit.components.length} components · ${circuit.wires.length} wires` }])
+            // Launch via __terminalSpawn — same PATH-enriched mechanism as Flash
+            const handle = await (window as any).__terminalSpawn?.(
+              tsuki, ['simulate', '--source', tmpPath, '--board', boardName],
+              projectPath ?? undefined
+            )
+            simHandleRef.current = handle
+            if (handle?.done) {
+              handle.done.then(() => {
+                ;(window as any).__sandboxJsonHandler = null
+                simHandleRef.current = null
+                if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
+                flushAccum()
+                setSimStatus(s => s === 'running' ? 'idle' : s)
+              })
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            setSimLoadError(msg)
+            setSimStatus('error')
+            ;(window as any).__sandboxJsonHandler = null
+            if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
           }
-          setSimLog([{
-            t: 0,
-            level: 'info',
-            msg: `Loaded — ${circuit.components.length} components · ${circuit.wires.length} wires`,
-          }])
-
-          // await sim.start() so the process is fully running before we return
-          await sim.start()
-        }
-
-        const handleStop = async () => {
-          await sim.pause()
-          simPinValuesRef.current = {}
-          setSimPinValues({})
-        }
-
-        const handleReset = async () => {
-          await sim.reset()
-          simPinValuesRef.current = {}
-          setSimPinValues({})
-          setSimLog([])
-          setSimTick(0)
-          setSimMs(0)
         }
 
         return (
@@ -846,15 +885,15 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
             <div className="px-3 py-2 border-b border-[var(--border)] bg-[var(--surface-1)] flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={simRunning ? handleStop : handleRun}
-                disabled={sim.status === 'loading'}
+                disabled={simStatus === 'loading'}
                 className={clsx(
                   'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer border-0 transition-colors',
                   simRunning
                     ? 'bg-[color-mix(in_srgb,var(--err)_12%,transparent)] text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_20%,transparent)]'
                     : 'bg-[var(--fg)] text-[var(--accent-inv)] hover:opacity-80 disabled:opacity-40',
                 )}>
-                {sim.status === 'loading'
-                  ? <><span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full"/>Loading WASM…</>
+                {simStatus === 'loading'
+                  ? <><span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full"/>Starting…</>
                   : simRunning
                     ? <><Square size={10}/> Stop</>
                     : <><Play  size={10}/> Run</>
@@ -880,7 +919,7 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
 
               {simRunning && (
                 <span className="text-[10px] text-[var(--fg-faint)] font-mono">
-                  {simMs.toFixed(0)}ms · {simTick} ticks
+                  {simMs.toFixed(0)}ms
                 </span>
               )}
             </div>
@@ -978,7 +1017,6 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                           onChange={e => {
                             const v = Number(e.target.value)
                             setAnalogInputs(prev => ({ ...prev, [pinIdx]: v }))
-                            sim.setAnalogInput(pinIdx, v)
                           }}
                           className="flex-1 h-1.5 appearance-none rounded bg-[var(--border)] accent-[var(--active)] cursor-pointer"/>
                         <span className="text-[10px] font-mono text-[var(--fg-faint)] w-8 text-right">
@@ -994,11 +1032,9 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                         <button
                           onPointerDown={() => {
                             setDigitalInputs(prev => ({ ...prev, [pin]: true }))
-                            sim.setDigitalInput(pin, true)
                           }}
                           onPointerUp={() => {
                             setDigitalInputs(prev => ({ ...prev, [pin]: false }))
-                            sim.setDigitalInput(pin, false)
                           }}
                           className={clsx(
                             'px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors cursor-pointer select-none',
@@ -1026,22 +1062,18 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5 font-mono">
-                  {/* WASM error — shown prominently */}
-                  {(simLoadError || sim.status === 'error') && (
+                  {(simLoadError || simStatus === 'error') && (
                     <div className="text-[10px] text-[var(--err)] px-1.5 py-2 rounded bg-[color-mix(in_srgb,var(--err)_8%,transparent)] border border-[color-mix(in_srgb,var(--err)_25%,transparent)] whitespace-pre-wrap leading-relaxed mb-1">
-                      {simLoadError || sim.errorMsg}
+                      {simLoadError}
                     </div>
                   )}
-
-                  {simLog.length === 0 && sim.status !== 'error' && !simLoadError && (
+                  {simLog.length === 0 && simStatus !== 'error' && !simLoadError && (
                     <p className="text-[10px] text-[var(--fg-faint)] px-1 py-2">
-                      {sim.status === 'idle'    ? 'Press ▶ Run to start…'   :
-                       sim.status === 'loading' ? 'Loading WASM module…'    :
-                       sim.status === 'ready'   ? 'Running — waiting for output…' :
-                       'No output yet.'}
+                      {simStatus === 'idle'    ? 'Press ▶ Run to start…' :
+                       simStatus === 'loading' ? 'Starting simulator…'   :
+                       'Running — waiting for output…'}
                     </p>
                   )}
-
                   {simLog.map((entry, i) => (
                     <div key={i} className={clsx(
                       'text-[10px] px-1 py-0.5 rounded leading-relaxed',
@@ -1055,22 +1087,20 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                     </div>
                   ))}
                 </div>
-
-                {/* WASM status footer */}
                 <div className="px-2 py-1 border-t border-[var(--border)] flex-shrink-0">
                   <div className={clsx('text-[9px] flex items-center gap-1 font-sans',
-                    sim.status === 'ready'   ? 'text-[var(--ok)]' :
-                    sim.status === 'error'   ? 'text-[var(--err)]' :
-                    sim.status === 'loading' ? 'text-yellow-400' :
+                    simStatus === 'running' ? 'text-[var(--ok)]' :
+                    simStatus === 'error'   ? 'text-[var(--err)]' :
+                    simStatus === 'loading' ? 'text-yellow-400' :
                     'text-[var(--fg-faint)]'
                   )}>
                     <span className={clsx('w-1.5 h-1.5 rounded-full inline-block',
-                      sim.status === 'ready'   ? 'bg-[var(--ok)]' :
-                      sim.status === 'error'   ? 'bg-[var(--err)]' :
-                      sim.status === 'loading' ? 'bg-yellow-400' :
+                      simStatus === 'running' ? 'bg-[var(--ok)]' :
+                      simStatus === 'error'   ? 'bg-[var(--err)]' :
+                      simStatus === 'loading' ? 'bg-yellow-400' :
                       'bg-[var(--fg-faint)]'
                     )}/>
-                    tsuki-sim · {sim.status}
+                    tsuki-sim · {simStatus}
                   </div>
                 </div>
               </div>

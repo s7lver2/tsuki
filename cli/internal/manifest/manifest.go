@@ -124,6 +124,10 @@ func Load(dir string) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", FileName, err)
 	}
+	// Apply defaults for fields that may be absent in older manifests
+	if m.Build.OutputDir == "" {
+		m.Build.OutputDir = "build"
+	}
 	return &m, nil
 }
 

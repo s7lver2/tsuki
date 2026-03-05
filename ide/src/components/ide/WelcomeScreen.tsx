@@ -3,7 +3,7 @@ import { useState } from 'react'
 import NewProjectModal from '@/components/ide/NewProjectModal'
 import { useStore } from '@/lib/store'
 import { Btn } from '@/components/ui/primitives'
-import { Plus, FolderOpen, Settings, Clock, ChevronRight } from 'lucide-react'
+import { Plus, FolderOpen, Settings, Clock, ChevronRight, BookOpen } from 'lucide-react'
 
 
 
@@ -87,6 +87,13 @@ export default function WelcomeScreen() {
               >
                 <Settings size={14} />
                 Settings &amp; CLI Config
+              </button>
+              <button
+                onClick={() => setScreen('docs')}
+                className="flex items-center gap-3 px-3.5 py-2.5 rounded-md border border-[var(--border)] text-sm font-medium text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors cursor-pointer bg-transparent"
+              >
+                <BookOpen size={14} />
+                Documentation
               </button>
             </div>
 

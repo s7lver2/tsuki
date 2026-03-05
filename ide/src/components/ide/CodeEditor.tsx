@@ -1,8 +1,8 @@
 'use client'
 import { useRef, useEffect, useCallback } from 'react'
-import { useStore } from '@/lib/store' 
+import { useStore } from '@/lib/store'
 import { highlightByExt } from '@/lib/highlight'
-
+import { showContextMenu } from '@/components/ui/ContextMenu'
 function LineNumbers({ count, fontSize }: { count: number; fontSize: number }) {
   const lineH = Math.round(fontSize * 1.62)
   return (
@@ -223,6 +223,64 @@ export default function CodeEditor() {
           onScroll={onScroll}
           onMouseUp={onCursorMove}
           onKeyUp={onCursorMove}
+          onContextMenu={e => {
+            const ta = e.currentTarget
+            const selected = ta.value.substring(ta.selectionStart, ta.selectionEnd)
+            showContextMenu(e, [
+              {
+                label: 'Cut',
+                shortcut: 'Ctrl+X',
+                disabled: !selected,
+                action: () => {
+                  if (selected) navigator.clipboard.writeText(selected).catch(() => {})
+                  document.execCommand('cut')
+                },
+              },
+              {
+                label: 'Copy',
+                shortcut: 'Ctrl+C',
+                disabled: !selected,
+                action: () => navigator.clipboard.writeText(selected).catch(() => {}),
+              },
+              {
+                label: 'Paste',
+                shortcut: 'Ctrl+V',
+                action: () => {
+                  navigator.clipboard.readText().then(text => {
+                    const start = ta.selectionStart
+                    const end   = ta.selectionEnd
+                    const next  = ta.value.substring(0, start) + text + ta.value.substring(end)
+                    updateTabContent(activeTabIdx, next)
+                    requestAnimationFrame(() => {
+                      ta.selectionStart = ta.selectionEnd = start + text.length
+                    })
+                  }).catch(() => {})
+                },
+              },
+              {
+                label: 'Select All',
+                shortcut: 'Ctrl+A',
+                sep: true,
+                action: () => { ta.focus(); ta.select() },
+              },
+              {
+                label: 'Format Document',
+                shortcut: 'Ctrl+Shift+F',
+                sep: true,
+                disabled: tab?.ext !== 'go',
+                action: () => {
+                  if (tab?.ext === 'go') {
+                    updateTabContent(activeTabIdx, formatGo(content, settings.tabSize ?? 2))
+                  }
+                },
+              },
+              {
+                label: 'Save',
+                shortcut: 'Ctrl+S',
+                action: () => saveFile(activeTabIdx),
+              },
+            ])
+          }}
           className="editor-textarea"
           style={editorStyle}
           spellCheck={false}

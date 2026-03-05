@@ -2,20 +2,33 @@
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
 import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/ui/primitives'
-import { ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen, Palette, Check, Cpu, FlaskConical } from 'lucide-react'
+import {
+  ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
+  Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
+  Beaker, ToggleLeft,
+} from 'lucide-react'
 import { useState } from 'react'
 import { clsx } from 'clsx'
 
-// Note: SettingsTab type in lib/store.ts must include 'sandbox':
-// export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'sandbox'
+// ─────────────────────────────────────────────────────────────────────────────
+//  Nav definitions
+// ─────────────────────────────────────────────────────────────────────────────
 
-const NAV: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'appearance', label: 'Appearance', icon: <Palette size={13} /> },
+const MAIN_NAV: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'appearance', label: 'Appearance', icon: <Palette  size={13} /> },
   { id: 'cli',        label: 'CLI Tools',  icon: <Terminal size={13} /> },
   { id: 'defaults',   label: 'Defaults',   icon: <Sliders  size={13} /> },
   { id: 'editor',     label: 'Editor',     icon: <Code2    size={13} /> },
-  { id: 'sandbox' as SettingsTab, label: 'Sandbox', icon: <Cpu size={13} /> },
 ]
+
+const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' }[] = [
+  { id: 'experiments', label: 'General',   icon: <FlaskConical size={13} /> },
+  { id: 'exp-sandbox', label: 'Sandbox',   icon: <Cpu          size={13} />, settingKey: 'expSandboxEnabled' },
+]
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Shared primitives
+// ─────────────────────────────────────────────────────────────────────────────
 
 function SettingsField({ name, desc, children }: { name: string; desc: string; children: React.ReactNode }) {
   return (
@@ -25,60 +38,6 @@ function SettingsField({ name, desc, children }: { name: string; desc: string; c
         <div className="text-xs text-[var(--fg-muted)] mt-0.5">{desc}</div>
       </div>
       <div className="w-52 flex-shrink-0">{children}</div>
-    </div>
-  )
-}
-
-export default function SettingsScreen() {
-  const { setScreen, openTabs, settingsTab, setSettingsTab, toggleTheme, theme, goBack } = useStore()
-
-  function back() {
-    goBack()
-  }
-
-  return (
-    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
-      <div className="h-11 flex items-center px-4 gap-3 border-b border-[var(--border)] flex-shrink-0">
-        <Btn variant="ghost" size="xs" onClick={back}><ArrowLeft size={13} /> Back</Btn>
-        <Divider vertical />
-        <span className="text-sm font-semibold">Settings</span>
-        <div className="ml-auto">
-          <Btn variant="ghost" size="xs" onClick={toggleTheme} className="font-mono text-[10px]">
-            {theme === 'dark' ? '◐ dark' : '○ light'}
-          </Btn>
-        </div>
-      </div>
-
-      <div className="flex flex-1 overflow-hidden">
-        <div className="w-48 border-r border-[var(--border)] bg-[var(--surface-1)] p-2 flex flex-col gap-0.5 flex-shrink-0">
-          {NAV.map(n => (
-            <button
-              key={n.id}
-              onClick={() => setSettingsTab(n.id)}
-              className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer border-0 text-left transition-colors w-full ${
-                settingsTab === n.id
-                  ? 'bg-[var(--active)] text-[var(--fg)] font-medium'
-                  : 'bg-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-              }`}
-            >
-              {n.icon}{n.label}
-              {n.id === 'sandbox' && (
-                <span className="ml-auto text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">β</span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl px-10 py-8">
-            {settingsTab === 'appearance' && <AppearanceTab />}
-            {settingsTab === 'cli'        && <CliTab />}
-            {settingsTab === 'defaults'   && <DefaultsTab />}
-            {settingsTab === 'editor'     && <EditorTab />}
-            {(settingsTab as string) === 'sandbox' && <SandboxTab />}
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
@@ -100,76 +59,354 @@ function GroupHeader({ title }: { title: string }) {
   )
 }
 
-// ── Sandbox settings tab ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  Sidebar nav item
+// ─────────────────────────────────────────────────────────────────────────────
+
+function NavItem({
+  id, label, icon, active, badge, onClick,
+}: {
+  id: SettingsTab; label: string; icon: React.ReactNode
+  active: boolean; badge?: React.ReactNode; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        'flex items-center gap-2.5 px-2.5 py-1.5 rounded text-sm cursor-pointer border-0 text-left transition-colors w-full',
+        active
+          ? 'bg-[var(--active)] text-[var(--fg)] font-medium'
+          : 'bg-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
+      )}
+    >
+      {icon}
+      <span className="flex-1">{label}</span>
+      {badge}
+    </button>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Root screen
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function SettingsScreen() {
+  const { setScreen, settingsTab, setSettingsTab, toggleTheme, theme, goBack, settings } = useStore()
+  const expEnabled = settings.experimentsEnabled
+
+  return (
+    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
+      {/* ── Top bar ── */}
+      <div className="h-11 flex items-center px-4 gap-3 border-b border-[var(--border)] flex-shrink-0">
+        <Btn variant="ghost" size="xs" onClick={goBack}><ArrowLeft size={13} /> Back</Btn>
+        <Divider vertical />
+        <span className="text-sm font-semibold">Settings</span>
+        <div className="ml-auto">
+          <Btn variant="ghost" size="xs" onClick={toggleTheme} className="font-mono text-[10px]">
+            {theme === 'dark' ? '◐ dark' : '○ light'}
+          </Btn>
+        </div>
+      </div>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* ── Sidebar ── */}
+        <div className="w-48 border-r border-[var(--border)] bg-[var(--surface-1)] flex flex-col flex-shrink-0 overflow-y-auto">
+
+          {/* Main settings group */}
+          <div className="p-2 flex flex-col gap-0.5">
+            {MAIN_NAV.map(n => (
+              <NavItem
+                key={n.id} id={n.id} label={n.label} icon={n.icon}
+                active={settingsTab === n.id}
+                onClick={() => setSettingsTab(n.id)}
+              />
+            ))}
+          </div>
+
+          {/* Divider + Experiments group */}
+          <div className="mx-2 border-t border-[var(--border)] mt-1" />
+
+          <div className="p-2 pb-3 flex flex-col gap-0.5">
+            {/* Section label */}
+            <div className="flex items-center gap-1.5 px-2 py-1.5 mb-0.5">
+              <FlaskConical size={11} className="text-[var(--fg-faint)]" />
+              <span className="text-[10px] font-semibold text-[var(--fg-faint)] uppercase tracking-widest">
+                Experiments
+              </span>
+              {expEnabled && (
+                <span className="ml-auto text-[8px] font-mono text-green-400 bg-green-400/10 px-1 rounded">ON</span>
+              )}
+            </div>
+
+            {/* General experiments tab — always visible */}
+            <NavItem
+              id="experiments" label="General" icon={<FlaskConical size={13} />}
+              active={settingsTab === 'experiments'}
+              onClick={() => setSettingsTab('experiments')}
+              badge={
+                !expEnabled
+                  ? <span className="w-1.5 h-1.5 rounded-full bg-[var(--fg-faint)] opacity-50" />
+                  : undefined
+              }
+            />
+
+            {/* Per-experiment tabs — only when that specific experiment is enabled */}
+            {expEnabled && EXP_NAV.filter(n => n.id !== 'experiments').map(n => {
+              // Hide tab if the experiment itself is toggled off
+              if (n.settingKey && !settings[n.settingKey]) return null
+              return (
+                <NavItem
+                  key={n.id} id={n.id as SettingsTab} label={n.label} icon={n.icon}
+                  active={settingsTab === n.id}
+                  onClick={() => setSettingsTab(n.id as SettingsTab)}
+                  badge={<span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">β</span>}
+                />
+              )
+            })}
+          </div>
+        </div>
+
+        {/* ── Content ── */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-2xl px-10 py-8">
+            {settingsTab === 'appearance'   && <AppearanceTab />}
+            {settingsTab === 'cli'          && <CliTab />}
+            {settingsTab === 'defaults'     && <DefaultsTab />}
+            {settingsTab === 'editor'       && <EditorTab />}
+            {settingsTab === 'experiments'  && <ExperimentsTab />}
+            {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Experiments — General tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Experiment registry — single source of truth
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ExpDef {
+  id: string
+  tab: SettingsTab
+  name: string
+  tag: string
+  icon: React.ReactNode
+  desc: string
+  settingKey: 'expSandboxEnabled'   // union grows as experiments are added
+  resources: string                 // what it costs when enabled
+}
+
+const EXPERIMENTS: ExpDef[] = [
+  {
+    id: 'sandbox',
+    tab: 'exp-sandbox',
+    name: 'Sandbox',
+    tag: 'β',
+    icon: <Cpu size={16} />,
+    desc: 'Virtual Arduino circuit simulator. Place components, wire them up, and visualise your firmware pin states without physical hardware.',
+    settingKey: 'expSandboxEnabled',
+    resources: 'Adds ~800 KB to the renderer bundle. Rendering thread only — no background processes.',
+  },
+]
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ExperimentsTab — General
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ExperimentsTab() {
+  const { settings, updateSetting, setSettingsTab } = useStore()
+  const enabled = settings.experimentsEnabled
+
+  if (!enabled) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center gap-6 select-none">
+        <div className="relative">
+          <div className="w-20 h-20 rounded-2xl border border-[var(--border)] bg-[var(--surface-1)] flex items-center justify-center">
+            <FlaskConical size={36} className="text-[var(--fg-faint)]" />
+          </div>
+          <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[var(--surface-3)] border border-[var(--border)] flex items-center justify-center">
+            <span className="text-[9px] font-mono text-[var(--fg-faint)]">β</span>
+          </div>
+        </div>
+
+        <div className="max-w-xs">
+          <h2 className="text-base font-semibold mb-2">Experiments</h2>
+          <p className="text-sm text-[var(--fg-muted)] leading-relaxed">
+            Features under active development. Expect rough edges, incomplete behaviour, and breaking changes between updates.
+          </p>
+        </div>
+
+        {/* Preview cards */}
+        <div className="flex flex-col gap-2 max-w-xs w-full">
+          {EXPERIMENTS.map(exp => (
+            <div key={exp.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+              <span className="text-[var(--fg-faint)]">{exp.icon}</span>
+              <div className="flex-1 text-left">
+                <div className="text-xs font-medium">{exp.name}</div>
+                <div className="text-[10px] text-[var(--fg-faint)]">{exp.desc.slice(0, 52)}…</div>
+              </div>
+              <ChevronRight size={11} className="text-[var(--fg-faint)]" />
+            </div>
+          ))}
+        </div>
+
+        <Btn variant="outline" size="sm" onClick={() => updateSetting('experimentsEnabled', true)} className="mt-2 gap-2">
+          <FlaskConical size={13} /> Enable Experiments
+        </Btn>
+        <p className="text-[10px] text-[var(--fg-faint)] max-w-xs leading-relaxed">
+          Each experiment can be toggled individually once enabled. Disabled experiments load no extra code.
+        </p>
+      </div>
+    )
+  }
+
+  // ── Enabled state ──────────────────────────────────────────────────────────
+  const anyOn = EXPERIMENTS.some(e => settings[e.settingKey])
+
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-7">
+        <div className="w-10 h-10 rounded-lg border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+          <FlaskConical size={18} className="text-[var(--fg-muted)]" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold tracking-tight">Experiments</h2>
+            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">enabled</span>
+          </div>
+          <p className="text-sm text-[var(--fg-muted)]">
+            Toggle individual experiments below. Disabled experiments are completely inert — they load no code and consume no resources.
+          </p>
+        </div>
+      </div>
+
+      <GroupHeader title="Master switch" />
+      <SettingsField name="Experiments enabled" desc="Turn off to disable all experimental tabs and features globally.">
+        <Toggle on={settings.experimentsEnabled} onToggle={() => {
+          // disabling the master also disables all individual experiments
+          if (settings.experimentsEnabled) {
+            EXPERIMENTS.forEach(e => updateSetting(e.settingKey, false))
+          }
+          updateSetting('experimentsEnabled', !settings.experimentsEnabled)
+        }} />
+      </SettingsField>
+
+      <GroupHeader title="Individual experiments" />
+      <div className="mt-3 flex flex-col gap-2.5">
+        {EXPERIMENTS.map(exp => (
+          <ExperimentCard
+            key={exp.id}
+            exp={exp}
+            active={settings[exp.settingKey]}
+            onToggle={() => updateSetting(exp.settingKey, !settings[exp.settingKey])}
+            onOpen={() => setSettingsTab(exp.tab)}
+          />
+        ))}
+      </div>
+
+      {anyOn && (
+        <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-[var(--surface-1)] border border-[var(--border)]">
+          <span className="text-[10px] text-[var(--fg-faint)] leading-relaxed">
+            Active experiments add extra weight to the renderer. Disable unused ones to keep the IDE lean.
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExperimentCard({
+  exp, active, onToggle, onOpen,
+}: {
+  exp: ExpDef; active: boolean; onToggle: () => void; onOpen: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className={clsx(
+      'rounded-lg border transition-colors',
+      active ? 'border-[var(--fg-faint)] bg-[var(--surface-1)]' : 'border-[var(--border)] bg-[var(--surface-1)]',
+    )}>
+      {/* Main row */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div className={clsx('flex-shrink-0 transition-colors', active ? 'text-[var(--fg-muted)]' : 'text-[var(--fg-faint)]')}>
+          {exp.icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-sm font-medium">{exp.name}</span>
+            <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">{exp.tag}</span>
+            {active && <span className="text-[9px] font-mono text-green-400 bg-green-400/10 px-1 rounded">on</span>}
+          </div>
+          <p className="text-xs text-[var(--fg-muted)] leading-relaxed line-clamp-2">{exp.desc}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {active && (
+            <Btn variant="ghost" size="xs" onClick={onOpen}>
+              Settings <ChevronRight size={11} />
+            </Btn>
+          )}
+          <Toggle on={active} onToggle={onToggle} />
+        </div>
+      </div>
+
+      {/* Expandable detail */}
+      <button
+        onClick={() => setExpanded(x => !x)}
+        className="w-full flex items-center gap-1 px-4 pb-2 text-[10px] text-[var(--fg-faint)] hover:text-[var(--fg-muted)] border-0 bg-transparent cursor-pointer transition-colors"
+      >
+        <ChevronRight size={9} className={clsx('transition-transform', expanded && 'rotate-90')} />
+        Resource usage & details
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 text-xs text-[var(--fg-muted)] border-t border-[var(--border-subtle)] pt-2.5 leading-relaxed">
+          <p className="mb-1"><span className="font-medium text-[var(--fg)]">Resources:</span> {exp.resources}</p>
+          <p><span className="font-medium text-[var(--fg)]">Status:</span> {active ? 'Active — loaded into the renderer.' : 'Inactive — no code loaded, no impact on performance.'}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Sandbox experiment tab
+// ─────────────────────────────────────────────────────────────────────────────
 
 function SandboxTab() {
+  const { settings, updateSetting } = useStore()
+
   const CIRCUIT_FORMAT = `{
   "version": "1",
   "name": "My Circuit",
   "board": "uno",
-  "description": "A simple blink circuit",
   "components": [
     {
       "id": "mcu",
       "type": "arduino_uno",
       "label": "Arduino Uno",
-      "x": 80,
-      "y": 60,
-      "rotation": 0,
-      "color": "#1a6b2e",
-      "props": {}
+      "x": 80, "y": 60, "rotation": 0, "color": "#1a6b2e"
     },
     {
       "id": "led1",
       "type": "led",
       "label": "LED1",
-      "x": 260,
-      "y": 80,
-      "rotation": 0,
-      "color": "#ef4444",
-      "props": {}
-    },
-    {
-      "id": "r1",
-      "type": "resistor",
-      "label": "R1",
-      "x": 210,
-      "y": 100,
-      "rotation": 0,
-      "color": "#a37a2c",
-      "props": { "ohms": 220 }
+      "x": 260, "y": 80, "rotation": 0, "color": "#ef4444"
     }
   ],
   "wires": [
     {
       "id": "w1",
-      "fromComp": "mcu",
-      "fromPin": "D13",
-      "toComp": "r1",
-      "toPin": "pin1",
-      "color": "#f97316",
-      "waypoints": []
-    },
-    {
-      "id": "w2",
-      "fromComp": "r1",
-      "fromPin": "pin2",
-      "toComp": "led1",
-      "toPin": "anode",
-      "color": "#f97316",
-      "waypoints": []
-    },
-    {
-      "id": "w3",
-      "fromComp": "mcu",
-      "fromPin": "GND",
-      "toComp": "led1",
-      "toPin": "cathode",
-      "color": "#1a1a1a",
-      "waypoints": []
+      "fromComp": "mcu", "fromPin": "D13",
+      "toComp": "led1", "toPin": "anode",
+      "color": "#f97316"
     }
-  ],
-  "notes": []
+  ]
 }`
 
   return (
@@ -180,38 +417,33 @@ function SandboxTab() {
         </div>
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-lg font-semibold tracking-tight">Tsuki Sandbox</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Sandbox</h2>
             <span className="text-xs font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1.5 py-0.5 rounded">experimental</span>
           </div>
           <p className="text-sm text-[var(--fg-muted)]">
-            Virtual Arduino circuit simulator. Build circuits visually or from a text file, then run your Tsuki/Go program against the virtual hardware.
+            Virtual Arduino circuit simulator. Build circuits visually or from a text file, then run your tsuki program against the virtual hardware.
           </p>
         </div>
       </div>
 
+      <GroupHeader title="Settings" />
+      <SettingsField
+        name="Current flow animation"
+        desc="Animated dots on active wires during simulation. Disable for a cleaner look."
+      >
+        <Toggle
+          on={settings.showCurrentFlow}
+          onToggle={() => updateSetting('showCurrentFlow', !settings.showCurrentFlow)}
+        />
+      </SettingsField>
+
       <GroupHeader title="How to use" />
       <div className="mt-4 mb-6 flex flex-col gap-3">
         {[
-          {
-            step: '1',
-            title: 'Open the Sandbox panel',
-            desc: 'Click the "Sandbox β" button in the top toolbar, or the collapsed tab on the right edge of the IDE. The panel slides in from the right and is resizable.',
-          },
-          {
-            step: '2',
-            title: 'Build your circuit',
-            desc: 'Use the Canvas view: click components in the left palette to place them on the canvas. Select the Wire tool, then click two pins to connect them. Each wire can have a custom color. Use Alt+drag or middle-mouse to pan, scroll to zoom.',
-          },
-          {
-            step: '3',
-            title: 'Import from text',
-            desc: 'Switch to the Text view to directly edit the .tsuki-circuit JSON. Paste a circuit definition and click Apply. You can also import/export .tsuki-circuit files using the toolbar buttons.',
-          },
-          {
-            step: '4',
-            title: 'Simulate',
-            desc: 'Open any .go file in the editor, then switch to the Sim view in the Sandbox and press Run. The simulator parses digitalWrite/analogWrite calls and updates component states (LED brightness, etc.) in real time.',
-          },
+          { step: '1', title: 'Open the Sandbox panel', desc: 'Click "Sandbox β" in the toolbar or the collapsed tab on the right edge. The panel is resizable.' },
+          { step: '2', title: 'Build your circuit', desc: 'Use the Canvas view to place components and draw wires. Alt+drag or middle-mouse to pan, scroll to zoom.' },
+          { step: '3', title: 'Import from text', desc: 'Switch to the Text view to paste a .tsuki-circuit JSON definition directly and click Apply.' },
+          { step: '4', title: 'Simulate', desc: 'Open your .go file and press Run in the Sim view. The simulator parses digitalWrite/analogWrite and updates components in real time.' },
         ].map(s => (
           <div key={s.step} className="flex gap-3">
             <div className="w-6 h-6 rounded-full border border-[var(--border)] flex items-center justify-center flex-shrink-0 text-xs font-semibold text-[var(--fg-muted)]">
@@ -225,28 +457,17 @@ function SandboxTab() {
         ))}
       </div>
 
-      <GroupHeader title=".tsuki-circuit file format" />
-      <div className="mt-3 mb-6">
-        <p className="text-xs text-[var(--fg-muted)] mb-3 leading-relaxed">
-          All circuits are stored as <span className="font-mono text-[var(--fg)]">.tsuki-circuit</span> files — human-readable JSON with full detail including component positions, wire colors, labels, and component properties. You can hand-edit these files or generate them programmatically.
-        </p>
-        <p className="text-xs text-[var(--fg-muted)] mb-2">Example — LED blink circuit:</p>
-        <pre className="bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4 text-xs font-mono text-[var(--fg-muted)] overflow-x-auto leading-5 whitespace-pre">
-          {CIRCUIT_FORMAT}
-        </pre>
-      </div>
-
       <GroupHeader title="Supported components" />
       <div className="mt-3 mb-6 grid grid-cols-2 gap-2">
         {[
-          { type: 'arduino_uno',    label: 'Arduino Uno',    cat: 'MCU',     color: '#1a6b2e' },
-          { type: 'arduino_nano',   label: 'Arduino Nano',   cat: 'MCU',     color: '#0a4d8c' },
-          { type: 'led',            label: 'LED',            cat: 'Output',  color: '#ef4444' },
-          { type: 'resistor',       label: 'Resistor',       cat: 'Passive', color: '#a37a2c' },
-          { type: 'button',         label: 'Push Button',    cat: 'Input',   color: '#555' },
-          { type: 'potentiometer',  label: 'Potentiometer',  cat: 'Input',   color: '#4a4a4a' },
-          { type: 'buzzer',         label: 'Buzzer',         cat: 'Output',  color: '#222' },
-          { type: 'power_rail',     label: 'Power Rail',     cat: 'Power',   color: '#333' },
+          { type: 'arduino_uno',   label: 'Arduino Uno',   cat: 'MCU',     color: '#1a6b2e' },
+          { type: 'arduino_nano',  label: 'Arduino Nano',  cat: 'MCU',     color: '#0a4d8c' },
+          { type: 'led',           label: 'LED',           cat: 'Output',  color: '#ef4444' },
+          { type: 'resistor',      label: 'Resistor',      cat: 'Passive', color: '#a37a2c' },
+          { type: 'button',        label: 'Push Button',   cat: 'Input',   color: '#555' },
+          { type: 'potentiometer', label: 'Potentiometer', cat: 'Input',   color: '#4a4a4a' },
+          { type: 'buzzer',        label: 'Buzzer',        cat: 'Output',  color: '#222' },
+          { type: 'power_rail',    label: 'Power Rail',    cat: 'Power',   color: '#333' },
         ].map(c => (
           <div key={c.type} className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
             <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: c.color }} />
@@ -258,41 +479,22 @@ function SandboxTab() {
         ))}
       </div>
 
-      <GroupHeader title="Simulation" />
-      <div className="mt-3 mb-6 flex flex-col gap-0">
-        <div className="py-3 border-b border-[var(--border-subtle)]">
-          <div className="text-sm font-medium mb-1">How simulation works</div>
-          <div className="text-xs text-[var(--fg-muted)] leading-relaxed">
-            The Sim view parses your open Go source file and extracts <span className="font-mono text-[var(--fg)]">digitalWrite</span>, <span className="font-mono text-[var(--fg)]">analogWrite</span> and related calls. It then traces the wires connected to the relevant Arduino pins and updates the visual state of downstream components — LEDs glow, PWM dims brightness. The simulation ticks at ~5 Hz and re-reads the source on every tick.
-          </div>
-        </div>
-        <div className="py-3 border-b border-[var(--border-subtle)]">
-          <div className="text-sm font-medium mb-1">Supported Go calls</div>
-          <div className="text-xs font-mono text-[var(--fg-muted)] flex flex-col gap-1 mt-1">
-            <span className="text-[var(--fg)]">digitalWrite(pin, HIGH/LOW)</span>
-            <span className="text-[var(--fg)]">analogWrite(pin, 0-255)</span>
-            <span className="text-[var(--fg-muted)]">digitalRead(pin)  — reads button state</span>
-            <span className="text-[var(--fg-muted)]">analogRead(pin)   — reads pot value</span>
-          </div>
-        </div>
-        <div className="py-3">
-          <div className="text-sm font-medium mb-1">Limitations (experimental)</div>
-          <div className="text-xs text-[var(--fg-muted)] leading-relaxed">
-            This is a static analysis simulation — it does not execute your Go code. Loops, conditionals, and state machines are not evaluated. For accurate simulation, load your compiled .hex into a dedicated emulator like SimAVR or Wokwi. This sandbox is primarily for circuit visualization and connectivity checks.
-          </div>
-        </div>
+      <GroupHeader title=".tsuki-circuit format" />
+      <div className="mt-3 mb-6">
+        <p className="text-xs text-[var(--fg-muted)] mb-3 leading-relaxed">
+          Circuits are stored as human-readable JSON in <span className="font-mono text-[var(--fg)]">.tsuki-circuit</span> files.
+        </p>
+        <pre className="bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4 text-xs font-mono text-[var(--fg-muted)] overflow-x-auto leading-5 whitespace-pre">
+          {CIRCUIT_FORMAT}
+        </pre>
       </div>
 
       <GroupHeader title="Keyboard shortcuts" />
       <div className="mt-3 grid grid-cols-2 gap-1.5">
         {[
-          ['S',          'Select / move tool'],
-          ['W',          'Wire tool'],
-          ['D',          'Delete tool'],
-          ['Del',        'Delete selected'],
-          ['Scroll',     'Zoom in / out'],
-          ['Alt + drag', 'Pan canvas'],
-          ['ESC',        'Cancel wire'],
+          ['S', 'Select / move'], ['W', 'Wire tool'], ['D', 'Delete tool'],
+          ['Del', 'Delete selected'], ['Scroll', 'Zoom'], ['Alt + drag', 'Pan'],
+          ['ESC', 'Cancel wire'],
         ].map(([key, desc]) => (
           <div key={key} className="flex items-center gap-2 py-1.5 border-b border-[var(--border-subtle)]">
             <kbd className="text-[10px] font-mono bg-[var(--surface-3)] border border-[var(--border)] rounded px-1.5 py-0.5 flex-shrink-0">{key}</kbd>
@@ -300,31 +502,13 @@ function SandboxTab() {
           </div>
         ))}
       </div>
-
-      <GroupHeader title="Visualización" />
-      <div className="mt-3 flex flex-col gap-0">
-        <SandboxSettingsFields />
-      </div>
     </div>
   )
 }
 
-function SandboxSettingsFields() {
-  const { settings, updateSetting } = useStore()
-  return (
-    <SettingsField
-      name="Flujo de corriente"
-      desc="Muestra una animación de puntos en movimiento sobre los cables activos durante la simulación. Desactivado por defecto."
-    >
-      <Toggle
-        on={settings.showCurrentFlow}
-        onToggle={() => updateSetting('showCurrentFlow', !settings.showCurrentFlow)}
-      />
-    </SettingsField>
-  )
-}
-
-// ── Appearance tab ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  Appearance tab
+// ─────────────────────────────────────────────────────────────────────────────
 
 function AppearanceTab() {
   const { settings, updateSetting } = useStore()
@@ -342,7 +526,7 @@ function AppearanceTab() {
               key={theme.id}
               onClick={() => updateSetting('ideTheme', theme.id)}
               className={clsx(
-                'relative rounded-lg border-2 p-3 cursor-pointer transition-all text-left group',
+                'relative rounded-lg border-2 p-3 cursor-pointer transition-all text-left',
                 active ? 'border-[var(--fg-muted)]' : 'border-[var(--border)] hover:border-[var(--fg-faint)]',
               )}
               style={{ background: theme.preview.bg }}
@@ -362,18 +546,14 @@ function AppearanceTab() {
                 </div>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium" style={{ color: theme.preview.fg }}>
-                  {theme.name}
-                </span>
+                <span className="text-[11px] font-medium" style={{ color: theme.preview.fg }}>{theme.name}</span>
                 {active && (
-                  <div className="w-3.5 h-3.5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+                  <div className="w-3.5 h-3.5 rounded-full bg-green-500 flex items-center justify-center">
                     <Check size={8} className="text-white" />
                   </div>
                 )}
               </div>
-              <div className="text-[9px] mt-0.5" style={{ color: theme.preview.fg, opacity: 0.4 }}>
-                {theme.base}
-              </div>
+              <div className="text-[9px] mt-0.5" style={{ color: theme.preview.fg, opacity: 0.4 }}>{theme.base}</div>
             </button>
           )
         })}
@@ -396,8 +576,7 @@ function AppearanceTab() {
             >
               <div className="flex gap-1 flex-shrink-0">
                 {st.swatches.map((color, i) => (
-                  <div key={i} className="w-3 h-3 rounded-full ring-1 ring-black/10" style={{ background: color }}
-                    title={['keyword', 'string', 'number', 'function', 'comment'][i]} />
+                  <div key={i} className="w-3 h-3 rounded-full ring-1 ring-black/10" style={{ background: color }} />
                 ))}
               </div>
               <span className="text-sm font-medium text-[var(--fg)] flex-1">{st.name}</span>
@@ -422,11 +601,29 @@ function AppearanceTab() {
           </span>
         </div>
       </SettingsField>
+
+      <GroupHeader title="Text Rendering" />
+      <SettingsField
+        name="Font smoothing"
+        desc="Controls how fonts are anti-aliased. If text looks blurry or too thin, try 'Crisp' or 'Subpixel'."
+      >
+        <Select
+          value={settings.fontRendering ?? 'auto'}
+          onChange={e => updateSetting('fontRendering', e.target.value as 'auto' | 'crisp' | 'smooth' | 'subpixel')}
+        >
+          <option value="auto">Auto (OS default)</option>
+          <option value="smooth">Smooth (antialiased)</option>
+          <option value="subpixel">Subpixel (sharper on LCD)</option>
+          <option value="crisp">Crisp (no smoothing)</option>
+        </Select>
+      </SettingsField>
     </div>
   )
 }
 
-// ── CLI tab ────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  CLI Tools tab
+// ─────────────────────────────────────────────────────────────────────────────
 
 function CliTab() {
   const { settings, updateSetting, addLog } = useStore()
@@ -442,7 +639,7 @@ function CliTab() {
       updateSetting(key, resolved)
       setToolStatus(s => ({ ...s, [tool]: 'ok' }))
       addLog('ok', `Detected ${tool}: ${resolved}`)
-    } catch (e) {
+    } catch {
       setToolStatus(s => ({ ...s, [tool]: 'warn' }))
       addLog('warn', `${tool} not found — set the full path manually or use Browse`)
     }
@@ -458,6 +655,7 @@ function CliTab() {
   return (
     <div>
       <SectionHeader title="CLI Tools" desc="Configure paths to the tsuki CLI and toolchain binaries." />
+
       <GroupHeader title="Tool Paths" />
       <SettingsField name="tsuki CLI path" desc="Path to the main tsuki CLI binary">
         <div className="flex gap-2">
@@ -468,73 +666,109 @@ function CliTab() {
           <Btn variant="outline" size="xs" onClick={() => browseExe('tsukiPath')} title="Browse"><FolderOpen size={11} /></Btn>
         </div>
       </SettingsField>
+      <SettingsField name="tsuki-flash path" desc="AVR/ESP compile toolchain — auto-detected by default">
+        <div className="flex gap-2">
+          <Input value={settings.tsukiFlashPath} onChange={e => updateSetting('tsukiFlashPath', e.target.value)} placeholder="auto" className="flex-1" />
+          <Btn variant="outline" size="xs" onClick={() => browseExe('tsukiFlashPath')}><FolderOpen size={11} /></Btn>
+        </div>
+      </SettingsField>
       <SettingsField name="tsuki-core path" desc="Rust transpiler — auto-detected by default">
         <Input value={settings.tsukiCorePath} onChange={e => updateSetting('tsukiCorePath', e.target.value)} placeholder="auto (recommended)" />
       </SettingsField>
-      <SettingsField name="arduino-cli path" desc="Required for compile and upload">
+      <SettingsField name="arduino-cli path" desc="Optional — required only if backend is set to arduino-cli">
         <div className="flex gap-2">
           <Input value={settings.arduinoCliPath} onChange={e => updateSetting('arduinoCliPath', e.target.value)} className="flex-1" />
           <Btn variant="outline" size="xs" onClick={() => detect('arduino', 'arduinoCliPath')} disabled={detecting === 'arduino'}>
             {detecting === 'arduino' ? <RefreshCw size={11} className="animate-spin" /> : 'Detect'}
           </Btn>
-          <Btn variant="outline" size="xs" onClick={() => browseExe('arduinoCliPath')} title="Browse"><FolderOpen size={11} /></Btn>
+          <Btn variant="outline" size="xs" onClick={() => browseExe('arduinoCliPath')}><FolderOpen size={11} /></Btn>
         </div>
       </SettingsField>
-      <SettingsField name="avrdude path" desc="Used by tsuki-flash for AVR boards">
+      <SettingsField name="avrdude path" desc="Used by tsuki-flash for AVR board uploads">
         <Input value={settings.avrDudePath} onChange={e => updateSetting('avrDudePath', e.target.value)} placeholder="auto" />
       </SettingsField>
+
       <GroupHeader title="Status" />
       <SettingsField name="tsuki CLI" desc="Main CLI binary">
-        <Badge variant={toolStatus.tsuki ?? 'ok'}>{toolStatus.tsuki === 'warn' ? 'Not found in PATH' : 'Found · v0.4.2'}</Badge>
+        <Badge variant={toolStatus.tsuki ?? 'ok'}>{toolStatus.tsuki === 'warn' ? 'Not found in PATH' : 'Found'}</Badge>
       </SettingsField>
       <SettingsField name="tsuki-core" desc="Rust transpiler">
-        <Badge variant={toolStatus.core ?? 'ok'}>{toolStatus.core === 'warn' ? 'Not found' : 'Found · v0.4.2'}</Badge>
+        <Badge variant={toolStatus.core ?? 'ok'}>{toolStatus.core === 'warn' ? 'Not found' : 'Found'}</Badge>
       </SettingsField>
-      <SettingsField name="arduino-cli" desc="Required for build + upload">
-        <Badge variant={toolStatus.arduino ?? 'warn'}>{toolStatus.arduino === 'ok' ? 'Found' : 'Not found in PATH'}</Badge>
+      <SettingsField name="arduino-cli" desc="Optional — only needed for arduino-cli backend">
+        <Badge variant={toolStatus.arduino ?? 'warn'}>{toolStatus.arduino === 'ok' ? 'Found' : 'Not in PATH'}</Badge>
       </SettingsField>
     </div>
   )
 }
 
-// ── Defaults tab ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  Defaults tab
+// ─────────────────────────────────────────────────────────────────────────────
 
 function DefaultsTab() {
   const { settings, updateSetting } = useStore()
   return (
     <div>
-      <SectionHeader title="Defaults" desc="Values written to ~/.config/tsuki/config.json" />
+      <SectionHeader title="Defaults" desc="Values written to ~/.config/tsuki/config.json on save." />
+
       <GroupHeader title="Build" />
       <SettingsField name="default_board" desc="Board when no --board flag is given">
         <Select value={settings.defaultBoard} onChange={e => updateSetting('defaultBoard', e.target.value)}>
-          {['uno','nano','mega','leonardo','micro','pro_mini_5v','esp32','esp8266','d1_mini','pico'].map(b => <option key={b} value={b}>{b}</option>)}
+          {['uno','nano','mega','leonardo','micro','pro_mini_5v','esp32','esp8266','d1_mini','pico'].map(b => (
+            <option key={b} value={b}>{b}</option>
+          ))}
         </Select>
       </SettingsField>
       <SettingsField name="default_baud" desc="Serial baud rate">
         <Select value={settings.defaultBaud} onChange={e => updateSetting('defaultBaud', e.target.value)}>
-          {['9600','19200','38400','57600','115200'].map(b => <option key={b} value={b}>{b}</option>)}
+          {['9600','19200','38400','57600','115200','230400'].map(b => <option key={b} value={b}>{b}</option>)}
         </Select>
       </SettingsField>
-      <SettingsField name="cpp_std" desc="C++ standard for arduino-cli">
+      <SettingsField name="cpp_std" desc="C++ standard passed to the compiler">
         <Select value={settings.cppStd} onChange={e => updateSetting('cppStd', e.target.value)}>
           {['c++11','c++14','c++17'].map(v => <option key={v} value={v}>{v}</option>)}
         </Select>
       </SettingsField>
-      <GroupHeader title="Behavior" />
-      <SettingsField name="verbose" desc="Show detailed CLI output"><Toggle on={settings.verbose} onToggle={() => updateSetting('verbose', !settings.verbose)} /></SettingsField>
-      <SettingsField name="auto_detect" desc="Auto-detect connected boards via USB"><Toggle on={settings.autoDetect} onToggle={() => updateSetting('autoDetect', !settings.autoDetect)} /></SettingsField>
-      <SettingsField name="color" desc="Enable colored terminal output"><Toggle on={settings.color} onToggle={() => updateSetting('color', !settings.color)} /></SettingsField>
+
+      <GroupHeader title="Packages" />
+      <SettingsField name="libs_dir" desc="Local directory where tsukilib packages are installed">
+        <Input value={settings.libsDir} onChange={e => updateSetting('libsDir', e.target.value)} placeholder="~/.tsuki/libs" />
+      </SettingsField>
+      <SettingsField name="registry_url" desc="Package registry endpoint">
+        <Input value={settings.registryUrl} onChange={e => updateSetting('registryUrl', e.target.value)} />
+      </SettingsField>
+      <SettingsField name="verify_signatures" desc="Verify Ed25519 signatures when installing packages">
+        <Toggle on={settings.verifySignatures} onToggle={() => updateSetting('verifySignatures', !settings.verifySignatures)} />
+      </SettingsField>
+
+      <GroupHeader title="Behaviour" />
+      <SettingsField name="verbose" desc="Show detailed CLI output by default">
+        <Toggle on={settings.verbose} onToggle={() => updateSetting('verbose', !settings.verbose)} />
+      </SettingsField>
+      <SettingsField name="auto_detect" desc="Auto-detect connected boards via USB">
+        <Toggle on={settings.autoDetect} onToggle={() => updateSetting('autoDetect', !settings.autoDetect)} />
+      </SettingsField>
+      <SettingsField name="color" desc="Enable colored terminal output">
+        <Toggle on={settings.color} onToggle={() => updateSetting('color', !settings.color)} />
+      </SettingsField>
+      <SettingsField name="compile_on_save" desc="Automatically compile when a file is saved">
+        <Toggle on={settings.compileOnSave} onToggle={() => updateSetting('compileOnSave', !settings.compileOnSave)} />
+      </SettingsField>
     </div>
   )
 }
 
-// ── Editor tab ─────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  Editor tab
+// ─────────────────────────────────────────────────────────────────────────────
 
 function EditorTab() {
   const { settings, updateSetting } = useStore()
   return (
     <div>
       <SectionHeader title="Editor" desc="Customise the code editing experience." />
+
       <GroupHeader title="Appearance" />
       <SettingsField name="Font size" desc="Code editor font size in pixels">
         <div className="flex items-center gap-2">
@@ -547,11 +781,43 @@ function EditorTab() {
           {['2','4','8'].map(v => <option key={v} value={v}>{v} spaces</option>)}
         </Select>
       </SettingsField>
-      <SettingsField name="Minimap" desc="Show code minimap on the right edge"><Toggle on={settings.minimap} onToggle={() => updateSetting('minimap', !settings.minimap)} /></SettingsField>
-      <SettingsField name="Word wrap" desc="Wrap long lines to viewport"><Toggle on={settings.wordWrap} onToggle={() => updateSetting('wordWrap', !settings.wordWrap)} /></SettingsField>
+      <SettingsField name="Indent with spaces" desc="Use spaces instead of tabs for indentation">
+        <Toggle on={settings.insertSpaces} onToggle={() => updateSetting('insertSpaces', !settings.insertSpaces)} />
+      </SettingsField>
+      <SettingsField name="Show line numbers" desc="Display line numbers in the gutter">
+        <Toggle on={settings.showLineNumbers} onToggle={() => updateSetting('showLineNumbers', !settings.showLineNumbers)} />
+      </SettingsField>
+      <SettingsField name="Highlight active line" desc="Highlight the line the cursor is on">
+        <Toggle on={settings.highlightActiveLine} onToggle={() => updateSetting('highlightActiveLine', !settings.highlightActiveLine)} />
+      </SettingsField>
+      <SettingsField name="Minimap" desc="Show code minimap on the right edge">
+        <Toggle on={settings.minimap} onToggle={() => updateSetting('minimap', !settings.minimap)} />
+      </SettingsField>
+      <SettingsField name="Word wrap" desc="Wrap long lines to viewport">
+        <Toggle on={settings.wordWrap} onToggle={() => updateSetting('wordWrap', !settings.wordWrap)} />
+      </SettingsField>
+
       <GroupHeader title="Formatting" />
-      <SettingsField name="Format on save" desc="Run gofmt on file save"><Toggle on={settings.formatOnSave} onToggle={() => updateSetting('formatOnSave', !settings.formatOnSave)} /></SettingsField>
-      <SettingsField name="Trim trailing whitespace" desc="Remove trailing spaces on save"><Toggle on={settings.trimWhitespace} onToggle={() => updateSetting('trimWhitespace', !settings.trimWhitespace)} /></SettingsField>
+      <SettingsField name="Format on save" desc="Run gofmt automatically on file save">
+        <Toggle on={settings.formatOnSave} onToggle={() => updateSetting('formatOnSave', !settings.formatOnSave)} />
+      </SettingsField>
+      <SettingsField name="Trim trailing whitespace" desc="Remove trailing spaces when saving">
+        <Toggle on={settings.trimWhitespace} onToggle={() => updateSetting('trimWhitespace', !settings.trimWhitespace)} />
+      </SettingsField>
+      <SettingsField name="Save on focus loss" desc="Auto-save when the editor loses focus">
+        <Toggle on={settings.saveOnFocusLoss} onToggle={() => updateSetting('saveOnFocusLoss', !settings.saveOnFocusLoss)} />
+      </SettingsField>
+
+      <GroupHeader title="Intelligence" />
+      <SettingsField name="Auto-close brackets" desc="Automatically insert matching brackets and quotes">
+        <Toggle on={settings.autoCloseBrackets} onToggle={() => updateSetting('autoCloseBrackets', !settings.autoCloseBrackets)} />
+      </SettingsField>
+      <SettingsField name="Language server (LSP)" desc="Enable tsuki-lsp for completions, diagnostics, and hover docs">
+        <div className="flex items-center gap-2">
+          <Toggle on={settings.lspEnabled} onToggle={() => updateSetting('lspEnabled', !settings.lspEnabled)} />
+          <span className="text-[10px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">soon</span>
+        </div>
+      </SettingsField>
     </div>
   )
 }

@@ -1,8 +1,9 @@
 'use client'
 import { useStore, FileNode } from '@/lib/store'
 import { IconBtn } from '@/components/ui/primitives'
-import { FilePlus, FolderPlus, RotateCcw, ChevronRight, File, Folder, FolderOpen, Pencil, Trash2 } from 'lucide-react'
+import { FilePlus, FolderPlus, RotateCcw, ChevronRight, File, Folder, FolderOpen, Pencil, Trash2, Copy, Clipboard } from 'lucide-react'
 import { useState, useRef } from 'react'
+import { showContextMenu } from '@/components/ui/ContextMenu'
 
 function getFileColor(ext?: string): string {
   const map: Record<string, string> = {
@@ -91,6 +92,40 @@ function TreeNode({ nodeId, depth, activeFileId, onOpen }: {
             : 'text-[var(--fg-muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]'
           }`}
         onClick={toggle}
+        onContextMenu={e => {
+          showContextMenu(e, [
+            ...(!isDir ? [{
+              label: 'Open',
+              icon: <File size={10} />,
+              action: () => onOpen(n.id),
+            }] : []),
+            {
+              label: 'Rename',
+              icon: <Pencil size={10} />,
+              shortcut: 'F2',
+              disabled: n.id === 'root',
+              action: () => { setRenameVal(n.name); setRenaming(true); setTimeout(() => renameRef.current?.select(), 10) },
+            },
+            {
+              label: 'Copy name',
+              icon: <Copy size={10} />,
+              action: () => navigator.clipboard.writeText(n.name).catch(() => {}),
+            },
+            {
+              label: 'Copy path',
+              icon: <Copy size={10} />,
+              action: () => navigator.clipboard.writeText(n.path ?? n.name).catch(() => {}),
+            },
+            {
+              label: 'Delete',
+              icon: <Trash2 size={10} />,
+              danger: true,
+              sep: true,
+              disabled: ['root','src','build','manifest','gitignore'].includes(n.id),
+              action: () => deleteNode(n.id),
+            },
+          ])
+        }}
       >
         {isActive && (
           <span className="absolute left-0 top-0 bottom-0 w-[2px] bg-[var(--fg)]" />

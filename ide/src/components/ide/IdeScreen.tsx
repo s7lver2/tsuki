@@ -14,6 +14,7 @@ import {
   Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, ChevronLeft,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { showContextMenu } from '@/components/ui/ContextMenu'
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
@@ -302,6 +303,12 @@ export default function IdeScreen() {
               <div
                 key={tab.fileId}
                 onClick={() => openFile(tab.fileId)}
+                onContextMenu={e => showContextMenu(e, [
+                  { label: 'Close',             action: () => closeTab(i) },
+                  { label: 'Close Others',      action: () => openTabs.forEach((_, j) => j !== i && closeTab(j > i ? openTabs.length - 1 - (j - i) : j)), sep: false },
+                  { label: 'Copy filename',     action: () => navigator.clipboard.writeText(tab.name).catch(() => {}), sep: true },
+                  { label: 'Save',              shortcut: 'Ctrl+S', action: () => saveActiveFile() },
+                ])}
                 className={clsx(
                   'flex items-center gap-1.5 px-3 h-full rounded-t border-t cursor-pointer text-xs font-medium transition-colors flex-shrink-0 group',
                   i === activeTabIdx

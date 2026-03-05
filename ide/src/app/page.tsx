@@ -2,15 +2,16 @@
 import { useStore } from '@/lib/store'
 import { useEffect } from 'react'
 import dynamic from 'next/dynamic'
+import { ContextMenuProvider } from '@/components/ui/ContextMenu'
 
 const WelcomeScreen  = dynamic(() => import('@/components/ide/WelcomeScreen'),  { ssr: false })
 const IdeScreen      = dynamic(() => import('@/components/ide/IdeScreen'),      { ssr: false })
 const SettingsScreen = dynamic(() => import('@/components/ide/SettingsScreen'), { ssr: false })
+const DocsScreen     = dynamic(() => import('@/components/docs/DocsScreen'),     { ssr: false })
 
 export default function Page() {
   const screen = useStore(s => s.screen)
 
-  // Load persisted settings on first mount
   useEffect(() => {
     import('@/lib/tauri').then(async ({ loadSettings }) => {
       try {
@@ -28,6 +29,8 @@ export default function Page() {
       {screen === 'welcome'  && <WelcomeScreen />}
       {screen === 'ide'      && <IdeScreen />}
       {screen === 'settings' && <SettingsScreen />}
+      {screen === 'docs'     && <DocsScreen />}
+      <ContextMenuProvider />
     </main>
   )
 }

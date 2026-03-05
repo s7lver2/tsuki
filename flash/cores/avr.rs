@@ -35,7 +35,6 @@
 
 use std::path::PathBuf;
 use colored::Colorize;
-use rayon::prelude::*;
 
 use crate::error::{FlashError, Result};
 use crate::sdk::SdkPaths;
@@ -53,59 +52,11 @@ pub const AVR_CORE_VERSION: &str = "1.8.6";
 pub const AVR_GCC_VERSION: &str = "7.3.0-atmel3.6.1-arduino7";
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Core archive  (architecture-independent)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const CORE_URL: &str =
-    "https://downloads.arduino.cc/cores/avr-1.8.6.tar.bz2";
-// SHA-256 from package_index.json — skip verification by setting to None
-// if you need to update the pinned version.
-const CORE_SHA256: &str =
-    "SHA-256:35b519f9602c40ef4ea7e07d2d3494c2d7f7e6c17aa84d11c59cfce2a38a4e61";
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  Toolchain archives — one per OS/CPU triple
-//  Checksums from package_index.json arduino namespace, avr-gcc tool entries
+//  Used only by the fast-path build_sdk_paths(); actual downloads go through
+//  the generic cores::install() which reads the live package_index.json.
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct TcEntry {
-    host:     &'static str,
-    url:      &'static str,
-    checksum: Option<&'static str>,
-}
-
-static TOOLCHAIN: &[TcEntry] = &[
-    TcEntry {
-        host: "x86_64-pc-linux-gnu",
-        url:  "https://downloads.arduino.cc/tools/avr-gcc-7.3.0-atmel3.6.1-arduino7-x86_64-pc-linux-gnu.tar.bz2",
-        checksum: Some("SHA-256:3903553d035da59e33cff9941b857c3cb379cb0638105dfdf69c97f0acc8e7b"),
-    },
-    TcEntry {
-        host: "i686-pc-linux-gnu",
-        url:  "https://downloads.arduino.cc/tools/avr-gcc-7.3.0-atmel3.6.1-arduino7-i686-pc-linux-gnu.tar.bz2",
-        checksum: None,
-    },
-    TcEntry {
-        host: "aarch64-linux-gnu",
-        url:  "https://downloads.arduino.cc/tools/avr-gcc-7.3.0-atmel3.6.1-arduino7-aarch64-pc-linux-gnu.tar.bz2",
-        checksum: None,
-    },
-    TcEntry {
-        host: "x86_64-apple-darwin",
-        url:  "https://downloads.arduino.cc/tools/avr-gcc-7.3.0-atmel3.6.1-arduino7-x86_64-apple-darwin.tar.bz2",
-        checksum: Some("SHA-256:040219caa9d1af6c7ad95803f3f5e5dbfee26b41a37f8a4b3e30069a44c43f3b"),
-    },
-    TcEntry {
-        host: "arm64-apple-darwin",
-        url:  "https://downloads.arduino.cc/tools/avr-gcc-7.3.0-atmel3.6.1-arduino7-arm64-apple-darwin.tar.bz2",
-        checksum: None,
-    },
-    TcEntry {
-        host: "i686-mingw32",
-        url:  "https://downloads.arduino.cc/tools/avr-gcc-7.3.0-atmel3.6.1-arduino7-i686-mingw32.zip",
-        checksum: None,
-    },
-];
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Optimized compile flags
@@ -183,106 +134,30 @@ pub fn ensure(verbose: bool) -> Result<SdkPaths> {
 /// Known variants: `standard`, `micro`, `leonardo`, `mega`, `eightanaloginputs`.
 pub fn ensure_variant(variant: &str, verbose: bool) -> Result<SdkPaths> {
     let root = modules_root()?;
+    let hw_base = root.join("packages").join("arduino").join("hardware").join("avr");
+    let tc_base = root.join("packages").join("arduino").join("tools").join("avr-gcc");
 
-    let core_dir = root
-        .join("packages").join("arduino")
-        .join("hardware").join("avr")
-        .join(AVR_CORE_VERSION);
-    let tc_dir = root
-        .join("packages").join("arduino")
-        .join("tools").join("avr-gcc")
-        .join(AVR_GCC_VERSION);
+    // ── Fast path: both core headers AND toolchain bin must be present ────
+    let core_ready = latest_installed_dir(&hw_base)
+        .filter(|d| d.join("cores").join("arduino").is_dir());
+    let tc_ready = latest_installed_dir(&tc_base)
+        .filter(|d| d.join("bin").is_dir());
 
-    // ── Fast path ─────────────────────────────────────────────────────────
-    if core_dir.join("cores").join("arduino").is_dir()
-        && tc_dir.join("bin").is_dir()
-    {
+    if let (Some(core_dir), Some(tc_dir)) = (core_ready, tc_ready) {
         if verbose {
-            eprintln!(
-                "  [avr-module] cached  core {}  gcc {}",
-                AVR_CORE_VERSION, AVR_GCC_VERSION
-            );
+            eprintln!("  [avr-module] cached  core {}", core_dir.file_name()
+                .map(|n| n.to_string_lossy()).unwrap_or_default());
         }
         return build_sdk_paths(&root, &core_dir, &tc_dir, variant);
     }
 
-    // ── Slow path: resolve toolchain for this host ────────────────────────
-    let host = current_host();
-    let tc   = pick_toolchain(&host).ok_or_else(|| FlashError::Other(format!(
-        "No AVR toolchain available for host '{}'.\n  \
-         Supported: x86_64-linux, aarch64-linux, x86_64-darwin, arm64-darwin, i686-mingw32",
-        host
-    )))?;
+    // ── Slow path: delegate to the generic installer which fetches the live
+    // package_index.json and resolves correct URLs automatically. ─────────────
+    super::install("avr", verbose)
+        .map_err(|e| FlashError::Other(format!("AVR SDK install failed — {}", e)))?;
 
-    println!(
-        "{} Installing AVR SDK  (core {}  /  gcc {})",
-        "→".cyan().bold(),
-        AVR_CORE_VERSION.bold(),
-        AVR_GCC_VERSION.bold(),
-    );
-
-    // ── Build work list for rayon parallel download ───────────────────────
-    struct Work {
-        url:      &'static str,
-        checksum: Option<&'static str>,
-        dest:     PathBuf,
-        label:    &'static str,
-    }
-
-    let mut jobs: Vec<Work> = Vec::with_capacity(2);
-
-    if !core_dir.join("cores").join("arduino").is_dir() {
-        jobs.push(Work {
-            url:      CORE_URL,
-            checksum: Some(CORE_SHA256),
-            dest:     core_dir.clone(),
-            label:    "core  arduino:avr",
-        });
-    }
-    if !tc_dir.join("bin").is_dir() {
-        jobs.push(Work {
-            url:      tc.url,
-            checksum: tc.checksum,
-            dest:     tc_dir.clone(),
-            label:    "toolchain  avr-gcc",
-        });
-    }
-
-    // Parallel download + extract
-    let errors: Vec<String> = jobs.par_iter().filter_map(|job| {
-        println!("  {}  Downloading {}…", "↓".cyan(), job.label.bold());
-        match download_and_extract(job.url, job.checksum, &job.dest, verbose) {
-            Ok(()) => {
-                println!("  {}  {}", "✓".green().bold(), job.label.bold());
-                None
-            }
-            Err(e) => Some(format!("{}: {}", job.label, e)),
-        }
-    }).collect();
-
-    if !errors.is_empty() {
-        // Single-line message so it displays cleanly in both terminal and Go traceback.
-        let detail = errors.iter()
-            .map(|e| e.replace('\n', " ").replace("  ", " "))
-            .collect::<Vec<_>>()
-            .join(" | ");
-        return Err(FlashError::Other(format!(
-            "AVR SDK install failed — {}",
-            detail
-        )));
-    }
-
-    write_installed_manifest(&root, "avr", AVR_CORE_VERSION)?;
-
-    println!(
-        "\n  {} AVR SDK ready  ({})\n  {} Compile with: {}",
-        "✓".green().bold(),
-        root.display().to_string().dimmed(),
-        "→".cyan(),
-        "tsuki build --compile --backend tsuki-flash+cores".bold(),
-    );
-
-    build_sdk_paths(&root, &core_dir, &tc_dir, variant)
+    // After install, sdk_paths() will find the newly-downloaded directories.
+    sdk_paths(variant)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -291,26 +166,44 @@ pub fn ensure_variant(variant: &str, verbose: bool) -> Result<SdkPaths> {
 
 /// Return `SdkPaths` for the already-installed AVR SDK — no download.
 ///
+/// Scans `~/.tsuki/modules/packages/arduino/hardware/avr/` for any installed
+/// version directory rather than relying on the pinned compile-time constants,
+/// so it works regardless of which version `cores::install()` downloaded.
+///
 /// Returns `SdkNotFound` if the SDK is absent. Call `ensure()` to auto-install.
 pub fn sdk_paths(variant: &str) -> Result<SdkPaths> {
     let root = modules_root()?;
-    let core_dir = root
-        .join("packages").join("arduino")
-        .join("hardware").join("avr")
-        .join(AVR_CORE_VERSION);
-    let tc_dir = root
-        .join("packages").join("arduino")
-        .join("tools").join("avr-gcc")
-        .join(AVR_GCC_VERSION);
+    let hw_base = root.join("packages").join("arduino").join("hardware").join("avr");
+    let tc_base = root.join("packages").join("arduino").join("tools").join("avr-gcc");
 
-    if !core_dir.join("cores").join("arduino").is_dir() {
-        return Err(FlashError::SdkNotFound {
-            arch:  "avr".into(),
-            path:  core_dir.display().to_string(),
-            pkg:   "tsuki-flash modules install avr".into(),
-        });
-    }
+    // Find the newest installed core version directory.
+    let core_dir = latest_installed_dir(&hw_base).ok_or_else(|| FlashError::SdkNotFound {
+        arch:  "avr".into(),
+        path:  hw_base.display().to_string(),
+        pkg:   "tsuki-flash modules install avr".into(),
+    })?;
+
+    // Find the newest installed toolchain version directory.
+    let tc_dir = latest_installed_dir(&tc_base).unwrap_or_else(|| PathBuf::from(""));
+
     build_sdk_paths(&root, &core_dir, &tc_dir, variant)
+}
+
+/// Return the newest version subdirectory inside `base`, or `None` if absent.
+fn latest_installed_dir(base: &std::path::Path) -> Option<PathBuf> {
+    let mut versions: Vec<String> = std::fs::read_dir(base)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    if versions.is_empty() { return None; }
+    versions.sort_by(|a, b| {
+        let va: Vec<u32> = a.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+        let vb: Vec<u32> = b.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+        vb.cmp(&va)
+    });
+    Some(base.join(&versions[0]))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -322,13 +215,11 @@ pub fn sdk_paths(variant: &str) -> Result<SdkPaths> {
 /// Single `Path::is_dir()` — no IO errors, safe to call in hot paths.
 pub fn is_ready() -> bool {
     modules_root()
-        .map(|r| {
-            r.join("packages").join("arduino")
-             .join("hardware").join("avr")
-             .join(AVR_CORE_VERSION)
-             .join("cores").join("arduino")
-             .is_dir()
+        .ok()
+        .and_then(|r| {
+            latest_installed_dir(&r.join("packages").join("arduino").join("hardware").join("avr"))
         })
+        .map(|d| d.join("cores").join("arduino").is_dir())
         .unwrap_or(false)
 }
 
@@ -375,23 +266,4 @@ fn build_sdk_paths(
         libraries_dir,
         sdk_version:   AVR_CORE_VERSION.into(),
     })
-}
-
-fn pick_toolchain(host: &str) -> Option<&'static TcEntry> {
-    TOOLCHAIN.iter().find(|e| {
-        (e.host.contains("linux-gnu") && host.contains("linux"))
-        || (e.host.contains("apple")   && host.contains("apple"))
-        || (e.host.contains("mingw")   && host.contains("mingw"))
-        || e.host == host
-    })
-}
-
-fn current_host() -> String {
-    #[cfg(all(target_os = "linux",   target_arch = "x86_64"))]  { return "x86_64-pc-linux-gnu".into(); }
-    #[cfg(all(target_os = "linux",   target_arch = "aarch64"))] { return "aarch64-linux-gnu".into(); }
-    #[cfg(all(target_os = "macos",   target_arch = "x86_64"))]  { return "x86_64-apple-darwin".into(); }
-    #[cfg(all(target_os = "macos",   target_arch = "aarch64"))] { return "arm64-apple-darwin".into(); }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]  { return "i686-mingw32".into(); }
-    #[allow(unreachable_code)]
-    "unknown".into()
 }
