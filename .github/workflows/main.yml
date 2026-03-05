@@ -1,71 +1,67 @@
-name: Build and Release
-
+name: CI Build
+ 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
-    branches:
-      - main
-  release:
-    types: [published]
-
+    branches: [ main ]
+ 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        arch: [x64] # Puedes agregar 'arm64' si tu proyecto lo soporta
+        include:
+          - os: ubuntu-latest
+            platform: linux-amd64
+          - os: windows-latest
+            platform: windows-amd64
+          - os: macos-latest
+            platform: darwin-arm64  # Assuming macos-latest is arm64; adjust if needed
+ 
     steps:
-      - uses: actions/checkout@v3
-
+      - name: Checkout repository
+        uses: actions/checkout@v4
+ 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x' # O la versión que uses en tu script
-
-      #- name: Install Python dependencies
-      #  run: pip install -r requirements.txt # Si tienes un archivo de requirements
-
-      - name: Map platform names
-        id: platform_mapping
+          python-version: '3.x'
+ 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'  # Matches the repo's Go version
+ 
+      - name: Set up Rust
+        uses: actions/setup-rust@v1  # Or use rust-lang/setup-rust
+        with:
+          rust-version: stable
+ 
+      - name: Set up Node.js for Tauri
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'  # Suitable for Tauri
+ 
+      - name: Install dependencies
         run: |
-          PLATFORM=""
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            PLATFORM="linux-amd64"
-          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            PLATFORM="windows-amd64"
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            PLATFORM="darwin-amd64"
+          # Any additional deps if needed, e.g., for cross-compilation
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y libclang-dev libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
           fi
-          echo "::set-output name=platform::$PLATFORM"
-
-      - name: Build for ${{ matrix.os }} ${{ matrix.arch }}
-        run: |
-          python build.py --platform ${{ steps.platform_mapping.outputs.platform }}
-          # Si quieres omitir alguna parte del build, puedes usar:
-          # python build.py --platform ${{ steps.platform_mapping.outputs.platform }} --skip-go --skip-rust --skip-ide
-
+          # Add for other OS if required by Tauri/Rust
+ 
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup -y
+ 
+      - name: Build with build.py
+        run: python build.py --platform ${{ matrix.platform }} --no-clean  # Use --no-clean to avoid cleaning in CI
+ 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tsuki-${{ matrix.os }}-${{ matrix.arch }}
-          path: releases/* # Asumiendo que build.py guarda los instaladores en la carpeta "releases"
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        with:
-          files: artifacts/**/* # Ajusta la ruta si es necesario
-          generate_release_notes: true
-          working-directory: artifacts # Especifica el directorio de trabajo
+          name: ${{ matrix.platform }}-build
+          path: releases/*  # Assuming packages are in releases/ as per build.py
