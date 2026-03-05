@@ -40,13 +40,12 @@
 //      cpp = "NEO_KHZ800"
 // ─────────────────────────────────────────────────────────────────────────────
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::fs;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{tsukiError, Result};
+use crate::error::{TsukiError, Result};
 use crate::runtime::{FnMap, PkgMap};
 
 // ── TOML schema ───────────────────────────────────────────────────────────────
@@ -118,7 +117,7 @@ pub struct LoadedLib {
 /// Load a library from a `tsukilib.toml` file.
 pub fn load_from_file(path: &Path) -> Result<LoadedLib> {
     let raw = fs::read_to_string(path).map_err(|e| {
-        tsukiError::codegen(format!("cannot read {}: {}", path.display(), e))
+        TsukiError::codegen(format!("cannot read {}: {}", path.display(), e))
     })?;
     load_from_str(&raw, path)
 }
@@ -126,7 +125,7 @@ pub fn load_from_file(path: &Path) -> Result<LoadedLib> {
 /// Parse a library from a TOML string (path is used only for error messages).
 pub fn load_from_str(toml_str: &str, path: &Path) -> Result<LoadedLib> {
     let manifest: LibManifest = toml::from_str(toml_str).map_err(|e| {
-        tsukiError::codegen(format!(
+        TsukiError::codegen(format!(
             "malformed tsukilib.toml at {}: {}",
             path.display(), e
         ))
@@ -237,7 +236,7 @@ pub fn load_all(libs_dir: &Path) -> Vec<LoadedLib> {
 /// HTTP fetching so this stays sync + no async runtime needed.
 pub fn install_from_toml(libs_dir: &Path, toml_str: &str) -> Result<String> {
     let manifest: LibManifest = toml::from_str(toml_str).map_err(|e| {
-        tsukiError::codegen(format!("invalid tsukilib.toml: {}", e))
+        TsukiError::codegen(format!("invalid tsukilib.toml: {}", e))
     })?;
 
     let pkg_name = &manifest.package.name;
@@ -245,12 +244,12 @@ pub fn install_from_toml(libs_dir: &Path, toml_str: &str) -> Result<String> {
     let dest_dir = libs_dir.join(pkg_name).join(version);
 
     fs::create_dir_all(&dest_dir).map_err(|e| {
-        tsukiError::codegen(format!("cannot create {}: {}", dest_dir.display(), e))
+        TsukiError::codegen(format!("cannot create {}: {}", dest_dir.display(), e))
     })?;
 
     let dest_file = dest_dir.join("tsukilib.toml");
     fs::write(&dest_file, toml_str).map_err(|e| {
-        tsukiError::codegen(format!("cannot write {}: {}", dest_file.display(), e))
+        TsukiError::codegen(format!("cannot write {}: {}", dest_file.display(), e))
     })?;
 
     Ok(format!("installed {}@{} → {}", pkg_name, version, dest_dir.display()))

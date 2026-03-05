@@ -8,9 +8,10 @@ import GitSidebar from './GitSidebar'
 import PackagesSidebar from './PackagesSidebar'
 import CodeEditor from './CodeEditor'
 import BottomPanel from './BottomPanel'
+import SandboxPanel from '../sandbox/SandboxPanel'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
-  Terminal, Sun, Moon, X, ChevronRight, Package,
+  Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, ChevronLeft,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -29,6 +30,9 @@ export default function IdeScreen() {
   } = useStore()
 
   const [showNewProjectModal, setShowNewProjectModal] = useState(false)
+  const [sandboxOpen, setSandboxOpen] = useState(false)
+  const [sandboxWidth, setSandboxWidth] = useState(480)
+  const [resizing, setResizing] = useState(false)
 
   const activeTab  = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
   const activeNode = activeTab ? tree.find(n => n.id === activeTab.fileId) : null
@@ -36,48 +40,21 @@ export default function IdeScreen() {
     ? tree.find(p => p.type === 'dir' && p.children?.includes(activeNode.id) && p.id !== 'root')
     : null
 
-  // tsuki binary: puede ser ruta completa o solo "tsuki" si está en PATH
-  // Strip surrounding quotes that can sneak in from auto-detect or copy-paste
-  const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^"|"$/g, '')
+  const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^\"|\"$/g, '')
   const cwd   = projectPath || undefined
 
-  /**
-   * Despacha un comando a la terminal.
-   * El componente Terminal registra window.__terminalSpawn al montarse.
-   * Si todavía no existe (terminal no visible), cambiamos el tab primero
-   * y esperamos un tick a que React renderice.
-   */
   function dispatch(args: string[]) {
     setBottomTab('terminal')
-
     function fire() {
       const fn = (window as any).__terminalSpawn
-      if (fn) {
-        fn(tsuki, args, cwd)
-      } else {
-        // Terminal aún no montada — reintentamos en el siguiente frame
-        requestAnimationFrame(() => {
-          ;(window as any).__terminalSpawn?.(tsuki, args, cwd)
-        })
-      }
+      if (fn) fn(tsuki, args, cwd)
+      else requestAnimationFrame(() => { ;(window as any).__terminalSpawn?.(tsuki, args, cwd) })
     }
-
-    // Si el tab ya era 'terminal' el componente ya está montado; si no,
-    // esperamos un tick para que React lo renderice.
     const currentTab = useStore.getState().bottomTab
-    if (currentTab === 'terminal') {
-      fire()
-    } else {
-      setTimeout(fire, 80)
-    }
+    if (currentTab === 'terminal') fire()
+    else setTimeout(fire, 80)
   }
 
-  // ── Botones → comandos tsuki exactos ─────────────────────────────────────
-
-  /**
-   * tsuki check [--board <id>]
-   * Valida la sintaxis Go sin compilar.
-   */
   function handleCheck() {
     const args = ['check']
     if (board) args.push('--board', board)
@@ -85,12 +62,6 @@ export default function IdeScreen() {
     dispatch(args)
   }
 
-  /**
-   * tsuki build --compile [--board <id>] [--cpp-std <std>]
-   *
-   * Sin --compile solo transpila Go→C++.
-   * Con --compile también compila el firmware (.hex) con tsuki-flash.
-   */
   function handleBuild() {
     const args = ['build', '--compile']
     if (board)            args.push('--board', board)
@@ -98,11 +69,6 @@ export default function IdeScreen() {
     dispatch(args)
   }
 
-  /**
-   * tsuki flash [--board <id>]
-   * Sube el .hex compilado al microcontrolador.
-   * El puerto serie se auto-detecta por VID:PID (tsuki-flash detect).
-   */
   function handleFlash() {
     const args = ['flash']
     if (board)            args.push('--board', board)
@@ -110,57 +76,34 @@ export default function IdeScreen() {
     dispatch(args)
   }
 
-  /**
-   * Run = build --compile && flash
-   * Construimos dos llamadas secuenciales. La segunda se encadena
-   * esperando al done del primero.
-   */
   async function handleRun() {
     setBottomTab('terminal')
-
     const buildArgs = ['build', '--compile']
     if (board)            buildArgs.push('--board', board)
     if (settings.verbose) buildArgs.push('--verbose')
-
     const flashArgs = ['flash']
     if (board)            flashArgs.push('--board', board)
     if (settings.verbose) flashArgs.push('--verbose')
-
     async function chainRun() {
       const fn = (window as any).__terminalSpawn
       if (!fn) return
       const handle = await fn(tsuki, buildArgs, cwd)
       if (!handle) return
       const code = await handle.done
-      if (code === 0) {
-        // Build OK → flash
-        await fn(tsuki, flashArgs, cwd)
-      }
+      if (code === 0) await fn(tsuki, flashArgs, cwd)
     }
-
     const currentTab = useStore.getState().bottomTab
-    if (currentTab === 'terminal') {
-      chainRun()
-    } else {
-      setTimeout(chainRun, 80)
-    }
+    if (currentTab === 'terminal') chainRun()
+    else setTimeout(chainRun, 80)
   }
 
-  /**
-   * tsuki monitor [--baud <n>]
-   * Monitor serie interactivo — el proceso se mantiene vivo,
-   * el input del usuario se envía directamente al stdin.
-   */
   function handleMonitor() {
     const args = ['monitor']
-    if (settings.defaultBaud && settings.defaultBaud !== '9600') {
-      args.push('--baud', settings.defaultBaud)
-    }
+    if (settings.defaultBaud && settings.defaultBaud !== '9600') args.push('--baud', settings.defaultBaud)
     if (settings.verbose) args.push('--verbose')
     dispatch(args)
   }
 
-  // ── Global keyboard shortcuts (after all handlers are defined) ────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey
@@ -173,13 +116,11 @@ export default function IdeScreen() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  })   // no deps array → always fresh handlers, removes/re-adds each render (cheap)
+  })
 
   useEffect(() => {
     const currentPath = settings.tsukiPath?.trim()
-    // Solo auto-detectar si no hay ruta absoluta guardada
     const isAbsolutePath = currentPath?.includes('\\') || currentPath?.includes('/')
-    
     if (!isAbsolutePath) {
       import('@/lib/tauri').then(({ detectTool }) => {
         detectTool('tsuki')
@@ -188,13 +129,23 @@ export default function IdeScreen() {
             useStore.getState().addLog('ok', `tsuki found: ${resolved}`)
           })
           .catch(() => {
-            useStore.getState().addLog('warn',
-              'tsuki not found in PATH. Go to Settings → CLI Tools → set full path.'
-            )
+            useStore.getState().addLog('warn', 'tsuki not found in PATH. Go to Settings → CLI Tools → set full path.')
           })
       })
     }
   }, [])
+
+  // ── Sandbox resize handle ──
+  useEffect(() => {
+    if (!resizing) return
+    function onMove(e: MouseEvent) {
+      setSandboxWidth(w => Math.max(320, Math.min(900, w + (document.body.clientWidth - e.clientX - w))))
+    }
+    function onUp() { setResizing(false) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [resizing])
 
   return (
     <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
@@ -202,7 +153,6 @@ export default function IdeScreen() {
       {/* ── Topbar ── */}
       <div className="h-10 flex items-center gap-1 px-3 border-b border-[var(--border)] flex-shrink-0 bg-[var(--surface-1)]">
 
-        {/* Logo + nombre proyecto */}
         <div className="flex items-center gap-2 mr-1 min-w-0 max-w-[240px]">
           <div className="w-5 h-5 rounded bg-[var(--fg)] flex items-center justify-center flex-shrink-0">
             <span className="text-[var(--surface)] font-mono font-bold text-[10px]">G</span>
@@ -221,7 +171,6 @@ export default function IdeScreen() {
 
         <Divider vertical />
 
-        {/* Board selector */}
         <select
           value={board}
           onChange={e => setBoard(e.target.value)}
@@ -232,23 +181,19 @@ export default function IdeScreen() {
 
         <Divider vertical />
 
-        {/* ── Acciones (comandos tsuki exactos) ── */}
         <Btn variant="ghost" size="xs" onClick={handleCheck}
-          title={`${tsuki} check${board ? ' --board ' + board : ''}`}
-        >
+          title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
           <Check size={12} /> Check
         </Btn>
 
         <Btn variant="ghost" size="xs" onClick={handleBuild}
-          title={`${tsuki} build --compile${board ? ' --board ' + board : ''}`}
-        >
+          title={`${tsuki} build --compile${board ? ' --board ' + board : ''}`}>
           <Zap size={12} /> Build
         </Btn>
 
         <Btn variant="ghost" size="xs" onClick={handleFlash}
           title={`${tsuki} flash${board ? ' --board ' + board : ''}`}
-          className="!text-green-400 hover:!text-green-400"
-        >
+          className="!text-green-400 hover:!text-green-400">
           <Upload size={12} /> Flash
         </Btn>
 
@@ -263,12 +208,27 @@ export default function IdeScreen() {
         <Divider vertical />
 
         <Btn variant="ghost" size="xs" onClick={handleMonitor}
-          title={`${tsuki} monitor${settings.defaultBaud !== '9600' ? ' --baud ' + settings.defaultBaud : ''}`}
-        >
+          title={`${tsuki} monitor${settings.defaultBaud !== '9600' ? ' --baud ' + settings.defaultBaud : ''}`}>
           <Terminal size={12} /> Monitor
         </Btn>
 
         <div className="flex-1" />
+
+        {/* ── Sandbox toggle ── */}
+        <button
+          onClick={() => setSandboxOpen(o => !o)}
+          title="Tsuki Sandbox — Arduino circuit simulator"
+          className={clsx(
+            'flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium transition-colors cursor-pointer flex-shrink-0',
+            sandboxOpen
+              ? 'bg-[var(--active)] border-[var(--border)] text-[var(--fg)]'
+              : 'bg-transparent border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+          )}
+        >
+          <Cpu size={11} />
+          Sandbox
+          <span className="text-[9px] opacity-60 font-mono">β</span>
+        </button>
 
         <Btn variant="ghost" size="xs" onClick={toggleTheme}>
           {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
@@ -320,7 +280,7 @@ export default function IdeScreen() {
           </button>
         </div>
 
-        {/* Sidebar */}
+        {/* Left sidebar */}
         <div className={clsx(
           'bg-[var(--surface-1)] border-r border-[var(--border)] flex-shrink-0 overflow-hidden transition-all duration-150',
           sidebarOpen ? 'w-56' : 'w-0',
@@ -330,8 +290,8 @@ export default function IdeScreen() {
           {sidebarOpen && sidebarTab === 'packages' && <PackagesSidebar />}
         </div>
 
-        {/* Editor + panel */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Editor + bottom panel */}
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
           {/* Tab bar */}
           <div
@@ -380,11 +340,47 @@ export default function IdeScreen() {
 
           <BottomPanel />
         </div>
+
+        {/* ── Sandbox right panel ── */}
+        {sandboxOpen && (
+          <>
+            {/* Resize handle */}
+            <div
+              className="w-[3px] bg-[var(--border)] hover:bg-[var(--fg-faint)] cursor-col-resize flex-shrink-0 transition-colors"
+              onMouseDown={() => setResizing(true)}
+            />
+            {/* Panel */}
+            <div
+              className="flex flex-col border-l border-[var(--border)] bg-[var(--surface)] flex-shrink-0 overflow-hidden"
+              style={{ width: sandboxWidth }}
+            >
+              <SandboxPanel onClose={() => setSandboxOpen(false)} />
+            </div>
+          </>
+        )}
+
+        {/* Collapsed sandbox tab */}
+        {!sandboxOpen && (
+          <div className="w-6 border-l border-[var(--border)] bg-[var(--surface-1)] flex flex-col items-center py-2 flex-shrink-0">
+            <button
+              onClick={() => setSandboxOpen(true)}
+              title="Open Tsuki Sandbox"
+              className="w-5 flex flex-col items-center gap-0 text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent transition-colors py-1"
+            >
+              <Cpu size={12} />
+              <span
+                className="text-[8px] font-semibold uppercase tracking-widest mt-2"
+                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
+              >
+                Sandbox
+              </span>
+            </button>
+          </div>
+        )}
       </div>
 
       <StatusBar tsuki={tsuki} />
 
-      {/* New project modal */}
       {showNewProjectModal && (
         <NewProjectModal onClose={() => setShowNewProjectModal(false)} />
       )}
@@ -392,7 +388,7 @@ export default function IdeScreen() {
   )
 }
 
-// ── Status bar ────────────────────────────────────────────────────────────────
+// ── Status bar ─────────────────────────────────────────────────────────────────
 
 function StatusBar({ tsuki }: { tsuki: string }) {
   const { board, backend, gitBranch, openTabs, activeTabIdx, problems } = useStore()

@@ -32,12 +32,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::fs;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{tsukiError, Result};
+use crate::error::{TsukiError, Result};
 use super::pkg_loader;
 
 // Re-export for use by the binary crate
@@ -73,7 +73,7 @@ pub struct RegistryEntry {
 pub fn fetch_registry(url: &str) -> Result<Registry> {
     let body = http_get(url)?;
     let reg: Registry = serde_json::from_str(&body).map_err(|e| {
-        tsukiError::codegen(format!("failed to parse registry JSON from {}: {}", url, e))
+        TsukiError::codegen(format!("failed to parse registry JSON from {}: {}", url, e))
     })?;
     Ok(reg)
 }
@@ -82,9 +82,9 @@ pub fn fetch_registry(url: &str) -> Result<Registry> {
 fn http_get(url: &str) -> Result<String> {
     ureq::get(url)
         .call()
-        .map_err(|e| tsukiError::codegen(format!("HTTP GET {} failed: {}", url, e)))?
+        .map_err(|e| TsukiError::codegen(format!("HTTP GET {} failed: {}", url, e)))?
         .into_string()
-        .map_err(|e| tsukiError::codegen(format!("failed to read response body from {}: {}", url, e)))
+        .map_err(|e| TsukiError::codegen(format!("failed to read response body from {}: {}", url, e)))
 }
 
 // ── Install ───────────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ pub fn install(
     let (name, version_hint) = parse_name_version(name_ver);
 
     let entry = registry.packages.get(name).ok_or_else(|| {
-        tsukiError::codegen(format!(
+        TsukiError::codegen(format!(
             "package '{}' not found in registry — run `tsuki pkg list` to see available packages",
             name
         ))
@@ -115,7 +115,7 @@ pub fn install(
 
     let toml_url = entry.versions.get(version).ok_or_else(|| {
         let available: Vec<&str> = entry.versions.keys().map(|s| s.as_str()).collect();
-        tsukiError::codegen(format!(
+        TsukiError::codegen(format!(
             "version '{}' not found for package '{}'. Available: {}",
             version, name, available.join(", ")
         ))
@@ -134,7 +134,7 @@ pub fn remove(name_ver: &str, libs_dir: &Path) -> Result<String> {
     let pkg_dir = libs_dir.join(name);
 
     if !pkg_dir.exists() {
-        return Err(tsukiError::codegen(format!(
+        return Err(TsukiError::codegen(format!(
             "package '{}' is not installed (looked in {})",
             name, pkg_dir.display()
         )));
@@ -144,12 +144,12 @@ pub fn remove(name_ver: &str, libs_dir: &Path) -> Result<String> {
         Some(ver) => {
             let ver_dir = pkg_dir.join(ver);
             if !ver_dir.exists() {
-                return Err(tsukiError::codegen(format!(
+                return Err(TsukiError::codegen(format!(
                     "{}@{} is not installed", name, ver
                 )));
             }
             fs::remove_dir_all(&ver_dir).map_err(|e| {
-                tsukiError::codegen(format!("failed to remove {}: {}", ver_dir.display(), e))
+                TsukiError::codegen(format!("failed to remove {}: {}", ver_dir.display(), e))
             })?;
             // If no more versions, remove the package dir too
             if fs::read_dir(&pkg_dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
@@ -159,7 +159,7 @@ pub fn remove(name_ver: &str, libs_dir: &Path) -> Result<String> {
         }
         None => {
             fs::remove_dir_all(&pkg_dir).map_err(|e| {
-                tsukiError::codegen(format!("failed to remove {}: {}", pkg_dir.display(), e))
+                TsukiError::codegen(format!("failed to remove {}: {}", pkg_dir.display(), e))
             })?;
             Ok(format!("removed {} (all versions)", name))
         }

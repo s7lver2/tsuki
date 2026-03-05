@@ -6,7 +6,7 @@
 pub mod token;
 pub use token::{Token, TokenKind, keyword};
 
-use crate::error::{tsukiError, Result, Span};
+use crate::error::{TsukiError, Result, Span};
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -86,7 +86,7 @@ impl Lexer {
         self.advance(); self.advance();
         loop {
             match self.advance() {
-                None => return Err(tsukiError::lex(sp, "unterminated block comment `/* ... */`")),
+                None => return Err(TsukiError::lex(sp, "unterminated block comment `/* ... */`")),
                 Some('*') if self.peek() == Some('/') => { self.advance(); return Ok(()); }
                 _ => {}
             }
@@ -144,7 +144,7 @@ impl Lexer {
         loop {
             match self.peek() {
                 None | Some('\n') =>
-                    return Err(tsukiError::lex(sp, "unterminated interpreted string literal")),
+                    return Err(TsukiError::lex(sp, "unterminated interpreted string literal")),
                 Some('"') => { self.advance(); break; }
                 Some('\\') => { self.advance(); value.push(self.unescape(&sp)?); }
                 _ => value.push(self.advance().unwrap()),
@@ -158,7 +158,7 @@ impl Lexer {
         let mut value = String::new();
         loop {
             match self.peek() {
-                None => return Err(tsukiError::lex(sp, "unterminated raw string literal")),
+                None => return Err(TsukiError::lex(sp, "unterminated raw string literal")),
                 Some('`') => { self.advance(); break; }
                 _ => value.push(self.advance().unwrap()),
             }
@@ -169,13 +169,13 @@ impl Lexer {
     fn lex_rune(&mut self, sp: Span) -> Result<Token> {
         self.advance(); // opening '
         let ch = match self.peek() {
-            None => return Err(tsukiError::lex(sp, "empty rune literal")),
+            None => return Err(TsukiError::lex(sp, "empty rune literal")),
             Some('\\') => { self.advance(); self.unescape(&sp)? }
             _ => self.advance().unwrap(),
         };
         match self.advance() {
             Some('\'') => {}
-            _ => return Err(tsukiError::lex(sp, "unterminated rune literal")),
+            _ => return Err(TsukiError::lex(sp, "unterminated rune literal")),
         }
         Ok(Token::new(TokenKind::LitRune(ch), sp, format!("'{}'", ch)))
     }
@@ -187,7 +187,7 @@ impl Lexer {
             Some('0')  => '\0', Some('a') => '\x07', Some('b') => '\x08',
             Some('f')  => '\x0C', Some('v') => '\x0B',
             Some(c)    => c,
-            None       => return Err(tsukiError::lex(sp.clone(), "unexpected EOF in escape sequence")),
+            None       => return Err(TsukiError::lex(sp.clone(), "unexpected EOF in escape sequence")),
         })
     }
 
@@ -205,7 +205,7 @@ impl Lexer {
                     raw.push_str(&self.eat_while(|c| c.is_ascii_hexdigit() || c == '_'));
                     let clean = raw[2..].replace('_', "");
                     let n = i64::from_str_radix(&clean, 16).map_err(|_|
-                        tsukiError::lex(sp.clone(), format!("invalid hex literal `{}`", raw)))?;
+                        TsukiError::lex(sp.clone(), format!("invalid hex literal `{}`", raw)))?;
                     return Ok(Token::new(TokenKind::LitInt(n), sp, raw));
                 }
                 Some('b') | Some('B') => {
@@ -213,7 +213,7 @@ impl Lexer {
                     raw.push_str(&self.eat_while(|c| c == '0' || c == '1' || c == '_'));
                     let clean = raw[2..].replace('_', "");
                     let n = i64::from_str_radix(&clean, 2).map_err(|_|
-                        tsukiError::lex(sp.clone(), format!("invalid binary literal `{}`", raw)))?;
+                        TsukiError::lex(sp.clone(), format!("invalid binary literal `{}`", raw)))?;
                     return Ok(Token::new(TokenKind::LitInt(n), sp, raw));
                 }
                 Some('o') | Some('O') => {
@@ -221,7 +221,7 @@ impl Lexer {
                     raw.push_str(&self.eat_while(|c| ('0'..='7').contains(&c) || c == '_'));
                     let clean = raw[2..].replace('_', "");
                     let n = i64::from_str_radix(&clean, 8).map_err(|_|
-                        tsukiError::lex(sp.clone(), format!("invalid octal literal `{}`", raw)))?;
+                        TsukiError::lex(sp.clone(), format!("invalid octal literal `{}`", raw)))?;
                     return Ok(Token::new(TokenKind::LitInt(n), sp, raw));
                 }
                 _ => {}
@@ -248,12 +248,12 @@ impl Lexer {
                 raw.push_str(&self.eat_while(|c| c.is_ascii_digit()));
             }
             let f: f64 = raw.replace('_', "").parse().map_err(|_|
-                tsukiError::lex(sp.clone(), format!("invalid float `{}`", raw)))?;
+                TsukiError::lex(sp.clone(), format!("invalid float `{}`", raw)))?;
             return Ok(Token::new(TokenKind::LitFloat(f), sp, raw));
         }
 
         let n: i64 = raw.replace('_', "").parse().map_err(|_|
-            tsukiError::lex(sp.clone(), format!("invalid integer `{}`", raw)))?;
+            TsukiError::lex(sp.clone(), format!("invalid integer `{}`", raw)))?;
         Ok(Token::new(TokenKind::LitInt(n), sp, raw))
     }
 
@@ -343,7 +343,7 @@ impl Lexer {
             ('[', _, _)  => tok!(TokenKind::LBracket, "["),
             (']', _, _)  => tok!(TokenKind::RBracket, "]"),
 
-            (ch, _, _) => Err(tsukiError::lex(sp, format!("unexpected character `{}`", ch))),
+            (ch, _, _) => Err(TsukiError::lex(sp, format!("unexpected character `{}`", ch))),
         }
     }
 }

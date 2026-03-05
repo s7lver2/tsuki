@@ -2,15 +2,19 @@
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
 import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/ui/primitives'
-import { ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen, Palette, Check } from 'lucide-react'
+import { ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen, Palette, Check, Cpu, FlaskConical } from 'lucide-react'
 import { useState } from 'react'
 import { clsx } from 'clsx'
+
+// Note: SettingsTab type in lib/store.ts must include 'sandbox':
+// export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'sandbox'
 
 const NAV: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'appearance', label: 'Appearance', icon: <Palette size={13} /> },
   { id: 'cli',        label: 'CLI Tools',  icon: <Terminal size={13} /> },
   { id: 'defaults',   label: 'Defaults',   icon: <Sliders  size={13} /> },
   { id: 'editor',     label: 'Editor',     icon: <Code2    size={13} /> },
+  { id: 'sandbox' as SettingsTab, label: 'Sandbox', icon: <Cpu size={13} /> },
 ]
 
 function SettingsField({ name, desc, children }: { name: string; desc: string; children: React.ReactNode }) {
@@ -58,6 +62,9 @@ export default function SettingsScreen() {
               }`}
             >
               {n.icon}{n.label}
+              {n.id === 'sandbox' && (
+                <span className="ml-auto text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">β</span>
+              )}
             </button>
           ))}
         </div>
@@ -68,6 +75,7 @@ export default function SettingsScreen() {
             {settingsTab === 'cli'        && <CliTab />}
             {settingsTab === 'defaults'   && <DefaultsTab />}
             {settingsTab === 'editor'     && <EditorTab />}
+            {(settingsTab as string) === 'sandbox' && <SandboxTab />}
           </div>
         </div>
       </div>
@@ -89,6 +97,230 @@ function GroupHeader({ title }: { title: string }) {
     <div className="mt-6 mb-1 pb-2 border-b border-[var(--border)]">
       <span className="text-2xs font-semibold text-[var(--fg-faint)] uppercase tracking-widest">{title}</span>
     </div>
+  )
+}
+
+// ── Sandbox settings tab ──────────────────────────────────────────────────────
+
+function SandboxTab() {
+  const CIRCUIT_FORMAT = `{
+  "version": "1",
+  "name": "My Circuit",
+  "board": "uno",
+  "description": "A simple blink circuit",
+  "components": [
+    {
+      "id": "mcu",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 80,
+      "y": 60,
+      "rotation": 0,
+      "color": "#1a6b2e",
+      "props": {}
+    },
+    {
+      "id": "led1",
+      "type": "led",
+      "label": "LED1",
+      "x": 260,
+      "y": 80,
+      "rotation": 0,
+      "color": "#ef4444",
+      "props": {}
+    },
+    {
+      "id": "r1",
+      "type": "resistor",
+      "label": "R1",
+      "x": 210,
+      "y": 100,
+      "rotation": 0,
+      "color": "#a37a2c",
+      "props": { "ohms": 220 }
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "mcu",
+      "fromPin": "D13",
+      "toComp": "r1",
+      "toPin": "pin1",
+      "color": "#f97316",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "r1",
+      "fromPin": "pin2",
+      "toComp": "led1",
+      "toPin": "anode",
+      "color": "#f97316",
+      "waypoints": []
+    },
+    {
+      "id": "w3",
+      "fromComp": "mcu",
+      "fromPin": "GND",
+      "toComp": "led1",
+      "toPin": "cathode",
+      "color": "#1a1a1a",
+      "waypoints": []
+    }
+  ],
+  "notes": []
+}`
+
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-7">
+        <div className="w-10 h-10 rounded-lg border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+          <Cpu size={18} className="text-[var(--fg-muted)]" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold tracking-tight">Tsuki Sandbox</h2>
+            <span className="text-xs font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1.5 py-0.5 rounded">experimental</span>
+          </div>
+          <p className="text-sm text-[var(--fg-muted)]">
+            Virtual Arduino circuit simulator. Build circuits visually or from a text file, then run your Tsuki/Go program against the virtual hardware.
+          </p>
+        </div>
+      </div>
+
+      <GroupHeader title="How to use" />
+      <div className="mt-4 mb-6 flex flex-col gap-3">
+        {[
+          {
+            step: '1',
+            title: 'Open the Sandbox panel',
+            desc: 'Click the "Sandbox β" button in the top toolbar, or the collapsed tab on the right edge of the IDE. The panel slides in from the right and is resizable.',
+          },
+          {
+            step: '2',
+            title: 'Build your circuit',
+            desc: 'Use the Canvas view: click components in the left palette to place them on the canvas. Select the Wire tool, then click two pins to connect them. Each wire can have a custom color. Use Alt+drag or middle-mouse to pan, scroll to zoom.',
+          },
+          {
+            step: '3',
+            title: 'Import from text',
+            desc: 'Switch to the Text view to directly edit the .tsuki-circuit JSON. Paste a circuit definition and click Apply. You can also import/export .tsuki-circuit files using the toolbar buttons.',
+          },
+          {
+            step: '4',
+            title: 'Simulate',
+            desc: 'Open any .go file in the editor, then switch to the Sim view in the Sandbox and press Run. The simulator parses digitalWrite/analogWrite calls and updates component states (LED brightness, etc.) in real time.',
+          },
+        ].map(s => (
+          <div key={s.step} className="flex gap-3">
+            <div className="w-6 h-6 rounded-full border border-[var(--border)] flex items-center justify-center flex-shrink-0 text-xs font-semibold text-[var(--fg-muted)]">
+              {s.step}
+            </div>
+            <div>
+              <div className="text-sm font-medium mb-0.5">{s.title}</div>
+              <div className="text-xs text-[var(--fg-muted)] leading-relaxed">{s.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <GroupHeader title=".tsuki-circuit file format" />
+      <div className="mt-3 mb-6">
+        <p className="text-xs text-[var(--fg-muted)] mb-3 leading-relaxed">
+          All circuits are stored as <span className="font-mono text-[var(--fg)]">.tsuki-circuit</span> files — human-readable JSON with full detail including component positions, wire colors, labels, and component properties. You can hand-edit these files or generate them programmatically.
+        </p>
+        <p className="text-xs text-[var(--fg-muted)] mb-2">Example — LED blink circuit:</p>
+        <pre className="bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4 text-xs font-mono text-[var(--fg-muted)] overflow-x-auto leading-5 whitespace-pre">
+          {CIRCUIT_FORMAT}
+        </pre>
+      </div>
+
+      <GroupHeader title="Supported components" />
+      <div className="mt-3 mb-6 grid grid-cols-2 gap-2">
+        {[
+          { type: 'arduino_uno',    label: 'Arduino Uno',    cat: 'MCU',     color: '#1a6b2e' },
+          { type: 'arduino_nano',   label: 'Arduino Nano',   cat: 'MCU',     color: '#0a4d8c' },
+          { type: 'led',            label: 'LED',            cat: 'Output',  color: '#ef4444' },
+          { type: 'resistor',       label: 'Resistor',       cat: 'Passive', color: '#a37a2c' },
+          { type: 'button',         label: 'Push Button',    cat: 'Input',   color: '#555' },
+          { type: 'potentiometer',  label: 'Potentiometer',  cat: 'Input',   color: '#4a4a4a' },
+          { type: 'buzzer',         label: 'Buzzer',         cat: 'Output',  color: '#222' },
+          { type: 'power_rail',     label: 'Power Rail',     cat: 'Power',   color: '#333' },
+        ].map(c => (
+          <div key={c.type} className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: c.color }} />
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-[var(--fg)] truncate">{c.label}</div>
+              <div className="text-[10px] text-[var(--fg-faint)]">{c.cat}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <GroupHeader title="Simulation" />
+      <div className="mt-3 mb-6 flex flex-col gap-0">
+        <div className="py-3 border-b border-[var(--border-subtle)]">
+          <div className="text-sm font-medium mb-1">How simulation works</div>
+          <div className="text-xs text-[var(--fg-muted)] leading-relaxed">
+            The Sim view parses your open Go source file and extracts <span className="font-mono text-[var(--fg)]">digitalWrite</span>, <span className="font-mono text-[var(--fg)]">analogWrite</span> and related calls. It then traces the wires connected to the relevant Arduino pins and updates the visual state of downstream components — LEDs glow, PWM dims brightness. The simulation ticks at ~5 Hz and re-reads the source on every tick.
+          </div>
+        </div>
+        <div className="py-3 border-b border-[var(--border-subtle)]">
+          <div className="text-sm font-medium mb-1">Supported Go calls</div>
+          <div className="text-xs font-mono text-[var(--fg-muted)] flex flex-col gap-1 mt-1">
+            <span className="text-[var(--fg)]">digitalWrite(pin, HIGH/LOW)</span>
+            <span className="text-[var(--fg)]">analogWrite(pin, 0-255)</span>
+            <span className="text-[var(--fg-muted)]">digitalRead(pin)  — reads button state</span>
+            <span className="text-[var(--fg-muted)]">analogRead(pin)   — reads pot value</span>
+          </div>
+        </div>
+        <div className="py-3">
+          <div className="text-sm font-medium mb-1">Limitations (experimental)</div>
+          <div className="text-xs text-[var(--fg-muted)] leading-relaxed">
+            This is a static analysis simulation — it does not execute your Go code. Loops, conditionals, and state machines are not evaluated. For accurate simulation, load your compiled .hex into a dedicated emulator like SimAVR or Wokwi. This sandbox is primarily for circuit visualization and connectivity checks.
+          </div>
+        </div>
+      </div>
+
+      <GroupHeader title="Keyboard shortcuts" />
+      <div className="mt-3 grid grid-cols-2 gap-1.5">
+        {[
+          ['S',          'Select / move tool'],
+          ['W',          'Wire tool'],
+          ['D',          'Delete tool'],
+          ['Del',        'Delete selected'],
+          ['Scroll',     'Zoom in / out'],
+          ['Alt + drag', 'Pan canvas'],
+          ['ESC',        'Cancel wire'],
+        ].map(([key, desc]) => (
+          <div key={key} className="flex items-center gap-2 py-1.5 border-b border-[var(--border-subtle)]">
+            <kbd className="text-[10px] font-mono bg-[var(--surface-3)] border border-[var(--border)] rounded px-1.5 py-0.5 flex-shrink-0">{key}</kbd>
+            <span className="text-xs text-[var(--fg-muted)]">{desc}</span>
+          </div>
+        ))}
+      </div>
+
+      <GroupHeader title="Visualización" />
+      <div className="mt-3 flex flex-col gap-0">
+        <SandboxSettingsFields />
+      </div>
+    </div>
+  )
+}
+
+function SandboxSettingsFields() {
+  const { settings, updateSetting } = useStore()
+  return (
+    <SettingsField
+      name="Flujo de corriente"
+      desc="Muestra una animación de puntos en movimiento sobre los cables activos durante la simulación. Desactivado por defecto."
+    >
+      <Toggle
+        on={settings.showCurrentFlow}
+        onToggle={() => updateSetting('showCurrentFlow', !settings.showCurrentFlow)}
+      />
+    </SettingsField>
   )
 }
 
@@ -115,7 +347,6 @@ function AppearanceTab() {
               )}
               style={{ background: theme.preview.bg }}
             >
-              {/* Mini editor preview */}
               <div className="flex flex-col gap-1 mb-2.5 opacity-80">
                 <div className="flex gap-1">
                   <div className="h-1.5 rounded-full w-8"  style={{ background: theme.preview.accent, opacity: 0.6 }} />
@@ -140,10 +371,7 @@ function AppearanceTab() {
                   </div>
                 )}
               </div>
-              <div
-                className="text-[9px] mt-0.5"
-                style={{ color: theme.preview.fg, opacity: 0.4 }}
-              >
+              <div className="text-[9px] mt-0.5" style={{ color: theme.preview.fg, opacity: 0.4 }}>
                 {theme.base}
               </div>
             </button>
@@ -166,15 +394,10 @@ function AppearanceTab() {
                   : 'border-[var(--border)] hover:border-[var(--fg-faint)] hover:bg-[var(--hover)]',
               )}
             >
-              {/* Color swatches */}
               <div className="flex gap-1 flex-shrink-0">
                 {st.swatches.map((color, i) => (
-                  <div
-                    key={i}
-                    className="w-3 h-3 rounded-full ring-1 ring-black/10"
-                    style={{ background: color }}
-                    title={['keyword', 'string', 'number', 'function', 'comment'][i]}
-                  />
+                  <div key={i} className="w-3 h-3 rounded-full ring-1 ring-black/10" style={{ background: color }}
+                    title={['keyword', 'string', 'number', 'function', 'comment'][i]} />
                 ))}
               </div>
               <span className="text-sm font-medium text-[var(--fg)] flex-1">{st.name}</span>
@@ -190,15 +413,10 @@ function AppearanceTab() {
         desc="Scales all interface elements proportionally. Editor font size is controlled separately in the Editor tab."
       >
         <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min="0.80"
-            max="1.25"
-            step="0.05"
+          <input type="range" min="0.80" max="1.25" step="0.05"
             value={settings.uiScale ?? 1}
             onChange={e => updateSetting('uiScale', Number(e.target.value))}
-            className="flex-1 accent-[var(--fg)]"
-          />
+            className="flex-1 accent-[var(--fg)]" />
           <span className="text-xs font-mono w-10 text-right text-[var(--fg-muted)]">
             {Math.round((settings.uiScale ?? 1) * 100)}%
           </span>

@@ -5,7 +5,7 @@ import { applyTheme, applyUiScale } from './themes'
 export type Screen = 'welcome' | 'ide' | 'settings'
 export type SidebarTab = 'files' | 'git' | 'packages'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'sandbox'
 
 export interface FileNode {
   id: string
@@ -104,6 +104,7 @@ export interface SettingsState {
   ideTheme: string      // id from IDE_THEMES
   syntaxTheme: string   // id from SYNTAX_THEMES
   uiScale: number       // 0.80 – 1.25, default 1
+  showCurrentFlow: boolean  // show current-flow animation on active wires
 }
 
 interface AppState {
@@ -247,6 +248,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   ideTheme: 'dark',
   syntaxTheme: 'material',
   uiScale: 1,
+  showCurrentFlow: false,
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────

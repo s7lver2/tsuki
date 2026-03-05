@@ -74,6 +74,7 @@ func init() {
 		newCleanCmd(),
 		newVersionCmd(),
 		newPkgCmd(),
+		newSimulateCmd(),
 	)
 }
 
