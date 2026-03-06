@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '@/lib/store'
-import { getTmpGoPath, writeFile, type ProcessHandle } from '@/lib/tauri'
+import { getTmpGoPath, getTmpSimBundlePath, getTsukiCoreBin, writeFile, getTsukiSimBin, runShell, spawnProcess, type ProcessHandle } from '@/lib/tauri'
 import {
   buildPinMap, applyStepResult,
   getAnalogInputPins, getDigitalInputPins,
@@ -379,6 +379,12 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
       e.currentTarget.setPointerCapture(e.pointerId)
       return
     }
+    // Left-click on background (not on a component) → start pan
+    if (e.button === 0 && (e.target as SVGElement).tagName === 'rect' && (e.target as SVGElement).getAttribute('fill') === 'url(#sbgrid)') {
+      setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
+      e.currentTarget.setPointerCapture(e.pointerId)
+      return
+    }
     if (tool === 'select') {
       setSelectedComp(null)
       setWip(null)
@@ -624,7 +630,7 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
             <svg
               ref={svgRef}
               className="w-full h-full"
-              style={{ background: 'var(--surface)', cursor: panning ? 'grabbing' : tool === 'wire' ? 'crosshair' : tool === 'delete' ? 'not-allowed' : 'default' }}
+              style={{ background: 'var(--surface)', cursor: panning ? 'grabbing' : tool === 'wire' ? 'crosshair' : tool === 'delete' ? 'not-allowed' : 'grab' }}
               onPointerDown={onSvgPointerDown}
               onPointerMove={onSvgPointerMove}
               onPointerUp={onSvgPointerUp}
@@ -828,16 +834,67 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
           accumRef.current = { latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false }
           setSimMs(0)
           try {
-            const tmpPath = await getTmpGoPath()
+            const tmpPath    = await getTmpGoPath()
+            const bundlePath = await getTmpSimBundlePath()
             await writeFile(tmpPath, code)
-            const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^\"|\"$/g, '')
+
+            const coreBin   = await getTsukiCoreBin().catch(() => 'tsuki-core')
+            const simBin    = await getTsukiSimBin().catch(() => 'tsuki-sim')
             const boardName = board || 'uno'
-            // Register JSON interceptor — BottomPanel will call this for each JSON line
-            ;(window as any).__sandboxJsonHandler = (result: StepResult) => {
+            const energyFlag = showCurrentFlow ? ['--energy'] : []
+
+            // ── Auto-bootstrap circuit if empty ───────────────────────────────
+            // If the canvas has no MCU, add an Uno + LED on D13 so a basic
+            // blink sketch shows something immediately without manual wiring.
+            setCircuit(cur => {
+              const hasMcu = cur.components.some(c => COMP_DEFS[c.type]?.category === 'mcu')
+              if (hasMcu) return cur
+              // Detect which pins the sketch uses (simple regex for digitalWrite calls)
+              const usedPins = new Set<number>()
+              const re = /digitalWrite\s*\(\s*(\w+)\s*,/g
+              let m: RegExpExecArray | null
+              while ((m = re.exec(code)) !== null) {
+                const n = parseInt(m[1])
+                if (!isNaN(n)) usedPins.add(n)
+              }
+              if (/LED_BUILTIN/.test(code)) usedPins.add(13)
+              const pinList = usedPins.size > 0 ? Array.from(usedPins) : [13]
+
+              const mcuId = 'auto-uno'
+              const newComps: typeof cur.components = [
+                { id: mcuId, type: 'arduino_uno', x: 120, y: 80, label: 'UNO', props: {}, rotation: 0, color: '' },
+              ]
+              const newWires: typeof cur.wires = []
+              let ledY = 80
+              for (const pin of pinList) {
+                const ledId = `auto-led-${pin}`
+                newComps.push({ id: ledId, type: 'led', x: 320, y: ledY, label: `LED D${pin}`, props: {}, rotation: 0, color: '' })
+                newWires.push({
+                  id: `auto-wire-${pin}`,
+                  fromComp: mcuId, fromPin: `D${pin}`,
+                  toComp: ledId, toPin: 'anode',
+                  color: '', waypoints: [],
+                })
+                ledY += 80
+              }
+              return { ...cur, components: newComps, wires: newWires }
+            })
+
+            // ── Step 1: tsuki-core --emit-sim (synchronous, fire-and-wait) ────
+            try {
+              await runShell(coreBin, [tmpPath, '--board', boardName, '--emit-sim', bundlePath], projectPath ?? undefined)
+            } catch (e) {
+              setSimLoadError(`tsuki-core: ${e instanceof Error ? e.message : String(e)}`)
+              setSimStatus('error')
+              return
+            }
+
+            // ── Step 2: tsuki-sim --bundle (direct spawn, real PID → real kill) ─
+            ;(window as any).__sandboxJsonHandler = (result: StepResult & { energy?: unknown }) => {
               const acc = accumRef.current
               for (const [p, v] of Object.entries(result.pins)) {
-                acc.latestPins[p] = v
-                if ((acc.peakPins[p] ?? 0) < v) acc.peakPins[p] = v
+                acc.latestPins[p] = v as number
+                if ((acc.peakPins[p] ?? 0) < (v as number)) acc.peakPins[p] = v as number
               }
               if (result.serial?.length) acc.serial.push(...result.serial)
               acc.ms    = result.ms
@@ -849,26 +906,38 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                 setSimStatus('error')
               }
             }
-            // Start throttle flush timer
+
             if (tickRef.current) clearInterval(tickRef.current)
             tickRef.current = setInterval(flushAccum, 150)
             setSimStatus('running')
-            setSimLog([{ t: 0, level: 'info', msg: `Loaded — ${circuit.components.length} components · ${circuit.wires.length} wires` }])
-            // Launch via __terminalSpawn — same PATH-enriched mechanism as Flash
-            const handle = await (window as any).__terminalSpawn?.(
-              tsuki, ['simulate', '--source', tmpPath, '--board', boardName],
-              projectPath ?? undefined
+            setSimLog([{ t: 0, level: 'info', msg: `▶ tsuki-sim · board=${boardName}` }])
+
+            const handle = await spawnProcess(
+              simBin, ['--bundle', bundlePath, ...energyFlag],
+              projectPath ?? undefined,
+              (line) => {
+                if (!line.trim().startsWith('{')) return
+                try {
+                  const result = JSON.parse(line)
+                  ;(window as any).__sandboxJsonHandler?.(result)
+                } catch { /* ignore non-JSON */ }
+              }
             )
             simHandleRef.current = handle
-            if (handle?.done) {
-              handle.done.then(() => {
-                ;(window as any).__sandboxJsonHandler = null
-                simHandleRef.current = null
-                if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
-                flushAccum()
-                setSimStatus(s => s === 'running' ? 'idle' : s)
-              })
-            }
+
+            // Send initial inputs
+            for (const [pin, val] of Object.entries(analogInputs))
+              handle.write(JSON.stringify({ type: 'analog',   pin: Number(pin), val }) + '\n').catch(() => {})
+            for (const [pin, high] of Object.entries(digitalInputs))
+              handle.write(JSON.stringify({ type: 'digital',  pin: Number(pin), val: high ? 1 : 0 }) + '\n').catch(() => {})
+
+            handle.done.then(() => {
+              ;(window as any).__sandboxJsonHandler = null
+              simHandleRef.current = null
+              if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
+              flushAccum()
+              setSimStatus(s => s === 'running' ? 'idle' : s)
+            })
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e)
             setSimLoadError(msg)
@@ -1008,7 +1077,7 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                   <div className="border-t border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 flex-shrink-0">
                     <div className="text-[9px] font-semibold uppercase tracking-widest text-[var(--fg-faint)] mb-2">External Inputs</div>
 
-                    {/* Analog sliders */}
+                    {/* Analog sliders — changes sent to tsuki-sim via stdin */}
                     {analogPins.map(pinIdx => (
                       <div key={pinIdx} className="flex items-center gap-2 mb-1.5">
                         <span className="text-[10px] font-mono text-[var(--fg-muted)] w-7">A{pinIdx}</span>
@@ -1017,6 +1086,9 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                           onChange={e => {
                             const v = Number(e.target.value)
                             setAnalogInputs(prev => ({ ...prev, [pinIdx]: v }))
+                            simHandleRef.current?.write?.(
+                              JSON.stringify({ type: 'analog', pin: pinIdx, val: v }) + '\n'
+                            )?.catch(() => {})
                           }}
                           className="flex-1 h-1.5 appearance-none rounded bg-[var(--border)] accent-[var(--active)] cursor-pointer"/>
                         <span className="text-[10px] font-mono text-[var(--fg-faint)] w-8 text-right">
@@ -1025,16 +1097,22 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                       </div>
                     ))}
 
-                    {/* Digital toggles */}
+                    {/* Digital toggles — sent to tsuki-sim via stdin */}
                     {digitalPins.map(({ pin, label }) => (
                       <div key={pin} className="flex items-center gap-2 mb-1">
                         <span className="text-[10px] font-mono text-[var(--fg-muted)] flex-1 truncate">{label}</span>
                         <button
                           onPointerDown={() => {
                             setDigitalInputs(prev => ({ ...prev, [pin]: true }))
+                            simHandleRef.current?.write?.(
+                              JSON.stringify({ type: 'digital', pin, val: 1 }) + '\n'
+                            )?.catch(() => {})
                           }}
                           onPointerUp={() => {
                             setDigitalInputs(prev => ({ ...prev, [pin]: false }))
+                            simHandleRef.current?.write?.(
+                              JSON.stringify({ type: 'digital', pin, val: 0 }) + '\n'
+                            )?.catch(() => {})
                           }}
                           className={clsx(
                             'px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors cursor-pointer select-none',

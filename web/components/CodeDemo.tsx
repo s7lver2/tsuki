@@ -1,9 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
+/* ── types ── */
 type Token = [string, string];
-type CLine = Token[] | null;
+type CLine  = Token[] | null;
 
+/* ── transpile examples ── */
 const EXAMPLES = [
   {
     tab: "blink.go",
@@ -87,11 +89,356 @@ const EXAMPLES = [
   },
 ];
 
+/* ── dependency flow ── */
+const DEP_STEPS = [
+  {
+    label: "Parse imports",
+    nodes: [
+      { id: "main",    label: "main.go",     type: "source"  },
+      { id: "sensor",  label: "sensor.go",   type: "source"  },
+      { id: "arduino", label: '"arduino"',    type: "builtin" },
+      { id: "ws2812",  label: '"ws2812"',     type: "pkg"     },
+      { id: "fmt",     label: '"fmt"',        type: "builtin" },
+    ],
+    edges: [["main","arduino"],["main","fmt"],["sensor","arduino"],["sensor","ws2812"]],
+    highlight: ["main","sensor"],
+    log: "→ tsuki-core: parsing import declarations…",
+  },
+  {
+    label: "Resolve packages",
+    nodes: [
+      { id: "main",     label: "main.go",     type: "source"  },
+      { id: "sensor",   label: "sensor.go",   type: "source"  },
+      { id: "arduino",  label: '"arduino"',    type: "builtin" },
+      { id: "ws2812",   label: '"ws2812"',     type: "pkg"     },
+      { id: "fmt",      label: '"fmt"',        type: "builtin" },
+      { id: "neopixel", label: "NeoPixel.h",   type: "cpp"     },
+    ],
+    edges: [["main","arduino"],["main","fmt"],["sensor","arduino"],["sensor","ws2812"],["ws2812","neopixel"]],
+    highlight: ["ws2812","neopixel"],
+    log: "→ tsukilib: ws2812@1.0.0 → Adafruit_NeoPixel.h",
+  },
+  {
+    label: "Inject headers",
+    nodes: [
+      { id: "main",     label: "main.go",     type: "source"  },
+      { id: "sensor",   label: "sensor.go",   type: "source"  },
+      { id: "arduino",  label: '"arduino"',    type: "builtin" },
+      { id: "ws2812",   label: '"ws2812"',     type: "pkg"     },
+      { id: "fmt",      label: '"fmt"',        type: "builtin" },
+      { id: "neopixel", label: "NeoPixel.h",   type: "cpp"     },
+      { id: "sketch",   label: "sketch.ino",   type: "output"  },
+    ],
+    edges: [["main","arduino"],["sensor","ws2812"],["ws2812","neopixel"],["arduino","sketch"],["neopixel","sketch"],["fmt","sketch"]],
+    highlight: ["sketch"],
+    log: "→ injecting #include <Adafruit_NeoPixel.h>…",
+  },
+  {
+    label: "Emit C++",
+    nodes: [
+      { id: "main",   label: "main.cpp",    type: "output" },
+      { id: "sensor", label: "sensor.cpp",  type: "output" },
+      { id: "sketch", label: "sketch.ino",  type: "output" },
+      { id: "build",  label: "build/",      type: "cpp"    },
+    ],
+    edges: [["main","build"],["sensor","build"],["sketch","build"]],
+    highlight: ["main","sensor","sketch","build"],
+    log: "✓ transpile complete in 11ms — 3 files emitted",
+  },
+];
+
+const NODE_COLORS: Record<string, string> = {
+  source:  "var(--fg-f)",
+  builtin: "var(--accent)",
+  pkg:     "var(--warn)",
+  cpp:     "var(--accent2)",
+  output:  "var(--ok)",
+};
+
+/* ── built-in package animated cards ── */
+function PkgArduino() {
+  const [t, setT] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setT(n => n + 1), 600); return () => clearInterval(iv); }, []);
+  const pin13 = t % 3 !== 0;
+  const pins = [2,3,4,5,6,7,8,9,10,11,12,13];
+  return (
+    <div style={{ height: 72 }}>
+      <div style={{ display: "flex", gap: 3, marginBottom: 8 }}>
+        {pins.map(p => (
+          <div key={p} style={{ width: 16, height: 16, borderRadius: 2, background: (p === 13 && pin13) ? "var(--accent)" : "var(--s2)", border: `1px solid ${(p===13&&pin13)?"var(--accent)":"var(--border-s)"}`, display: "flex", alignItems: "center", justifyContent: "center", transition: "all .3s", boxShadow: (p===13&&pin13) ? "0 0 6px var(--accent)55" : undefined }}>
+            <span style={{ fontFamily: "var(--f-mono)", fontSize: 6.5, color: (p===13&&pin13)?"#000":"var(--s4)" }}>{p}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-f)" }}>
+        <span style={{ color: "var(--accent2)" }}>arduino</span>.<span style={{ color: "var(--ok)" }}>digitalWrite</span>(13, <span style={{ color: pin13 ? "var(--accent)":"var(--fg-f)" }}>{pin13?"HIGH":"LOW"}</span>)
+      </div>
+    </div>
+  );
+}
+
+function PkgFmt() {
+  const lines = ["tsuki 月 ready","Sensor: 427","Temp: 23.5 C","Loop: 1042"];
+  const [idx, setIdx] = useState(0);
+  const [chars, setChars] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setChars(c => {
+        if (c >= lines[idx].length) { setTimeout(() => { setIdx(i => (i+1)%lines.length); setChars(0); }, 400); return c; }
+        return c + 1;
+      });
+    }, 55);
+    return () => clearInterval(iv);
+  }, [idx]);
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <div style={{ background: "var(--s0)", border: "1px solid var(--border-s)", borderRadius: 5, padding: "8px 12px", fontFamily: "var(--f-mono)", fontSize: 10.5 }}>
+        <div style={{ color: "var(--fg-f)", marginBottom: 2, fontSize: 9 }}>Serial Monitor · 9600</div>
+        {lines.slice(0, idx).map((l,i) => <div key={i} style={{ color: "var(--fg-m)" }}>{l}</div>)}
+        <div style={{ color: "var(--accent)" }}>{lines[idx].slice(0, chars)}<span className="cursor-blink">_</span></div>
+      </div>
+    </div>
+  );
+}
+
+function PkgTime() {
+  const [ms, setMs] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setMs(m => m + 500), 300); return () => clearInterval(iv); }, []);
+  const segments = [
+    { label: "delay(500)",   done: ms >= 500,  active: ms < 500 && ms >= 0 },
+    { label: "delay(1000)",  done: ms >= 1500, active: ms < 1500 && ms >= 500 },
+    { label: "millis()",     done: false,      active: ms >= 1500, val: ms },
+  ];
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", gap: 6, justifyContent: "center" }}>
+      {segments.map((s, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: s.done ? "var(--ok)" : s.active ? "var(--accent)" : "var(--s3)", transition: "all .3s", flexShrink: 0 }} />
+          <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: s.active ? "var(--accent)" : s.done ? "var(--fg-f)" : "var(--s4)" }}>
+            {s.label}{s.val !== undefined ? ` → ${s.val}` : ""}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PkgMath() {
+  const [t, setT] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setT(n => n + 0.07), 50); return () => clearInterval(iv); }, []);
+  const W = 200, H = 52, pts = 40;
+  const path = Array.from({ length: pts }, (_, i) => {
+    const x = (i / (pts-1)) * W;
+    const y = H/2 - Math.sin(i * 0.35 + t) * (H/2 - 4);
+    return `${i === 0 ? "M" : "L"} ${x} ${y}`;
+  }).join(" ");
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", gap: 6, justifyContent: "center" }}>
+      <svg width={W} height={H} style={{ display: "block" }}>
+        <path d={path} fill="none" stroke="var(--accent2)" strokeWidth={1.5} />
+      </svg>
+      <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-f)" }}>
+        <span style={{ color: "var(--accent2)" }}>math</span>.sin / cos / sqrt / pow
+      </div>
+    </div>
+  );
+}
+
+function PkgWire() {
+  const [step, setStep] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setStep(s => (s+1) % 5), 700); return () => clearInterval(iv); }, []);
+  const bytes = ["0x3C","0x00","0xFF","0xA4","ACK"];
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ background: "var(--s2)", border: "1px solid var(--border-s)", borderRadius: 4, padding: "4px 8px", fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--accent2)" }}>MCU</div>
+        <div style={{ flex: 1, height: 1, background: "var(--border-s)", position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: "50%", transform: "translateY(-50%)", left: step < 4 ? `${step*22}%` : "90%", width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", transition: "left 0.5s ease" }} />
+        </div>
+        <div style={{ background: "var(--s2)", border: "1px solid var(--border-s)", borderRadius: 4, padding: "4px 8px", fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--accent2)" }}>0x3C</div>
+      </div>
+      <div style={{ display: "flex", gap: 4 }}>
+        {bytes.map((b,i) => (
+          <div key={i} style={{ padding: "2px 6px", borderRadius: 3, background: i < step ? "rgba(0,229,176,0.1)" : "var(--s2)", border: `1px solid ${i < step ? "rgba(0,229,176,0.3)" : "var(--border-s)"}`, fontFamily: "var(--f-mono)", fontSize: 9, color: i < step ? "var(--accent)" : "var(--fg-f)", transition: "all .3s" }}>{b}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PkgSerial() {
+  const [baud, setBaud] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setBaud(b => Math.min(9600, b + 320)), 10); return () => clearInterval(iv); }, []);
+  const pct = baud / 9600;
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", gap: 10, justifyContent: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-f)", width: 50 }}>baud</span>
+        <div style={{ flex: 1, height: 6, background: "var(--s2)", borderRadius: 2, overflow: "hidden" }}>
+          <div style={{ height: "100%", borderRadius: 2, background: "var(--ok)", width: `${pct*100}%`, transition: "width .05s" }} />
+        </div>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ok)", width: 36, textAlign: "right" }}>{baud}</span>
+      </div>
+      <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-f)" }}>
+        <span style={{ color: "var(--ok)" }}>serial</span>.Begin(<span style={{ color: "var(--ok)" }}>9600</span>) · .Println(…)
+      </div>
+    </div>
+  );
+}
+
+function PkgStrconv() {
+  const [t, setT] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setT(n => (n+1)%4), 900); return () => clearInterval(iv); }, []);
+  const pairs = [
+    { go: '"42"',    cpp: "42",     label: "Atoi" },
+    { go: '"3.14"',  cpp: "3.14f",  label: "ParseFloat" },
+    { go: "255",     cpp: '"255"',  label: "Itoa" },
+    { go: 'String()', cpp: "char*", label: "String→C" },
+  ];
+  const p = pairs[t];
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ padding: "4px 10px", background: "rgba(241,250,140,0.08)", border: "1px solid rgba(241,250,140,0.2)", borderRadius: 4, fontFamily: "var(--f-mono)", fontSize: 11, color: "#f1fa8c", transition: "all .3s" }}>{p.go}</div>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 12, color: "var(--fg-f)" }}>→</span>
+        <div style={{ padding: "4px 10px", background: "rgba(130,170,255,0.08)", border: "1px solid rgba(130,170,255,0.2)", borderRadius: 4, fontFamily: "var(--f-mono)", fontSize: 11, color: "#82aaff", transition: "all .3s" }}>{p.cpp}</div>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-f)", marginLeft: 4 }}>{p.label}</span>
+      </div>
+      <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--fg-f)" }}>
+        <span style={{ color: "#f1fa8c" }}>strconv</span> — string ↔ number conversions
+      </div>
+    </div>
+  );
+}
+
+function PkgSPI() {
+  const [t, setT] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setT(n => n + 1), 120); return () => clearInterval(iv); }, []);
+  const W = 180, H = 28;
+  const clkBit = Math.floor(t / 2) % 2;
+  const bits = Array.from({ length: 8 }, (_, i) => (Math.floor(t / (i+1)) % 2));
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+      <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 9, color: "var(--fg-f)", width: 24 }}>CLK</span>
+        <div style={{ display: "flex", gap: 2 }}>
+          {Array.from({length: 8}, (_,i) => (
+            <div key={i} style={{ width: 14, height: clkBit===0 ? 10 : 18, background: "var(--accent2)", borderRadius: 1, transition: "height .12s", alignSelf: "flex-end" }} />
+          ))}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 9, color: "var(--fg-f)", width: 24 }}>MOSI</span>
+        <div style={{ display: "flex", gap: 2 }}>
+          {bits.map((b, i) => (
+            <div key={i} style={{ width: 14, height: b ? 18 : 10, background: b ? "var(--accent)" : "var(--s3)", borderRadius: 1, transition: "height .12s", alignSelf: "flex-end" }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PkgServo() {
+  const [angle, setAngle] = useState(0);
+  const [dir, setDir] = useState(1);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setAngle(a => {
+        const next = a + dir * 3;
+        if (next >= 180) setDir(-1);
+        if (next <= 0)   setDir(1);
+        return Math.max(0, Math.min(180, next));
+      });
+    }, 30);
+    return () => clearInterval(iv);
+  }, [dir]);
+  const rad = ((angle - 90) * Math.PI) / 180;
+  const nx = 50 + 30 * Math.sin(rad), ny = 52 - 30 * Math.cos(rad);
+  return (
+    <div style={{ height: 72, display: "flex", alignItems: "center", gap: 16 }}>
+      <svg width={100} height={60} viewBox="0 0 100 60">
+        <circle cx={50} cy={52} r={14} fill="var(--s2)" stroke="var(--border-s)" strokeWidth={1} />
+        <circle cx={50} cy={52} r={4}  fill="var(--s4)" />
+        <line x1={50} y1={52} x2={nx} y2={ny} stroke="var(--accent)" strokeWidth={2.5} strokeLinecap="round" style={{ transition: "all .03s" }} />
+        <circle cx={nx} cy={ny} r={3} fill="var(--accent)" />
+      </svg>
+      <div>
+        <div style={{ fontFamily: "var(--f-mono)", fontSize: 18, fontWeight: 700, color: "var(--accent)", letterSpacing: "-0.04em" }}>{angle}°</div>
+        <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-f)" }}>servo.Write(angle)</div>
+      </div>
+    </div>
+  );
+}
+
+function PkgLCD() {
+  const [t, setT] = useState(0);
+  useEffect(() => { const iv = setInterval(() => setT(n => n + 1), 80); return () => clearInterval(iv); }, []);
+  const msg1 = "tsuki v0.1.0";
+  const msg2 = "Temp: 23.5 C";
+  const c1 = Math.min(msg1.length, Math.floor(t / 3));
+  const c2 = t > 50 ? Math.min(msg2.length, Math.floor((t - 50) / 3)) : 0;
+  return (
+    <div style={{ height: 72, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <div style={{ background: "#0a1a0f", border: "1px solid #1a3a2e", borderRadius: 5, padding: "8px 12px", fontFamily: "var(--f-mono)", fontSize: 11, lineHeight: 1.7 }}>
+        <div style={{ color: "#4ade80" }}>{msg1.slice(0,c1)}{c1 < msg1.length && <span className="cursor-blink">▌</span>}</div>
+        <div style={{ color: "#4ade80" }}>{msg2.slice(0,c2)}{c2 > 0 && c2 < msg2.length && <span className="cursor-blink">▌</span>}</div>
+      </div>
+    </div>
+  );
+}
+
+const PKGS = [
+  { imp: '"arduino"', accent: "var(--accent)",  tag: "Hardware",   title: "GPIO & peripherals",   visual: <PkgArduino />,  note: "pinMode, digitalWrite, analogRead, interrupts…" },
+  { imp: '"fmt"',     accent: "var(--ok)",      tag: "Serial IO",  title: "Serial print",          visual: <PkgFmt />,      note: "Maps to Serial.print / Serial.println" },
+  { imp: '"time"',    accent: "var(--accent2)", tag: "Timing",     title: "Delay & timing",        visual: <PkgTime />,     note: "delay(), millis(), micros()" },
+  { imp: '"math"',    accent: "#82aaff",        tag: "Math",       title: "Math functions",        visual: <PkgMath />,     note: "<math.h>: sin, cos, sqrt, pow, abs…" },
+  { imp: '"wire"',    accent: "#89ddff",        tag: "I2C",        title: "Wire / I2C",            visual: <PkgWire />,     note: "Wire.begin(), .write(), .read(), .endTransmission()" },
+  { imp: '"serial"',  accent: "var(--ok)",      tag: "UART",       title: "Serial port",           visual: <PkgSerial />,   note: "Serial.Begin(), .Print(), .Println(), .Available()" },
+  { imp: '"strconv"', accent: "#f1fa8c",        tag: "Strings",    title: "Type conversions",      visual: <PkgStrconv />,  note: "String ↔ int/float, Atoi, Itoa, ParseFloat" },
+  { imp: '"spi"',     accent: "var(--accent2)", tag: "SPI",        title: "SPI bus",               visual: <PkgSPI />,      note: "SPI.begin(), .transfer(), .setBitOrder()…" },
+  { imp: '"servo"',   accent: "var(--accent)",  tag: "Actuator",   title: "Servo motor",           visual: <PkgServo />,    note: "Servo.attach(), .write(), .read(), .detach()" },
+  { imp: '"lcd"',     accent: "#4ade80",        tag: "Display",    title: "LiquidCrystal",         visual: <PkgLCD />,      note: "LiquidCrystal.begin(), .print(), .setCursor()" },
+];
+
+/* ── dep graph ── */
+type GraphNode = { id: string; label: string; type: string };
+function DepGraph({ nodes, edges, highlight }: { nodes: GraphNode[]; edges: string[][]; highlight: string[] }) {
+  const cols = 2, NW = 108, NH = 26, GAPX = 36, GAPY = 8;
+  const positions: Record<string, { x: number; y: number }> = {};
+  nodes.forEach((n, i) => {
+    positions[n.id] = { x: (i % cols) * (NW + GAPX) + (i % cols === 1 ? 8 : 0), y: Math.floor(i / cols) * (NH + GAPY) };
+  });
+  return (
+    <div style={{ position: "relative", width: 280, height: Math.ceil(nodes.length / 2) * (NH + GAPY) + 10 }}>
+      <svg style={{ position: "absolute", inset: 0, overflow: "visible" }} width={280} height={200}>
+        {edges.map(([from, to], i) => {
+          const f = positions[from], t = positions[to];
+          if (!f || !t) return null;
+          const isActive = highlight.includes(from) || highlight.includes(to);
+          return <line key={i} x1={f.x+NW/2} y1={f.y+NH/2} x2={t.x+NW/2} y2={t.y+NH/2} stroke={isActive?"var(--accent)":"var(--border)"} strokeWidth={isActive?1.5:1} strokeDasharray="4 3" opacity={isActive?0.6:0.2} />;
+        })}
+      </svg>
+      {nodes.map(n => {
+        const pos = positions[n.id];
+        if (!pos) return null;
+        const isHl = highlight.includes(n.id);
+        const color = NODE_COLORS[n.type] ?? "var(--fg-f)";
+        return (
+          <div key={n.id} style={{ position: "absolute", left: pos.x, top: pos.y, width: NW, height: NH, display: "flex", alignItems: "center", justifyContent: "center", background: isHl ? `${color}12` : "var(--s2)", border: `1px solid ${isHl ? color : "var(--border)"}`, borderRadius: 4, fontFamily: "var(--f-mono)", fontSize: 10, color: isHl ? color : "var(--fg-f)", transition: "all 0.35s", boxShadow: isHl ? `0 0 12px ${color}22` : "none" }}>
+            {n.label}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CodeLine({ line, n }: { line: CLine; n: number }) {
   return (
     <div style={{ display: "flex", gap: 16, padding: "1.5px 16px" }}>
-      <span style={{ minWidth: 22, textAlign: "right", color: "#222", userSelect: "none", flexShrink: 0, fontFamily: "var(--f-mono)", fontSize: 11 }}>{n}</span>
-      <span style={{ fontFamily: "var(--f-mono)", fontSize: 12.5, lineHeight: "20px" }}>
+      <span style={{ minWidth: 22, textAlign: "right", color: "var(--s4)", userSelect: "none", flexShrink: 0, fontFamily: "var(--f-mono)", fontSize: 11 }}>{n}</span>
+      <span style={{ fontFamily: "var(--f-mono)", fontSize: 12, lineHeight: "20px" }}>
         {line ? line.map(([cls, txt], i) => <span key={i} className={cls}>{txt}</span>) : null}
       </span>
     </div>
@@ -99,87 +446,147 @@ function CodeLine({ line, n }: { line: CLine; n: number }) {
 }
 
 export default function CodeDemo() {
-  const [idx, setIdx] = useState(0);
-  const ex = EXAMPLES[idx];
+  const [tab,       setTab]       = useState(0);
+  const [mode,      setMode]      = useState<"transpile" | "deps">("transpile");
+  const [depStep,   setDepStep]   = useState(0);
+  const [animating, setAnimating] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const ex = EXAMPLES[tab];
+  const ds = DEP_STEPS[depStep];
+
+  const runDepFlow = () => {
+    if (animating) return;
+    setAnimating(true); setDepStep(0);
+    let step = 0;
+    const next = () => {
+      step++;
+      if (step < DEP_STEPS.length) { setDepStep(step); timerRef.current = setTimeout(next, 1100); }
+      else setAnimating(false);
+    };
+    timerRef.current = setTimeout(next, 900);
+  };
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
   return (
-    <section className="section" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+    <section id="demo" className="section" style={{ borderTop: "1px solid var(--edge)" }}>
       <div className="container">
 
-        <div className="reveal" style={{ marginBottom: 56, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 40, alignItems: "end" }}>
+        {/* header + mode toggle */}
+        <div className="reveal" style={{ marginBottom: 56, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 24 }}>
           <div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.1em", color: "var(--accent)", marginBottom: 16, textTransform: "uppercase" }}>Transpiler</div>
-            <h2 className="t-h2">Go <span style={{ color: "#333" }}>→</span> C++.<br />Automatically.</h2>
+            <div className="t-label" style={{ color: "var(--accent)", marginBottom: 14 }}>Transpiler</div>
+            <h2 className="t-h2">Interactive demo.</h2>
           </div>
-          <p className="t-body">
-            tsuki-core is a full recursive-descent parser for a Go subset — not a wrapper, not a template.
-            It produces clean, readable C++ that you can inspect and ship.
-          </p>
-        </div>
-
-        {/* Tabs */}
-        <div className="reveal" style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-          {EXAMPLES.map((e, i) => (
-            <button key={e.tab} onClick={() => setIdx(i)} style={{ padding: "5px 14px", background: idx === i ? "rgba(255,255,255,0.08)" : "transparent", border: "1px solid", borderColor: idx === i ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.06)", borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 11, color: idx === i ? "#fff" : "#444", cursor: "pointer", transition: "all 0.15s ease" }}>
-              {e.tab}
-            </button>
-          ))}
-        </div>
-
-        {/* Side by side */}
-        <div className="reveal" style={{ display: "grid", gridTemplateColumns: "1fr 40px 1fr", alignItems: "stretch" }}>
-
-          <div style={{ background: "#0a0a0a", border: "1px solid rgba(255,255,255,0.08)", borderRight: "none", borderRadius: "8px 0 0 8px", overflow: "hidden" }}>
-            <div style={{ padding: "9px 16px", background: "#060606", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#50fa7b" }} />
-              <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "#555" }}>{ex.tab}</span>
-            </div>
-            <div style={{ padding: "10px 0", overflowX: "auto" }}>
-              {ex.go.map((l, i) => <CodeLine key={i} line={l} n={i + 1} />)}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", background: "#060606", borderTop: "1px solid rgba(255,255,255,0.08)", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-            <span style={{ fontFamily: "var(--f-mono)", fontSize: 16, color: "var(--accent)", opacity: 0.6 }}>→</span>
-          </div>
-
-          <div style={{ background: "#0a0a0a", border: "1px solid rgba(255,255,255,0.08)", borderLeft: "none", borderRadius: "0 8px 8px 0", overflow: "hidden" }}>
-            <div style={{ padding: "9px 16px", background: "#060606", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#82aaff" }} />
-              <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "#555" }}>build/main/sketch.ino.cpp</span>
-            </div>
-            <div style={{ padding: "10px 0", overflowX: "auto" }}>
-              {ex.cpp.map((l, i) => <CodeLine key={i} line={l} n={i + 1} />)}
-            </div>
-          </div>
-        </div>
-
-        {/* Package table */}
-        <div className="reveal" style={{ marginTop: 32, background: "#0a0a0a", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, overflow: "hidden" }}>
-          <div style={{ padding: "12px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontFamily: "var(--f-sans)", fontSize: 13, fontWeight: 600, color: "#fff" }}>Built-in Go packages</span>
-            <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "#333" }}>— no imports needed at the toolchain level</span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-            {[
-              { imp: '"arduino"',      maps: 'pinMode, digitalWrite, analogRead…' },
-              { imp: '"fmt"',          maps: 'Serial.print, Serial.println…' },
-              { imp: '"time"',         maps: 'delay(), millis(), micros()' },
-              { imp: '"math"',         maps: '<math.h>: sin, cos, sqrt, pow…' },
-              { imp: '"strconv"',      maps: 'String(), .toInt(), .toFloat()' },
-              { imp: '"wire"',         maps: 'Wire.begin(), Wire.write()… (I2C)' },
-              { imp: '"spi"',          maps: 'SPI.begin(), SPI.transfer()…' },
-              { imp: '"serial"',       maps: 'Serial.begin(), .println()…' },
-              { imp: '"servo"',        maps: 'Servo.attach(), Servo.write()…' },
-              { imp: '"LiquidCrystal"',maps: 'LiquidCrystal.begin(), .print()…' },
-            ].map((r, i) => (
-              <div key={i} style={{ padding: "10px 20px", borderRight: "1px solid rgba(255,255,255,0.04)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                <div style={{ fontFamily: "var(--f-mono)", fontSize: 12, color: "var(--accent)", marginBottom: 3 }}>{r.imp}</div>
-                <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "#444", lineHeight: 1.5 }}>{r.maps}</div>
-              </div>
+          <div style={{ display: "flex", gap: 4, padding: 4, background: "var(--s1)", border: "1px solid var(--border)", borderRadius: 8 }}>
+            {([["transpile","Go → C++"],["deps","Dependency flow"]] as const).map(([m,l]) => (
+              <button key={m} onClick={() => setMode(m)} style={{ padding: "6px 16px", background: mode===m ? "rgba(255,255,255,0.08)" : "transparent", border: "1px solid", borderColor: mode===m ? "var(--edge2)" : "transparent", borderRadius: 5, fontFamily: "var(--f-mono)", fontSize: 11, color: mode===m ? "var(--fg)" : "var(--fg-f)", cursor: "pointer", transition: "all .15s" }}>{l}</button>
             ))}
           </div>
         </div>
+
+        {/* ── TRANSPILE ── */}
+        {mode === "transpile" && (
+          <>
+            <div className="reveal" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {EXAMPLES.map((e,i) => (
+                <button key={e.tab} onClick={() => setTab(i)} style={{ padding: "5px 14px", background: tab===i ? "rgba(255,255,255,0.07)" : "transparent", border: "1px solid", borderColor: tab===i ? "var(--edge2)" : "var(--border-s)", borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 11, color: tab===i ? "var(--fg)" : "var(--fg-f)", cursor: "pointer", transition: "all .15s" }}>{e.tab}</button>
+              ))}
+            </div>
+            <div className="reveal" style={{ display: "grid", gridTemplateColumns: "1fr 40px 1fr" }}>
+              <div style={{ background: "var(--s0)", border: "1px solid var(--edge)", borderRight: "none", borderRadius: "8px 0 0 8px", overflow: "hidden" }}>
+                <div style={{ padding: "8px 14px", background: "#060608", borderBottom: "1px solid var(--edge)", display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--ok)" }} />
+                  <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-f)" }}>{ex.tab}</span>
+                  <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--s4)", marginLeft: "auto" }}>Go</span>
+                </div>
+                <div style={{ padding: "10px 0", overflowX: "auto" }}>{ex.go.map((l,i) => <CodeLine key={i} line={l} n={i+1} />)}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", background: "#060608", borderTop: "1px solid var(--edge)", borderBottom: "1px solid var(--edge)" }}>
+                <span style={{ fontFamily: "var(--f-mono)", fontSize: 18, color: "var(--accent)", opacity: .5 }}>→</span>
+              </div>
+              <div style={{ background: "var(--s0)", border: "1px solid var(--edge)", borderLeft: "none", borderRadius: "0 8px 8px 0", overflow: "hidden" }}>
+                <div style={{ padding: "8px 14px", background: "#060608", borderBottom: "1px solid var(--edge)", display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent2)" }} />
+                  <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-f)" }}>build/main/sketch.ino.cpp</span>
+                  <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--s4)", marginLeft: "auto" }}>C++</span>
+                </div>
+                <div style={{ padding: "10px 0", overflowX: "auto" }}>{ex.cpp.map((l,i) => <CodeLine key={i} line={l} n={i+1} />)}</div>
+              </div>
+            </div>
+
+            {/* ── BUILT-IN PACKAGES as feature cards ── */}
+            <div className="reveal" style={{ marginTop: 32 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+                <h3 style={{ fontFamily: "var(--f-sans)", fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em" }}>Built-in Go packages</h3>
+                <span className="t-label">— zero config, no installs</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 1, background: "var(--border)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                {PKGS.map(p => (
+                  <div key={p.imp}
+                    style={{ background: "var(--black)", padding: "20px", position: "relative", overflow: "hidden", transition: "background .2s" }}
+                    onMouseEnter={e => (e.currentTarget.style.background = "var(--s1)")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "var(--black)")}
+                  >
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: `linear-gradient(90deg, transparent, ${p.accent}44 40%, transparent)` }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+                      <code style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: p.accent }}>{p.imp}</code>
+                      <span style={{ fontFamily: "var(--f-mono)", fontSize: 9, color: p.accent, opacity: .5, letterSpacing: "0.06em" }}>{p.tag}</span>
+                    </div>
+                    {p.visual}
+                    <div style={{ fontFamily: "var(--f-sans)", fontSize: 12, fontWeight: 600, letterSpacing: "-0.02em", color: "var(--fg)", margin: "10px 0 4px" }}>{p.title}</div>
+                    <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-f)", lineHeight: 1.6 }}>{p.note}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── DEPENDENCY FLOW ── */}
+        {mode === "deps" && (
+          <div className="reveal">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+              <div className="card" style={{ padding: "24px" }}>
+                <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-f)", marginBottom: 20, letterSpacing: "0.06em" }}>
+                  STEP {depStep+1}/{DEP_STEPS.length} — {ds.label}
+                </div>
+                <DepGraph nodes={ds.nodes} edges={ds.edges} highlight={ds.highlight} />
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--edge)" }}>
+                  {Object.entries(NODE_COLORS).map(([type, color]) => (
+                    <div key={type} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <div style={{ width: 7, height: 7, borderRadius: "50%", background: color }} />
+                      <span className="t-label">{type}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div className="card" style={{ padding: "16px", background: "var(--s0)", fontFamily: "var(--f-mono)", fontSize: 12 }}>
+                  <div className="t-label" style={{ marginBottom: 12 }}>tsuki build log</div>
+                  {DEP_STEPS.slice(0, depStep+1).map((s,i) => (
+                    <div key={i} style={{ padding: "3px 0", color: i===depStep ? "var(--accent)" : "var(--fg-f)", lineHeight: 1.6 }}>{s.log}</div>
+                  ))}
+                  {animating && <div style={{ color: "var(--fg-f)", opacity: .5 }}><span className="cursor-blink">_</span></div>}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={runDepFlow} disabled={animating} style={{ flex: 1, padding: "10px", background: animating ? "var(--s2)" : "rgba(0,229,176,0.1)", border: `1px solid ${animating ? "var(--border)" : "rgba(0,229,176,0.3)"}`, borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 12, color: animating ? "var(--fg-f)" : "var(--accent)", cursor: animating ? "not-allowed" : "pointer", transition: "all .2s", letterSpacing: "0.04em" }}>
+                    {animating ? "Running…" : "▶ Run pipeline"}
+                  </button>
+                  <button onClick={() => { setDepStep(0); setAnimating(false); if (timerRef.current) clearTimeout(timerRef.current); }} style={{ padding: "10px 16px", background: "transparent", border: "1px solid var(--border)", borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 12, color: "var(--fg-f)", cursor: "pointer" }}>Reset</button>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {DEP_STEPS.map((s,i) => (
+                    <button key={i} onClick={() => { setDepStep(i); setAnimating(false); }} style={{ padding: "5px 12px", background: depStep===i ? "rgba(255,255,255,0.07)" : "transparent", border: "1px solid", borderColor: depStep===i ? "var(--edge2)" : "var(--border-s)", borderRadius: 5, fontFamily: "var(--f-mono)", fontSize: 10.5, color: depStep===i ? "var(--fg)" : "var(--fg-f)", cursor: "pointer", transition: "all .15s" }}>
+                      {i+1}. {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </section>
   );

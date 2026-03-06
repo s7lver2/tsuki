@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // ─────────────────────────────────────────────────────────────────────────────
 //  tsuki-flash :: modules :: avr
 //
@@ -34,6 +35,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::path::PathBuf;
+#[allow(unused_imports)]
 use colored::Colorize;
 
 use crate::error::{FlashError, Result};

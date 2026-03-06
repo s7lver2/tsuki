@@ -67,11 +67,11 @@ export default function IdeShowcase() {
   const [activeTab, setActiveTab] = useState("main.go");
 
   return (
-    <section className="section">
+    <section id="ide" className="section">
       <div className="container">
 
         {/* Header */}
-        <div className="reveal" style={{ marginBottom: 56, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 40, alignItems: "end" }}>
+        <div className="reveal" style={{ marginBottom: 68, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 40, alignItems: "end" }}>
           <div>
             <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.1em", color: "var(--accent)", marginBottom: 16, textTransform: "uppercase" }}>
               tsuki-ide

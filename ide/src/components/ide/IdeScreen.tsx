@@ -28,7 +28,7 @@ export default function IdeScreen() {
     sidebarOpen, sidebarTab, toggleSidebar,
     openTabs, activeTabIdx, closeTab, openFile,
     tree, toggleTheme, theme,
-    settings, setBottomTab, saveActiveFile,
+    settings, setBottomTab, saveActiveFile, dispatchCommand,
   } = useStore()
 
   const t = useT()
@@ -48,14 +48,7 @@ export default function IdeScreen() {
 
   function dispatch(args: string[]) {
     setBottomTab('terminal')
-    function fire() {
-      const fn = (window as any).__terminalSpawn
-      if (fn) fn(tsuki, args, cwd)
-      else requestAnimationFrame(() => { ;(window as any).__terminalSpawn?.(tsuki, args, cwd) })
-    }
-    const currentTab = useStore.getState().bottomTab
-    if (currentTab === 'terminal') fire()
-    else setTimeout(fire, 80)
+    dispatchCommand(tsuki, args, cwd)
   }
 
   function handleCheck() {
@@ -79,7 +72,7 @@ export default function IdeScreen() {
     dispatch(args)
   }
 
-  async function handleRun() {
+  function handleRun() {
     setBottomTab('terminal')
     const buildArgs = ['build', '--compile']
     if (board)            buildArgs.push('--board', board)
@@ -87,17 +80,8 @@ export default function IdeScreen() {
     const flashArgs = ['flash']
     if (board)            flashArgs.push('--board', board)
     if (settings.verbose) flashArgs.push('--verbose')
-    async function chainRun() {
-      const fn = (window as any).__terminalSpawn
-      if (!fn) return
-      const handle = await fn(tsuki, buildArgs, cwd)
-      if (!handle) return
-      const code = await handle.done
-      if (code === 0) await fn(tsuki, flashArgs, cwd)
-    }
-    const currentTab = useStore.getState().bottomTab
-    if (currentTab === 'terminal') chainRun()
-    else setTimeout(chainRun, 80)
+    // Chain: build first, flash only on success — BottomPanel handles the await
+    dispatchCommand(tsuki, buildArgs, cwd, flashArgs)
   }
 
   function handleMonitor() {

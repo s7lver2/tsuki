@@ -81,6 +81,7 @@ export interface SettingsState {
   // ── CLI ───────────────────────────────────────────────────────────────────
   tsukiPath: string
   tsukiCorePath: string
+  tsukiSimPath: string   // path to tsuki-sim binary (auto-detected by default)
   arduinoCliPath: string
   avrDudePath: string
   // ── Defaults ─────────────────────────────────────────────────────────────
@@ -177,6 +178,9 @@ interface AppState {
   terminalLines: string[]
   addTerminalLine: (line: string) => void
   clearTerminal: () => void
+  pendingCommand: { cmd: string; args: string[]; cwd?: string; chainArgs?: string[]; id: number } | null
+  dispatchCommand: (cmd: string, args: string[], cwd?: string, chainArgs?: string[]) => void
+  clearPendingCommand: () => void
   settings: SettingsState
   updateSetting: <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => void
   packages: PackageEntry[]
@@ -249,6 +253,7 @@ const DEFAULT_PACKAGES: PackageEntry[] = [
 const DEFAULT_SETTINGS: SettingsState = {
   tsukiPath: '',
   tsukiCorePath: '',
+  tsukiSimPath: '',      // auto-detect: same dir as tsuki-core or PATH
   arduinoCliPath: 'arduino-cli',
   avrDudePath: '',
   defaultBoard: 'uno',
@@ -661,6 +666,11 @@ export const useStore = create<AppState>((set, get) => ({
   terminalLines: [],
   addTerminalLine: (line) => set((s) => ({ terminalLines: [...s.terminalLines, line] })),
   clearTerminal: () => set({ terminalLines: [] }),
+  pendingCommand: null,
+  dispatchCommand: (cmd, args, cwd, chainArgs) => {
+    set({ pendingCommand: { cmd, args, cwd, chainArgs, id: Date.now() } })
+  },
+  clearPendingCommand: () => set({ pendingCommand: null }),
 
   settings: DEFAULT_SETTINGS,
 

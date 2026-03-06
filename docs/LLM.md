@@ -22,6 +22,7 @@ tsuki es un **framework de desarrollo de firmware para Arduino escrito en Go**. 
 tsuki/
 ├── src/              ← tsuki-core: transpilador + librería Rust pública
 ├── flash/            ← tsuki-flash: compilación y upload sin arduino-cli
+├── sim/              ← tsuki-sim: simulador de firmware para el sandbox del IDE
 ├── cli/              ← tsuki CLI en Go (herramienta de usuario)
 ├── ide/              ← IDE de escritorio (Tauri + Next.js)
 └── pkg/              ← Datos del registro de paquetes tsukilib
@@ -385,3 +386,68 @@ pkg/ (datos en GitHub)
 - **Go**: `PascalCase` para exports. Paquetes internos bajo `internal/`. Cada subcomando Cobra en su propio archivo bajo `cli/internal/cli/`.
 - **TypeScript**: Componentes en `PascalCase`, hooks y stores en `camelCase`. El store Zustand es la única fuente de verdad del estado del IDE.
 - **tsukilib.toml**: `{0}`, `{1}` son posicionales. `{self}` es el receiver de instancia. `{args}` es join de todos los args (para variadic).
+---
+
+## Componente 6: `sim/` — tsuki-sim (Rust)
+
+**Qué es**: Binario standalone de simulación para el sandbox del IDE. Interpreta el AST de Go directamente usando `tsuki_core` como librería, simulando el hardware Arduino (pines, timers, serial) sin necesidad de compilar a C++.
+
+**Binario**: `tsuki-sim` (definido en `Cargo.toml` con path `sim/main.rs`)
+
+### CLI de tsuki-sim
+
+```
+tsuki-sim --source <file.go> --board <board> [--steps N] [--energy] [--output-every N]
+```
+
+| Flag | Descripción |
+|---|---|
+| `--source <file>` | Archivo Go a simular |
+| `--board <id>` | Board objetivo (afecta VCC, LED_BUILTIN, etc.) |
+| `--steps N` | Parar tras N llamadas a `loop()` (0 = infinito) |
+| `--energy` | Emitir datos de flujo de energía/corriente en cada StepResult |
+| `--output-every N` | Emitir StepResult cada N iteraciones (1 = cada loop) |
+| `--max-ms N` | Parar tras N milisegundos simulados |
+| `--no-stdin` | No leer inputs del stdin |
+
+### Protocolo NDJSON
+
+**Stdout (tsuki-sim → IDE)**: Una línea JSON por "época" de simulación:
+```json
+{
+  "ok": true,
+  "events": [{"t_ms":1000,"kind":"dw","pin":13,"val":1}],
+  "pins": {"13": 1, "9": 180},
+  "serial": ["Hello World"],
+  "ms": 1000.0,
+  "energy": {
+    "voltage":  {"13": 5.0, "9": 3.5},
+    "current":  {"13": 0.01, "9": 0.01},
+    "power_mw": {"13": 50.0, "9": 35.0},
+    "total_mw": 85.0
+  }
+}
+```
+
+**Stdin (IDE → tsuki-sim)**: Inputs analógicos/digitales en tiempo real:
+```json
+{"type":"analog",  "pin":0, "val":512}
+{"type":"digital", "pin":2, "val":1}
+```
+
+### Integración con el IDE
+
+El IDE (SandboxPanel.tsx) invoca `tsuki-sim` directamente (no a través de `tsuki CLI`):
+- Usa `getTsukiSimBin()` en tauri.ts para resolver el binario
+- Pasa `--energy` cuando `settings.showCurrentFlow` está activo
+- Envía los sliders analógicos y botones digitales vía stdin en tiempo real
+- El Tauri backend expone `get_tsuki_sim_bin` que busca: settings → junto a tsuki-core → PATH
+
+### Archivo `sim/main.rs`
+
+| Función | Descripción |
+|---|---|
+| `main()` | Parsea CLI con Clap, lee source, invoca `tsuki_core` para parsear, construye `Simulator`, ejecuta el loop |
+| `spawn_stdin_listener()` | Thread que lee stdin y actualiza `InputState` compartido |
+| `compute_energy()` | Calcula voltaje/corriente estimados por pin OUTPUT activo |
+| `emit_result()` | Serializa `StepResult` + `EnergyInfo` opcional a JSON y escribe a stdout |

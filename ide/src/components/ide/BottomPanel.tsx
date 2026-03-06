@@ -388,11 +388,11 @@ function SessionView({ session, projectPath, onUpdate, onSpawn }: SessionViewPro
 // ── Terminal: multi-session manager ──────────────────────────────────────────
 
 function Terminal() {
-  const { projectPath } = useStore()
+  const { projectPath, pendingCommand, clearPendingCommand } = useStore()
   const t = useT()
-  const [shells,       setShells      ] = useState<ShellInfo[]>([])
-  const [sessions,     setSessions    ] = useState<ShellSession[]>([])
-  const [activeIdx,    setActiveIdx   ] = useState(0)
+  const [shells,        setShells       ] = useState<ShellInfo[]>([])
+  const [sessions,      setSessions     ] = useState<ShellSession[]>([])
+  const [activeIdx,     setActiveIdx    ] = useState(0)
   const [loadingShells, setLoadingShells] = useState(true)
 
   useEffect(() => {
@@ -423,10 +423,25 @@ function Terminal() {
   }
 
   const spawnFnRef = useRef<((cmd: string, args: string[], cwd?: string) => Promise<ProcessHandle>) | null>(null)
+
+  // Consume pendingCommand from the store — no window globals, no timeouts
   useEffect(() => {
-    ;(window as any).__terminalSpawn = (...a: [string, string[], string?]) => spawnFnRef.current?.(...a)
-    return () => { delete (window as any).__terminalSpawn }
-  }, [])
+    if (!pendingCommand || !spawnFnRef.current) return
+    const { cmd, args, cwd, chainArgs } = pendingCommand
+    clearPendingCommand()
+    const spawn = spawnFnRef.current
+    if (chainArgs) {
+      // Chain: run first command, then second only if exit code is 0
+      spawn(cmd, args, cwd).then(handle => {
+        if (!handle) return
+        handle.done.then(code => {
+          if (code === 0) spawn(cmd, chainArgs, cwd)
+        })
+      })
+    } else {
+      spawn(cmd, args, cwd)
+    }
+  }, [pendingCommand, clearPendingCommand])
 
   if (loadingShells) {
     return (

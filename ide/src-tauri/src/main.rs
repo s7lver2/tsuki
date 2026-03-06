@@ -7,6 +7,188 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use tauri::Window;
 
+// ── Windows: WinAPI process spawning ─────────────────────────────────────────
+// std::process::Command on Windows resolves the executable using the *parent*
+// process token before any env overrides take effect. For binaries installed
+// under %LOCALAPPDATA%\Programs\ this can fail with ACCESS_DENIED even when
+// the file exists. We bypass this entirely by calling CreateProcessW directly
+// via the windows-sys crate, which gives us full control over the token and
+// handles.
+#[cfg(windows)]
+mod win_spawn {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::io;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
+        CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT,
+    };
+    use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+
+    fn to_wide_null(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    fn build_env_block(extra_path: &str) -> Vec<u16> {
+        // Rebuild the environment with our enriched PATH
+        let mut env_str = String::new();
+        for (k, v) in std::env::vars() {
+            if k.eq_ignore_ascii_case("PATH") {
+                env_str.push_str(&format!("PATH={}\0", extra_path));
+            } else {
+                env_str.push_str(&format!("{}={}\0", k, v));
+            }
+        }
+        // Make sure PATH exists even if not in parent env
+        if !env_str.to_lowercase().contains("path=") {
+            env_str.push_str(&format!("PATH={}\0", extra_path));
+        }
+        env_str.push('\0');
+        env_str.encode_utf16().collect()
+    }
+
+    pub struct WinProcess {
+        pub pid:        u32,
+        pub handle:     isize,   // HANDLE — stored as isize to be Send
+        pub stdin_pipe: isize,   // write end
+        pub stdout_pipe: isize,  // read end
+        pub stderr_pipe: isize,  // read end
+    }
+
+    unsafe impl Send for WinProcess {}
+
+    fn create_pipe() -> io::Result<(isize, isize)> {
+        let mut sa = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        let mut read_end:  HANDLE = 0;
+        let mut write_end: HANDLE = 0;
+        if unsafe { CreatePipe(&mut read_end, &mut write_end, &mut sa, 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((read_end as isize, write_end as isize))
+    }
+
+    pub fn spawn(exe: &str, args: &[String], cwd: Option<&str>, enriched_path: &str) -> io::Result<WinProcess> {
+        // Build command line: "exe" arg1 arg2 ...
+        let cmdline = {
+            let mut s = format!("\"{}\"", exe.replace('"', "\\\""));
+            for a in args {
+                s.push(' ');
+                if a.contains(' ') {
+                    s.push('"');
+                    s.push_str(&a.replace('"', "\\\""));
+                    s.push('"');
+                } else {
+                    s.push_str(a);
+                }
+            }
+            to_wide_null(&s)
+        };
+
+        let cwd_wide: Option<Vec<u16>> = cwd.map(|c| to_wide_null(c));
+        let env_block = build_env_block(enriched_path);
+
+        let (stdout_r, stdout_w) = create_pipe()?;
+        let (stderr_r, stderr_w) = create_pipe()?;
+        let (stdin_r,  stdin_w)  = create_pipe()?;
+
+        // Make our ends non-inheritable so child doesn't hold them open
+        use windows_sys::Win32::Foundation::SetHandleInformation;
+        use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+        unsafe {
+            SetHandleInformation(stdout_r as HANDLE, HANDLE_FLAG_INHERIT, 0);
+            SetHandleInformation(stderr_r as HANDLE, HANDLE_FLAG_INHERIT, 0);
+            SetHandleInformation(stdin_w  as HANDLE, HANDLE_FLAG_INHERIT, 0);
+        }
+
+        let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        si.cb          = std::mem::size_of::<STARTUPINFOW>() as u32;
+        si.dwFlags     = 0x00000100; // STARTF_USESTDHANDLES
+        si.hStdInput   = stdin_r  as HANDLE;
+        si.hStdOutput  = stdout_w as HANDLE;
+        si.hStdError   = stderr_w as HANDLE;
+
+        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),                                    // lpApplicationName
+                cmdline.as_ptr() as *mut u16,                        // lpCommandLine
+                std::ptr::null_mut(),                                // lpProcessAttributes
+                std::ptr::null_mut(),                                // lpThreadAttributes
+                1,                                                   // bInheritHandles = TRUE
+                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,       // dwCreationFlags
+                env_block.as_ptr() as *mut _,                        // lpEnvironment
+                cwd_wide.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()), // lpCurrentDirectory
+                &si,
+                &mut pi,
+            )
+        };
+
+        // Close child-side pipe ends in parent
+        unsafe {
+            CloseHandle(stdout_w as HANDLE);
+            CloseHandle(stderr_w as HANDLE);
+            CloseHandle(stdin_r  as HANDLE);
+            CloseHandle(pi.hThread);
+        }
+
+        if ok == 0 {
+            unsafe {
+                CloseHandle(stdout_r as HANDLE);
+                CloseHandle(stderr_r as HANDLE);
+                CloseHandle(stdin_w  as HANDLE);
+            }
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(WinProcess {
+            pid:         pi.dwProcessId,
+            handle:      pi.hProcess as isize,
+            stdin_pipe:  stdin_w,
+            stdout_pipe: stdout_r,
+            stderr_pipe: stderr_r,
+        })
+    }
+
+    pub fn wait_process(handle: isize) -> u32 {
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+        unsafe {
+            WaitForSingleObject(handle as HANDLE, 0xFFFFFFFF); // INFINITE
+            let mut code: u32 = 1;
+            GetExitCodeProcess(handle as HANDLE, &mut code);
+            CloseHandle(handle as HANDLE);
+            code
+        }
+    }
+
+    pub fn read_pipe_to_string(handle: isize) -> String {
+        use std::os::windows::io::FromRawHandle;
+        use std::io::Read;
+        let mut f = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
+        let mut out = String::new();
+        let _ = f.read_to_string(&mut out);
+        // File::drop closes the handle automatically
+        out
+    }
+
+    pub fn kill(pid: u32) {
+        use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h != 0 { TerminateProcess(h, 1); CloseHandle(h); }
+        }
+    }
+}
+
+
+
 // ── Debug logger ──────────────────────────────────────────────────────────────
 // windows_subsystem="windows" suppresses stderr entirely, so we log to a file
 // in %TEMP% (or /tmp) that can be tailed while the app is running.
@@ -50,7 +232,7 @@ impl NoWindow for Command {
     fn no_window(self) -> Self { self }
 }
 
-type ProcessMap = Arc<Mutex<HashMap<u32, std::process::ChildStdin>>>;
+type ProcessMap = Arc<Mutex<HashMap<u32, Box<dyn Write + Send>>>>;
 
 struct AppState {
     processes: ProcessMap,
@@ -229,7 +411,7 @@ async fn spawn_shell(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
-    { state.processes.lock().unwrap().insert(pid, stdin); }
+    { state.processes.lock().unwrap().insert(pid, Box::new(stdin) as Box<dyn Write + Send>); }
 
     let (eid_out, eid_err, eid_done) = (event_id.clone(), event_id.clone(), event_id.clone());
     let (win_out, win_err, win_done) = (window.clone(), window.clone(), window.clone());
@@ -289,23 +471,35 @@ fn enriched_path() -> String {
 // ── run_shell ─────────────────────────────────────────────────────────────────
 #[tauri::command]
 async fn run_shell(cmd: String, args: Vec<String>, cwd: Option<String>) -> Result<String, String> {
-    let cmd = normalise_cmd(&cmd);
+    let raw = resolve_cmd(&normalise_cmd(&cmd));
+    dbg(&format!("[run_shell] exe={:?} args={:?} cwd={:?}", raw, args, cwd));
 
-    // Spawn the executable directly with an enriched PATH so per-user
-    // installs (tsuki, Go, arduino-cli, etc.) are found on Windows too.
-    // CREATE_NO_WINDOW + Stdio::piped() guarantees no console window appears.
-    let mut c = Command::new(&cmd).no_window();
-    c.args(&args);
     #[cfg(windows)]
-    { c.env("PATH", enriched_path()); }
-    if let Some(dir) = &cwd { c.current_dir(dir); }
-    let output = c.output().map_err(|e| format!("Failed to run '{}': {}", cmd, e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if output.status.success() {
-        Ok(if stdout.trim().is_empty() { stderr } else { stdout })
-    } else {
-        Err(if stderr.trim().is_empty() { stdout } else { stderr })
+    {
+        let path = enriched_path();
+        let proc = win_spawn::spawn(&raw, &args, cwd.as_deref(), &path)
+            .map_err(|e| format!("Failed to run '{}': {} (os={:?})", raw, e, e.raw_os_error()))?;
+        let result = tokio::task::spawn_blocking(move || {
+            let out  = win_spawn::read_pipe_to_string(proc.stdout_pipe);
+            let err  = win_spawn::read_pipe_to_string(proc.stderr_pipe);
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(proc.stdin_pipe as _); }
+            let code = win_spawn::wait_process(proc.handle);
+            (out, err, code)
+        }).await.map_err(|e| format!("task error: {}", e))?;
+        let (out, err, code) = result;
+        if code == 0 { Ok(if out.trim().is_empty() { err } else { out }) }
+        else         { Err(if err.trim().is_empty() { out } else { err }) }
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = Command::new(&raw);
+        c.args(&args);
+        if let Some(dir) = &cwd { c.current_dir(dir); }
+        let output = c.output().map_err(|e| format!("Failed to run '{}': {}", raw, e))?;
+        let out = String::from_utf8_lossy(&output.stdout).to_string();
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        if output.status.success() { Ok(if out.trim().is_empty() { err } else { out }) }
+        else                       { Err(if err.trim().is_empty() { out } else { err }) }
     }
 }
 
@@ -370,67 +564,111 @@ async fn spawn_process(
     cwd:      Option<String>,
     event_id: String,
 ) -> Result<u32, String> {
-    let cmd = resolve_cmd(&normalise_cmd(&cmd));
+    let raw = resolve_cmd(&normalise_cmd(&cmd));
+    dbg(&format!("[spawn_process] exe={:?} args={:?} cwd={:?}", raw, args, cwd));
+    dbg(&format!("[spawn_process] exists={}", std::path::Path::new(&raw).exists()));
 
-    // ── DEBUG ────────────────────────────────────────────────────────────────
-    dbg(&format!("[spawn_process] cmd   = {:?}", cmd));
-    dbg(&format!("[spawn_process] args  = {:?}", args));
-    dbg(&format!("[spawn_process] cwd   = {:?}", cwd));
-    dbg(&format!("[spawn_process] exists= {}", std::path::Path::new(&cmd).exists()));
     #[cfg(windows)]
-    dbg(&format!("[spawn_process] PATH  = {}", enriched_path()));
-    // ─────────────────────────────────────────────────────────────────────────
+    {
+        let path = enriched_path();
+        let proc = win_spawn::spawn(&raw, &args, cwd.as_deref(), &path)
+            .map_err(|e| {
+                let exists = std::path::Path::new(&raw).exists();
+                format!("command {:?} failed: {} (os={:?}, exists={})", raw, e, e.raw_os_error(), exists)
+            })?;
 
-    let mut c = Command::new(&cmd).no_window();
-    c.args(&args)
-     .stdin(Stdio::piped())
-     .stdout(Stdio::piped())
-     .stderr(Stdio::piped());
-    #[cfg(windows)]
-    { c.env("PATH", enriched_path()); }
-    if let Some(dir) = &cwd { c.current_dir(dir); }
+        let pid        = proc.pid;
+        let handle     = proc.handle;
+        let stdin_pipe = proc.stdin_pipe;
+        let stdout_r   = proc.stdout_pipe;
+        let stderr_r   = proc.stderr_pipe;
 
-    let mut child = c.spawn().map_err(|e| {
-        let exists = std::path::Path::new(&cmd).exists();
-        let kind   = e.kind();
-        format!(
-            "spawn failed for {:?}: {} (os_error={:?}, file_exists={})",
-            cmd, e, kind, exists
-        )
-    })?;
-
-    let pid    = child.id();
-    let stdin  = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    { state.processes.lock().unwrap().insert(pid, stdin); }
-
-    let (eid_out, eid_err, eid_done) = (event_id.clone(), event_id.clone(), event_id.clone());
-    let (win_out, win_err, win_done) = (window.clone(), window.clone(), window.clone());
-
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
-            let _ = win_out.emit(&format!("proc://{}:stdout", eid_out), line);
+        // Store stdin write-end so write_stdin can use it
+        {
+            // We repurpose the existing ProcessMap to store a fake stdin writer.
+            // On Windows we bypass std::process so we wrap the raw HANDLE in a
+            // File so we can implement Write on it.
+            use std::os::windows::io::FromRawHandle;
+            let stdin_file = unsafe { std::fs::File::from_raw_handle(stdin_pipe as *mut _) };
+            state.processes.lock().unwrap().insert(pid, Box::new(stdin_file) as Box<dyn Write + Send>);
         }
-    });
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().flatten() {
-            let _ = win_err.emit(&format!("proc://{}:stderr", eid_err), line);
-        }
-    });
 
-    let processes = Arc::clone(&state.processes);
-    std::thread::spawn(move || {
-        let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
-        processes.lock().unwrap().remove(&pid);
-        let _ = win_done.emit(&format!("proc://{}:done", eid_done), code);
-    });
+        let (eid_out, eid_err, eid_done) = (event_id.clone(), event_id.clone(), event_id.clone());
+        let (win_out, win_err, win_done) = (window.clone(), window.clone(), window.clone());
 
-    Ok(pid)
+        std::thread::spawn(move || {
+            use std::os::windows::io::FromRawHandle;
+            use std::io::{BufRead, BufReader};
+            let f = unsafe { std::fs::File::from_raw_handle(stdout_r as *mut _) };
+            for line in BufReader::new(f).lines().flatten() {
+                let _ = win_out.emit(&format!("proc://{}:stdout", eid_out), line);
+            }
+        });
+
+        std::thread::spawn(move || {
+            use std::os::windows::io::FromRawHandle;
+            use std::io::{BufRead, BufReader};
+            let f = unsafe { std::fs::File::from_raw_handle(stderr_r as *mut _) };
+            for line in BufReader::new(f).lines().flatten() {
+                let _ = win_err.emit(&format!("proc://{}:stderr", eid_err), line);
+            }
+        });
+
+        let processes = Arc::clone(&state.processes);
+        std::thread::spawn(move || {
+            let code = win_spawn::wait_process(handle);
+            processes.lock().unwrap().remove(&pid);
+            let _ = win_done.emit(&format!("proc://{}:done", eid_done), code);
+        });
+
+        Ok(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = Command::new(&raw).no_window();
+        c.args(&args)
+         .stdin(Stdio::piped())
+         .stdout(Stdio::piped())
+         .stderr(Stdio::piped());
+        if let Some(dir) = &cwd { c.current_dir(dir); }
+
+        let mut child = c.spawn().map_err(|e| {
+            let exists = std::path::Path::new(&raw).exists();
+            format!("command {:?} not found (exists={}): {}", raw, exists, e)
+        })?;
+
+        let pid    = child.id();
+        let stdin  = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        { state.processes.lock().unwrap().insert(pid, Box::new(stdin) as Box<dyn Write + Send>); }
+
+        let (eid_out, eid_err, eid_done) = (event_id.clone(), event_id.clone(), event_id.clone());
+        let (win_out, win_err, win_done) = (window.clone(), window.clone(), window.clone());
+
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().flatten() {
+                let _ = win_out.emit(&format!("proc://{}:stdout", eid_out), line);
+            }
+        });
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().flatten() {
+                let _ = win_err.emit(&format!("proc://{}:stderr", eid_err), line);
+            }
+        });
+
+        let processes = Arc::clone(&state.processes);
+        std::thread::spawn(move || {
+            let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+            processes.lock().unwrap().remove(&pid);
+            let _ = win_done.emit(&format!("proc://{}:done", eid_done), code);
+        });
+
+        Ok(pid)
+    }
 }
 
-// ── write_stdin ───────────────────────────────────────────────────────────────
 #[tauri::command]
 async fn write_stdin(state: tauri::State<'_, AppState>, pid: u32, data: String) -> Result<(), String> {
     let mut map = state.processes.lock().unwrap();
@@ -450,7 +688,7 @@ async fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     unsafe { libc::kill(pid as i32, libc::SIGTERM); }
     #[cfg(windows)]
-    { Command::new("taskkill").no_window().args(["/PID", &pid.to_string(), "/F"]).output().ok(); }
+    { win_spawn::kill(pid); }
     Ok(())
 }
 
@@ -613,6 +851,90 @@ async fn get_tsuki_bin(app: tauri::AppHandle) -> String {
     read_setting_or(&app, "tsukiPath", "tsuki")
 }
 
+/// Resolves a tsuki tool binary using a priority chain:
+///   1. Explicit setting key (if set and file exists on disk)
+///   2. Sibling of the configured tsukiPath binary
+///   3. Auto-detected via where/which in the enriched PATH
+///   4. Bare name as last resort (let the OS resolve it)
+fn resolve_tsuki_tool(app: &tauri::AppHandle, setting_key: &str, bin_name: &str) -> String {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+
+    // 1. Explicit setting
+    let explicit = read_setting_or(app, setting_key, "");
+    if !explicit.is_empty() && explicit != bin_name {
+        let p = std::path::Path::new(&explicit);
+        if p.exists() {
+            dbg(&format!("[resolve_tsuki_tool] {} → explicit setting: {}", bin_name, explicit));
+            return explicit;
+        }
+        dbg(&format!("[resolve_tsuki_tool] {} → explicit setting path not found: {}", bin_name, explicit));
+    }
+
+    // 2. Sibling of tsukiPath
+    let tsuki_path = read_setting_or(app, "tsukiPath", "");
+    if !tsuki_path.is_empty() {
+        let p = std::path::Path::new(&tsuki_path);
+        if let Some(dir) = p.parent() {
+            let candidate = dir.join(format!("{}{}", bin_name, ext));
+            if candidate.exists() {
+                let s = candidate.to_string_lossy().into_owned();
+                dbg(&format!("[resolve_tsuki_tool] {} → sibling of tsukiPath: {}", bin_name, s));
+                return s;
+            }
+        }
+    }
+
+    // 3. Auto-detect via where/which with enriched PATH
+    #[cfg(windows)]
+    {
+        if let Ok(out) = Command::new("where")
+            .no_window()
+            .env("PATH", enriched_path())
+            .arg(bin_name)
+            .output()
+        {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = stdout.lines().next() {
+                    let found = line.trim().to_string();
+                    if !found.is_empty() && std::path::Path::new(&found).exists() {
+                        dbg(&format!("[resolve_tsuki_tool] {} → where.exe found: {}", bin_name, found));
+                        return found;
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(out) = Command::new("which").no_window().arg(bin_name).output() {
+            if out.status.success() {
+                let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !found.is_empty() {
+                    dbg(&format!("[resolve_tsuki_tool] {} → which found: {}", bin_name, found));
+                    return found;
+                }
+            }
+        }
+    }
+
+    // 4. Bare name — let the OS resolve at spawn time
+    dbg(&format!("[resolve_tsuki_tool] {} → falling back to bare name", bin_name));
+    bin_name.to_string()
+}
+
+/// Returns the configured tsuki-core binary path.
+#[tauri::command]
+async fn get_tsuki_core_bin(app: tauri::AppHandle) -> String {
+    resolve_tsuki_tool(&app, "tsukiCorePath", "tsuki-core")
+}
+
+/// Returns the configured tsuki-sim binary path.
+#[tauri::command]
+async fn get_tsuki_sim_bin(app: tauri::AppHandle) -> String {
+    resolve_tsuki_tool(&app, "tsukiSimPath", "tsuki-sim")
+}
+
 /// Reads defaultBoard from settings.json, falls back to "uno".
 #[tauri::command]
 async fn get_default_board(app: tauri::AppHandle) -> String {
@@ -659,6 +981,8 @@ fn main() {
             run_git,
             get_tmp_go_path,
             get_tsuki_bin,
+            get_tsuki_core_bin,
+            get_tsuki_sim_bin,
             get_default_board,
         ])
         .setup(|app| {

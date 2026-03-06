@@ -503,6 +503,30 @@ function SandboxTab() {
         />
       </SettingsField>
 
+      <SettingsField
+        name="Energy flow visualisation"
+        desc="When enabled, tsuki-sim computes per-pin voltage and current. Requires showCurrentFlow to be active for wire animation."
+      >
+        <Toggle
+          on={settings.showCurrentFlow}
+          onToggle={() => updateSetting('showCurrentFlow', !settings.showCurrentFlow)}
+        />
+      </SettingsField>
+
+      <SettingsField
+        name="tsuki-sim path"
+        desc="Path to the tsuki-sim binary. Leave blank to auto-detect next to tsuki-core or from PATH."
+      >
+        <div className="flex items-center gap-1.5 flex-1">
+          <input
+            value={(settings as any).tsukiSimPath ?? ''}
+            onChange={e => updateSetting('tsukiSimPath' as any, e.target.value)}
+            placeholder="auto (tsuki-sim)"
+            className="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--fg)] outline-none font-mono"
+          />
+        </div>
+      </SettingsField>
+
       <GroupHeader title="How to use" />
       <div className="mt-4 mb-6 flex flex-col gap-3">
         {[

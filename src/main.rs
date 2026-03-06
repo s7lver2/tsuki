@@ -29,50 +29,6 @@ fn main() {
         return;
     }
 
-    // ── simulate subcommand ───────────────────────────────────────────────────
-    // tsuki simulate <file.go> [--steps N] [--board B]
-    if args.get(1).map(|s| s == "simulate").unwrap_or(false) {
-        let input: PathBuf = args.get(2).cloned().unwrap_or_else(|| {
-            eprintln!("error: tsuki simulate requires an input file");
-            std::process::exit(1);
-        }).into();
-
-        let steps: Option<usize> = flag_value(&args, "--steps")
-            .and_then(|s| s.parse().ok());
-        let board = flag_value(&args, "--board").unwrap_or_else(|| "uno".into());
-
-        let source = match std::fs::read_to_string(&input) {
-            Ok(s)  => s,
-            Err(e) => { eprintln!("error: {}: {}", input.display(), e); std::process::exit(1); }
-        };
-        let filename = input.to_string_lossy().into_owned();
-
-        let cfg = TranspileConfig { board, ..Default::default() };
-        let tokens = match tsuki_core::lexer::Lexer::new(&source, &filename).tokenize() {
-            Ok(t)  => t,
-            Err(e) => {
-                let err = serde_json::json!({"ok":false,"error":tsuki_core::pretty_error(&e,&source),"events":[],"pins":{},"serial":[],"ms":0});
-                println!("{}", err);
-                std::process::exit(1);
-            }
-        };
-        let prog = match tsuki_core::parser::Parser::new(tokens).parse_program() {
-            Ok(p)  => p,
-            Err(e) => {
-                let err = serde_json::json!({"ok":false,"error":tsuki_core::pretty_error(&e,&source),"events":[],"pins":{},"serial":[],"ms":0});
-                println!("{}", err);
-                std::process::exit(1);
-            }
-        };
-
-        if let Err(e) = tsuki_core::simulator::run(&prog, steps) {
-            eprintln!("simulate error: {}", e);
-            std::process::exit(1);
-        }
-        let _ = cfg; // suppress unused warning
-        return;
-    }
-
     // ── pkg subcommand ────────────────────────────────────────────────────────
     if args.get(1).map(|s| s == "pkg").unwrap_or(false) {
         handle_pkg(&args);
@@ -80,15 +36,25 @@ fn main() {
     }
 
     // ── Positional args ───────────────────────────────────────────────────────
-    let input: PathBuf = args[1].clone().into();
-    let output: Option<PathBuf> = args.get(2)
-        .filter(|s| !s.starts_with('-'))
-        .map(|s| s.clone().into());
+    // First non-flag argument is the input file; second (if non-flag) is output.
+    let positional: Vec<&String> = args[1..].iter()
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+
+    let input: PathBuf = match positional.first() {
+        Some(p) => (*p).clone().into(),
+        None => {
+            eprintln!("error: missing input file\n\nUsage: tsuki <input.go> [output.cpp] [FLAGS]\nRun `tsuki --help` for more information.");
+            std::process::exit(1);
+        }
+    };
+    let output: Option<PathBuf> = positional.get(1).map(|s| (*s).clone().into());
 
     // ── Named flags ───────────────────────────────────────────────────────────
     let board      = flag_value(&args, "--board").unwrap_or_else(|| "uno".into());
     let source_map = args.iter().any(|a| a == "--source-map");
     let check_only = args.iter().any(|a| a == "--check");
+    let emit_sim   = flag_value(&args, "--emit-sim"); // path for .sim.json bundle
 
     // External library flags
     let libs_dir   = flag_value(&args, "--libs-dir").map(PathBuf::from);
@@ -97,7 +63,7 @@ fn main() {
         .unwrap_or_default();
 
     let cfg = TranspileConfig {
-        board,
+        board: board.clone(),
         emit_source_map: source_map,
         ..Default::default()
     };
@@ -136,6 +102,20 @@ fn main() {
 
     match pipeline.run(&source, &filename) {
         Ok(cpp) => {
+            // ── Emit .sim.json bundle if requested ────────────────────────────
+            if let Some(ref sim_path) = emit_sim {
+                let bundle = serde_json::json!({
+                    "source":   source,
+                    "filename": filename,
+                    "board":    board,
+                    "cpp":      cpp,
+                });
+                if let Err(e) = std::fs::write(sim_path, bundle.to_string()) {
+                    eprintln!("error: cannot write sim bundle {}: {}", sim_path, e);
+                    std::process::exit(1);
+                }
+                eprintln!("sim  {}", sim_path);
+            }
             match output {
                 Some(path) => {
                     if let Err(e) = std::fs::write(&path, &cpp) {
@@ -314,6 +294,7 @@ FLAGS:
     --board <id>           Target board (default: uno)
     --source-map           Emit #line pragmas for IDE source mapping
     --check                Validate source only (no output produced)
+    --emit-sim <path>      Write a .sim.json bundle for tsuki-sim (IDE sandbox)
     --libs-dir <path>      Root directory of installed tsukilib packages
     --packages <n,...>     Comma-separated package names to load from libs-dir
     --version              Print version
@@ -327,6 +308,7 @@ EXAMPLES:
     tsuki src/main.go build/main.cpp --board esp32
     tsuki src/main.go                               # print C++ to stdout
     tsuki src/main.go --check                       # validate only
+    tsuki src/main.go build/main.cpp --emit-sim build/main.sim.json --board uno
     tsuki src/main.go build/main.cpp \
         --board uno \
         --libs-dir ~/.local/share/tsuki/libs \

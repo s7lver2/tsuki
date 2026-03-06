@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "tsuki-flash"
 path = "flash/main.rs"
 
+[[bin]]
+name = "tsuki-sim"
+path = "sim/main.rs"
+
 # ─── library (used by CLI / IDE integrations) ─────────────────
 [lib]
 name = "tsuki_core"
@@ -36,9 +40,9 @@ colored    = "2.1"
 walkdir    = "2.5"
 ureq       = { version = "2.9", features = ["json"] }
 zip        = { version = "0.6", default-features = false, features = ["deflate"] }
+flate2     = "1.0"
+bzip2      = "0.4"
 tar        = "0.4"
-flate2     = { version = "1.0", default-features = false, features = ["rust_backend"] }
-bzip2      = { version = "0.4", features = ["static"] }
 lzma-rs    = "0.3"
 
 # ─── dev dependencies ─────────────────────────────────────────

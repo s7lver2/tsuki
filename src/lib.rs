@@ -7,7 +7,6 @@ pub mod lexer;
 pub mod parser;
 pub mod runtime;
 pub mod transpiler;
-pub mod simulator;
 
 pub use error::{TsukiError, Result, Span};
 pub use transpiler::TranspileConfig;
