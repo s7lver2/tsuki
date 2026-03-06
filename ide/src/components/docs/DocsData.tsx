@@ -18,6 +18,9 @@ import InstallationPage from './pages/Installation'
 import FirstProjectPage from './pages/FirstProject'
 import IdeTourPage      from './pages/IdeTour'
 import BoardsPage       from './pages/Boards'
+import GoBasicsPage     from './pages/GoBasics'
+import ArduinoPkgPage   from './pages/ArduinoPkg'
+import PinsGpioPage     from './pages/PinsGpio'
 import WipPage          from './pages/WipPage'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -96,27 +99,27 @@ export const SECTIONS: DocSection[] = [
         title: 'Go Basics',
         section: 'language',
         tags: ['go', 'syntax', 'basics', 'variables', 'functions'],
-        text: 'Go syntax basics for Arduino firmware. Variables constants functions structs interfaces. Type system int uint8 float32 bool string byte rune. Control flow if else for range switch. Import declarations package main.',
-        content: <WipPage title="Go Basics" />,
-        wip: true,
+        text: 'Go syntax basics for Arduino firmware. Variables constants functions structs interfaces. Type system int uint8 float32 bool string byte rune. Control flow if else for range switch. Import declarations package main. Arrays slices. setup loop entry points.',
+        content: <GoBasicsPage />,
+        wip: false,
       },
       {
         id: 'arduino-pkg',
         title: 'arduino package',
         section: 'language',
-        tags: ['arduino', 'package', 'import', 'pinmode', 'digitalwrite'],
-        text: 'The arduino built-in package. PinMode DigitalWrite DigitalRead AnalogRead AnalogWrite Delay Millis Micros Serial.Begin Serial.Print Serial.Println. Constants OUTPUT INPUT INPUT_PULLUP HIGH LOW. Interrupts attachInterrupt detachInterrupt.',
-        content: <WipPage title="arduino package" />,
-        wip: true,
+        tags: ['arduino', 'package', 'import', 'pinmode', 'digitalwrite', 'serial', 'analog', 'pwm', 'interrupt', 'millis', 'delay'],
+        text: 'The arduino built-in package. PinMode DigitalWrite DigitalRead AnalogRead AnalogWrite Delay Millis Micros Tone NoTone ShiftIn ShiftOut PulseIn Map Constrain Abs Min Max Random. Serial.Begin Serial.Print Serial.Println Serial.Available Serial.Read. Constants HIGH LOW INPUT OUTPUT INPUT_PULLUP RISING FALLING CHANGE. AttachInterrupt DetachInterrupt. Non-blocking millis pattern.',
+        content: <ArduinoPkgPage />,
+        wip: false,
       },
       {
         id: 'pins',
         title: 'Pins & GPIO',
         section: 'language',
-        tags: ['pins', 'gpio', 'digital', 'analog', 'pwm'],
-        text: 'Working with digital and analog pins in tsuki. DigitalWrite DigitalRead AnalogRead AnalogWrite PWM tone noTone. Pin numbering for Arduino Uno D0-D13 A0-A5. Voltage levels 5V 3.3V.',
-        content: <WipPage title="Pins & GPIO" />,
-        wip: true,
+        tags: ['pins', 'gpio', 'digital', 'analog', 'pwm', 'interrupt', 'input', 'output', 'pullup'],
+        text: 'Digital and analog pins in tsuki. PinMode OUTPUT INPUT INPUT_PULLUP. DigitalWrite DigitalRead. AnalogRead 10-bit 0-1023 voltage. AnalogWrite PWM duty cycle 0-255. PWM pins frequencies. Hardware interrupts ISR AttachInterrupt RISING FALLING CHANGE. PulseIn ultrasonic HC-SR04. Map Constrain utility functions.',
+        content: <PinsGpioPage />,
+        wip: false,
       },
       {
         id: 'serial',

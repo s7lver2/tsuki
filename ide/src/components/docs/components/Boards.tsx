@@ -4,7 +4,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react'
-import { H2, P, Divider, InlineCode, Note, Table, Badge } from '../DocsPrimitives'
+import type { ReactNode } from 'react'
+import { H2, P, Divider, InlineCode, Note, Table } from '../DocsPrimitives'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -358,7 +359,7 @@ interface BoardMeta {
   tsukiId: string
   chip: string
   badge: string
-  diagram: React.ReactNode
+  diagram: ReactNode
   specs: SpecRow[]
   desc: string
 }
