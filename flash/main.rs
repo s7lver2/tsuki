@@ -401,7 +401,7 @@ fn cmd_boards() {
 
 fn cmd_sdk_info(board_id: &str) -> Result<()> {
     let board = find_board(board_id)?;
-    match sdk::resolve(board.arch(), board.variant) {
+    match sdk::resolve(board.arch(), board.variant, false) {
         Ok(paths) => {
             println!("{} SDK found  ({})", "✓".green().bold(), paths.sdk_version);
             println!("  core:     {}", paths.core_dir.display());
@@ -487,29 +487,15 @@ fn sdk_label(use_modules: bool, arch: &str) -> String {
     }
 }
 
-/// If --use-modules is set, ensure the core is installed (auto-download if absent).
-/// Uses the fast-path avr module when arch == "avr"; falls back to generic install.
+/// Ensure the core for `arch` is ready.
+/// --use-modules forces tsuki-modules; without it sdk::resolve() still auto-installs
+/// transparently on first compile (fast no-op on subsequent runs).
 fn ensure_modules_ready(use_modules: bool, arch: &str) -> Result<()> {
     if !use_modules { return Ok(()); }
-    match arch {
-        "avr" => {
-            // avr::ensure() is a no-op (microseconds) when already installed.
-            cores::avr::ensure(false).map(|_| ())
-        }
-        _ => {
-            if cores::is_installed(arch) { return Ok(()); }
-            eprintln!(
-                "{} Core for arch '{}' is not installed in tsuki-modules.",
-                "✗".red().bold(), arch
-            );
-            eprintln!("  Run: {}", format!("tsuki-flash modules install {}", arch).bold());
-            Err(FlashError::SdkNotFound {
-                arch: arch.into(),
-                path: "~/.tsuki/modules".into(),
-                pkg:  format!("tsuki-flash modules install {}", arch),
-            })
-        }
-    }
+    // Calling ensure_arch() here gives an early, user-friendly message before
+    // the compile pipeline starts.  sdk::resolve() would do it anyway, but
+    // this lets us print the download progress before the "Compiling" banner.
+    cores::ensure_arch(arch, "standard", false).map(|_| ())
 }
 
 fn print_firmware_info(res: &compile::CompileResult) {
@@ -539,8 +525,7 @@ fn render_compile_error(e: &FlashError) {
             eprintln!("  Expected at: {}", path.yellow());
             eprintln!("  Install with tsuki-modules: {}",
                 format!("tsuki-flash modules install {}", arch).bold());
-            eprintln!("  Or via arduino-cli: {}",
-                format!("arduino-cli core install {}", pkg).bold());
+            eprintln!("  {} tsuki-modules handles this automatically on next build.", "→".cyan());
         }
         FlashError::ToolchainNotFound(msg) => eprintln!("  {} {}", "✗".red(), msg),
         _ => eprintln!("  {}", e),

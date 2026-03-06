@@ -214,6 +214,8 @@ async fn spawn_shell(
      .stdout(Stdio::piped())
      .stderr(Stdio::piped());
 
+    #[cfg(windows)]
+    { c.env("PATH", enriched_path()); }
     #[cfg(not(windows))]
     c.env("TERM", "dumb").env("COLORTERM", "");
 
@@ -321,7 +323,44 @@ fn normalise_cmd(raw: &str) -> String {
     result
 }
 
-// ── spawn_process ─────────────────────────────────────────────────────────────
+// ── resolve_cmd ───────────────────────────────────────────────────────────────
+// On Windows, Command::new("tsuki") resolves the executable using the *current*
+// process PATH, BEFORE any .env("PATH", enriched) takes effect.  We must
+// manually find the full path using where.exe with our enriched PATH first.
+#[cfg(windows)]
+fn resolve_cmd(cmd: &str) -> String {
+    // Already an absolute path — nothing to do
+    let is_absolute = cmd.starts_with('\\')
+        || cmd.starts_with('/')
+        || (cmd.len() > 2 && cmd.chars().nth(1) == Some(':'));
+    if is_absolute { return cmd.to_string(); }
+
+    // Try where.exe with the enriched PATH
+    if let Ok(out) = Command::new("where")
+        .no_window()
+        .env("PATH", enriched_path())
+        .arg(cmd)
+        .output()
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = s.lines().next() {
+                let p = line.trim().to_string();
+                if !p.is_empty() {
+                    dbg(&format!("[resolve_cmd] {} -> {}", cmd, p));
+                    return p;
+                }
+            }
+        }
+    }
+
+    // Fallback: return as-is and let the OS try
+    cmd.to_string()
+}
+#[cfg(not(windows))]
+fn resolve_cmd(cmd: &str) -> String { cmd.to_string() }
+
+
 #[tauri::command]
 async fn spawn_process(
     window:   Window,
@@ -331,7 +370,7 @@ async fn spawn_process(
     cwd:      Option<String>,
     event_id: String,
 ) -> Result<u32, String> {
-    let cmd = normalise_cmd(&cmd);
+    let cmd = resolve_cmd(&normalise_cmd(&cmd));
 
     // ── DEBUG ────────────────────────────────────────────────────────────────
     dbg(&format!("[spawn_process] cmd   = {:?}", cmd));
@@ -556,6 +595,42 @@ async fn run_git(args: Vec<String>, cwd: String) -> Result<String, String> {
     else { Err(if stderr.trim().is_empty() { stdout } else { stderr }) }
 }
 
+// ── Simulator helpers ─────────────────────────────────────────────────────────
+
+/// Returns a stable temp-file path for the Go source being simulated.
+#[tauri::command]
+async fn get_tmp_go_path() -> String {
+    #[cfg(windows)]
+    let dir = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Temp".into());
+    #[cfg(not(windows))]
+    let dir = "/tmp".to_string();
+    format!("{}/tsuki_sim_src.go", dir)
+}
+
+/// Reads tsukiPath from settings.json, falls back to "tsuki".
+#[tauri::command]
+async fn get_tsuki_bin(app: tauri::AppHandle) -> String {
+    read_setting_or(&app, "tsukiPath", "tsuki")
+}
+
+/// Reads defaultBoard from settings.json, falls back to "uno".
+#[tauri::command]
+async fn get_default_board(app: tauri::AppHandle) -> String {
+    read_setting_or(&app, "defaultBoard", "uno")
+}
+
+fn read_setting_or(app: &tauri::AppHandle, key: &str, fallback: &str) -> String {
+    let dir = match app.path_resolver().app_config_dir() { Some(d) => d, None => return fallback.into() };
+    if let Ok(raw) = std::fs::read_to_string(dir.join("settings.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+                if !s.is_empty() { return s.to_string(); }
+            }
+        }
+    }
+    fallback.into()
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 fn main() {
     dbg("=== tsuki-ide started ===");
@@ -582,6 +657,9 @@ fn main() {
             rename_path,
             create_dir,
             run_git,
+            get_tmp_go_path,
+            get_tsuki_bin,
+            get_default_board,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

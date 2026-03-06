@@ -11,3 +11,5 @@ ide/out
 releases/
 cli/go.sum
 *.iss
+ide/public/*
+circuittest.json

@@ -59,21 +59,28 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		board = m.Board
 	}
 
-	// Base build directory: <project>/build/
 	baseOutDir := opts.OutputDir
 	if baseOutDir == "" {
 		baseOutDir = filepath.Join(projectDir, m.Build.OutputDir)
 	}
 
-	// ── Arduino sketch directory ─────────────────────────────────────────────
-	// arduino-cli compile requires a sketch directory whose name matches the
-	// .ino file inside it:  build/<name>/<name>.ino
+	switch m.EffectiveLanguage() {
+	case manifest.LangCpp:
+		return runNative(projectDir, m, opts, board, baseOutDir, "cpp")
+	case manifest.LangIno:
+		return runNative(projectDir, m, opts, board, baseOutDir, "ino")
+	default:
+		return runGo(projectDir, m, opts, board, baseOutDir)
+	}
+}
+
+// runGo is the original Go → transpile → compile pipeline.
+func runGo(projectDir string, m *manifest.Manifest, opts Options, board, baseOutDir string) (*Result, error) {
 	sketchName := sanitizeSketchName(m.Name)
 	if sketchName == "" {
 		sketchName = "sketch"
 	}
 	sketchDir := filepath.Join(baseOutDir, sketchName)
-
 	if err := os.MkdirAll(sketchDir, 0755); err != nil {
 		return nil, fmt.Errorf("creating sketch dir: %w", err)
 	}
@@ -81,7 +88,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	transpiler := core.New(opts.CoreBin, opts.Verbose)
 	if !transpiler.Installed() {
 		return nil, fmt.Errorf(
-			"tsuki-core not found — install it or set core_binary in config\n"+
+			"tsuki-core not found \u2014 install it or set core_binary in config\n" +
 				"  tsuki config set core_binary /path/to/tsuki-core",
 		)
 	}
@@ -92,7 +99,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		return nil, fmt.Errorf("no .go files found in %s", srcDir)
 	}
 
-	// Resolve declared packages
 	pkgNames := m.PackageNames()
 	libsDir  := pkgmgr.LibsDir()
 
@@ -115,7 +121,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 
 	for _, goFile := range goFiles {
 		base    := strings.TrimSuffix(filepath.Base(goFile), ".go")
-		cppFile := filepath.Join(sketchDir, base+".cpp") // write INTO sketch dir
+		cppFile := filepath.Join(sketchDir, base+".cpp")
 
 		sp := ui.NewSpinner(fmt.Sprintf("%s → %s", filepath.Base(goFile), filepath.Base(cppFile)))
 		sp.Start()
@@ -142,8 +148,6 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		ui.Warn(w)
 	}
 
-	// ── Write the .ino stub ──────────────────────────────────────────────────
-	// arduino-cli needs <sketchDir>/<sketchName>.ino to exist.
 	if err := writeInoStub(sketchDir, sketchName, result.CppFiles); err != nil {
 		return nil, fmt.Errorf("writing .ino stub: %w", err)
 	}
@@ -153,23 +157,120 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 		return result, nil
 	}
 
-	// ── Compile — dispatch to selected backend ────────────────────────────
-	ui.SectionTitle("Compiling")
+	return compileSketch(result, m, board, opts, sketchDir, baseOutDir)
+}
 
+// runNative handles native C++ and .ino projects without a transpilation step.
+func runNative(projectDir string, m *manifest.Manifest, opts Options, board, baseOutDir, lang string) (*Result, error) {
+	sketchName := sanitizeSketchName(m.Name)
+	if sketchName == "" {
+		sketchName = "sketch"
+	}
+	sketchDir := filepath.Join(baseOutDir, sketchName)
+	if err := os.MkdirAll(sketchDir, 0755); err != nil {
+		return nil, fmt.Errorf("creating sketch dir: %w", err)
+	}
+
+	srcDir := filepath.Join(projectDir, "src")
+	var pattern string
+	switch lang {
+	case "ino":
+		pattern = "*.ino"
+	default:
+		pattern = "*.cpp"
+	}
+
+	srcFiles, err := filepath.Glob(filepath.Join(srcDir, pattern))
+	if err != nil || len(srcFiles) == 0 {
+		return nil, fmt.Errorf("no .%s files found in %s", lang, srcDir)
+	}
+
+	// For C++, also bring over headers
+	var hFiles []string
+	if lang == "cpp" {
+		hFiles, _ = filepath.Glob(filepath.Join(srcDir, "*.h"))
+		h2, _ := filepath.Glob(filepath.Join(srcDir, "*.hpp"))
+		hFiles = append(hFiles, h2...)
+	}
+
+	langLabel := map[string]string{"cpp": "C++", "ino": "Arduino (.ino)"}[lang]
+	ui.SectionTitle(fmt.Sprintf("Preparing  [lang: %s]  [board: %s]", langLabel, board))
+
+	result := &Result{SketchDir: sketchDir}
+
+	for _, src := range append(srcFiles, hFiles...) {
+		dst := filepath.Join(sketchDir, filepath.Base(src))
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", src, err)
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return nil, fmt.Errorf("copying %s: %w", filepath.Base(src), err)
+		}
+		sp := ui.NewSpinner(fmt.Sprintf("copy %s", filepath.Base(src)))
+		sp.Start()
+		sp.Stop(true, fmt.Sprintf("src/%s  →  build/%s/%s",
+			filepath.Base(src), sketchName, filepath.Base(src)))
+		ext := strings.ToLower(filepath.Ext(src))
+		if ext == ".cpp" || ext == ".ino" {
+			result.CppFiles = append(result.CppFiles, dst)
+		}
+	}
+
+	if lang == "ino" {
+		// arduino-cli requires the primary .ino to match the sketch dir name
+		primary  := filepath.Join(sketchDir, filepath.Base(srcFiles[0]))
+		expected := filepath.Join(sketchDir, sketchName+".ino")
+		if primary != expected {
+			data, _ := os.ReadFile(primary)
+			_ = os.WriteFile(expected, data, 0644)
+			_ = os.Remove(primary)
+			for i, f := range result.CppFiles {
+				if f == primary {
+					result.CppFiles[i] = expected
+				}
+			}
+		}
+	} else {
+		if err := writeInoStub(sketchDir, sketchName, result.CppFiles); err != nil {
+			return nil, fmt.Errorf("writing .ino stub: %w", err)
+		}
+		ui.Step("sketch", fmt.Sprintf("wrote %s/%s.ino stub", sketchName, sketchName))
+	}
+
+	if !opts.Compile {
+		return result, nil
+	}
+
+	return compileSketch(result, m, board, opts, sketchDir, baseOutDir)
+}
+
+// compileSketch dispatches to the selected backend. Used by both runGo and runNative.
+func compileSketch(result *Result, m *manifest.Manifest, board string, opts Options, sketchDir, baseOutDir string) (*Result, error) {
 	backend := opts.Backend
 	if backend == "" {
 		backend = "arduino-cli"
 	}
+
+	ui.FlashBadge(backend)
+	ui.SectionTitle("Compiling")
+
+	pkgNames := m.PackageNames()
+	libsDir  := pkgmgr.LibsDir()
 
 	buildCacheDir := filepath.Join(baseOutDir, ".cache")
 	_ = os.MkdirAll(buildCacheDir, 0755)
 
 	switch backend {
 	case "tsuki-flash":
-		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir); err != nil {
+		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir, false); err != nil {
 			return result, err
 		}
-	default: // "arduino-cli" or anything unrecognised
+	case "tsuki-flash+cores":
+		if err := compileTsukiFlash(result, m, board, opts, buildCacheDir, pkgNames, libsDir, true); err != nil {
+			return result, err
+		}
+	default:
 		if err := compileArduinoCLI(result, board, opts, sketchDir, buildCacheDir); err != nil {
 			return result, err
 		}
@@ -195,6 +296,7 @@ func compileTsukiFlash(
 	buildCacheDir string,
 	pkgNames []string,
 	libsDir string,
+	useModules bool, // true → backend is "tsuki-flash+cores", pass --use-modules
 ) error {
 	flashBin := opts.FlashBinary
 	if flashBin == "" {
@@ -225,6 +327,8 @@ func compileTsukiFlash(
 		cppStd = "c++11"
 	}
 
+	lang := m.EffectiveLanguage()
+
 	args := []string{
 		"compile",
 		"--board", board,
@@ -232,6 +336,7 @@ func compileTsukiFlash(
 		"--build-dir", buildCacheDir,
 		"--name", sanitizeSketchName(m.Name),
 		"--cpp-std", cppStd,
+		"--language", lang,
 	}
 	for _, inc := range includeArgs {
 		args = append(args, "--include", inc)
@@ -239,11 +344,46 @@ func compileTsukiFlash(
 	if opts.Verbose {
 		args = append(args, "--verbose")
 	}
+	if useModules {
+		// Instructs tsuki-flash to use ~/.tsuki/modules as the SDK root instead
+		// of .arduino15. The first invocation auto-installs the SDK via the
+		// tsuki-modules AVR module if it is not already present.
+		args = append(args, "--use-modules")
+	}
 
+	cmd := exec.Command(flashBin, args...)
+
+	// When using modules the first run may download the SDK (~40 MB).
+	// We let tsuki-flash own the terminal completely during this phase:
+	// no spinner (it would collide with the download progress lines),
+	// stdout streams through directly, stderr is captured for the traceback.
+	if useModules {
+		var stderrBuf strings.Builder
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = &stderrBuf
+
+		cmdErr := cmd.Run()
+		if cmdErr != nil {
+			ui.Fail("compilation failed")
+			errOut := strings.TrimSpace(stderrBuf.String())
+			if errOut != "" {
+				renderTsukiFlashError(errOut)
+			} else {
+				// stderr was empty — the error was already printed to stdout above
+				ui.Traceback("CompileError", "tsuki-flash exited with error (see output above)", []ui.Frame{
+					{File: "tsuki-flash", Func: "compile", Code: []ui.CodeLine{{Number: 0, Text: "see output above", IsPointer: true}}},
+				})
+			}
+			return fmt.Errorf("tsuki-flash compile failed")
+		}
+		ui.Success(fmt.Sprintf("firmware written to %s", buildCacheDir))
+		return nil
+	}
+
+	// Non-modules path: capture combined output and show on error.
 	sp := ui.NewSpinner(fmt.Sprintf("tsuki-flash compile --board %s", board))
 	sp.Start()
 
-	cmd := exec.Command(flashBin, args...)
 	out, cmdErr := cmd.CombinedOutput()
 	if cmdErr != nil {
 		sp.Stop(false, "compilation failed")
@@ -304,7 +444,7 @@ func compileArduinoCLI(
 
 	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
 	return nil
-
+}
 // writeInoStub creates <sketchDir>/<sketchName>.ino — the required entry
 // point for arduino-cli. The stub must NOT #include the generated .cpp files:
 // arduino-cli independently compiles every .cpp in the sketch directory as its
@@ -364,7 +504,7 @@ func newBuildCmd() *cobra.Command {
 				CoreBin:     cfg.CoreBinary,
 				ArduinoCLI:  cfg.ArduinoCLI,
 				FlashBinary: cfg.FlashBinary,
-				Backend:     cfg.Backend,
+				Backend:     m.Backend,
 				SourceMap:   m.Build.SourceMap,
 			}
 
@@ -392,20 +532,44 @@ func renderTsukiFlashError(output string) {
 	var frames []ui.Frame
 	var errMsg string
 
+	// Classify each line so we can build a useful traceback.
+	// We keep ALL non-empty lines — including linker "undefined reference" lines
+	// which don't contain "error:" but are essential for diagnosis.
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// tsuki-flash error format: "✗ <message>" or "error: <message>"
-		if strings.HasPrefix(line, "✗") || strings.Contains(line, "error:") || strings.Contains(line, "Error:") {
-			if errMsg == "" {
-				errMsg = strings.TrimPrefix(strings.TrimPrefix(line, "✗ "), "error: ")
-			}
-			frames = append(frames, ui.Frame{
-				File: "tsuki-flash", Func: "compile",
-				Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: true}},
-			})
+
+		isHighlight := strings.HasPrefix(line, "✗") ||
+			strings.Contains(line, "error:") ||
+			strings.Contains(line, "Error:") ||
+			strings.Contains(line, "failed:") ||
+			strings.Contains(line, "Failed:") ||
+			strings.Contains(line, "failed —") ||
+			strings.Contains(line, "undefined reference") ||
+			strings.Contains(line, "AVR SDK") ||
+			strings.Contains(line, "SDK install") ||
+			strings.Contains(line, "Some downloads")
+
+		if errMsg == "" && isHighlight {
+			errMsg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(
+				line, "✗ "), "error: "), "Error: ")
+		}
+
+		frames = append(frames, ui.Frame{
+			File: "tsuki-flash", Func: "compile",
+			Code: []ui.CodeLine{{Number: 0, Text: line, IsPointer: isHighlight && len(frames) == 0}},
+		})
+	}
+
+	// Cap to a reasonable number of frames to avoid flooding the terminal.
+	// Prioritise the last 12 lines (where linker errors tend to cluster).
+	if len(frames) > 12 {
+		frames = frames[len(frames)-12:]
+		// Re-set the pointer on the first visible frame.
+		if len(frames) > 0 {
+			frames[0].Code[0].IsPointer = true
 		}
 	}
 
@@ -416,6 +580,11 @@ func renderTsukiFlashError(output string) {
 			Code: []ui.CodeLine{{Number: 0, Text: errMsg, IsPointer: true}},
 		}}
 	}
+
+	if errMsg == "" {
+		errMsg = strings.TrimSpace(output)
+	}
+
 	ui.Traceback("CompileError", errMsg, frames)
 }
 

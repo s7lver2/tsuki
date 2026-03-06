@@ -12,7 +12,7 @@ pub enum FlashError {
     #[error("Toolchain not found: {0}\n  Hint: install avr-gcc or the relevant Arduino SDK")]
     ToolchainNotFound(String),
 
-    #[error("SDK not found for arch '{arch}'\n  Expected at: {path}\n  Hint: run `arduino-cli core install {pkg}` once to fetch the SDK")]
+    #[error("SDK not found for arch '{arch}'\n  Expected at: {path}\n  Hint: run `tsuki-flash modules install {arch}` to fetch the SDK automatically (or `arduino-cli core install {pkg}` if you prefer)")]
     SdkNotFound { arch: String, path: String, pkg: String },
 
     #[error("Compilation failed:\n{output}")]

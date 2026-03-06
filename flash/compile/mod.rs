@@ -73,7 +73,7 @@ pub struct CompileResult {
 /// libraries installed via `tsuki-flash lib install <name>` are found without
 /// requiring explicit `--include` flags.
 pub fn compile(req: &CompileRequest, board: &Board) -> Result<CompileResult> {
-    let sdk = sdk::resolve(board.arch(), board.variant)?;
+    let sdk = sdk::resolve(board.arch(), board.variant, req.verbose)?;
     let augmented = augment_lib_includes(req);
 
     match &board.toolchain {

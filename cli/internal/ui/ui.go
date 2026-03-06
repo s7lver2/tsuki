@@ -405,6 +405,16 @@ func NewSpinner(msg string) *Spinner {
 }
 
 func (s *Spinner) Start() {
+	// If stdout is not a real TTY (e.g. piped through the IDE), \r does not
+	// overwrite the current line — every frame becomes a new line, flooding
+	// the output.  In that case we print a single static status line and skip
+	// the animation entirely.
+	fi, err := os.Stdout.Stat()
+	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+	if !isTTY {
+		fmt.Fprintf(os.Stdout, "  …  %s\n", s.msg)
+		return
+	}
 	go func() {
 		i := 0
 		for {
@@ -423,8 +433,14 @@ func (s *Spinner) Start() {
 }
 
 func (s *Spinner) Stop(ok bool, finalMsg string) {
-	close(s.done)
-	time.Sleep(100 * time.Millisecond)
+	// Only close the channel (and wait for the goroutine) if we actually
+	// started the animation — i.e. when running in a real TTY.
+	fi, err := os.Stdout.Stat()
+	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+	if isTTY {
+		close(s.done)
+		time.Sleep(100 * time.Millisecond)
+	}
 	if ok {
 		Success(finalMsg)
 	} else {

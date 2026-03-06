@@ -39,7 +39,7 @@ impl std::fmt::Display for Span {
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
-pub enum tsukiError {
+pub enum TsukiError {
     // ── pipeline errors ──────────────────────────────────────────────────────
     #[error("[lex]   {span}  {msg}")]
     Lex { msg: String, span: Span },
@@ -66,7 +66,7 @@ pub enum tsukiError {
     Other(String),
 }
 
-impl tsukiError {
+impl TsukiError {
     // Convenience constructors
     pub fn lex(span: Span, msg: impl Into<String>)   -> Self { Self::Lex   { msg: msg.into(), span } }
     pub fn parse(span: Span, msg: impl Into<String>) -> Self { Self::Parse { msg: msg.into(), span } }
@@ -106,4 +106,4 @@ impl tsukiError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, tsukiError>;
+pub type Result<T> = std::result::Result<T, TsukiError>;

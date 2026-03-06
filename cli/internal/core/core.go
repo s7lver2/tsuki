@@ -223,7 +223,15 @@ func parseWarnings(output string) []string {
 func parseErrors(output string) []string {
 	var e []string
 	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(strings.ToLower(line), "error") {
+		lower := strings.ToLower(strings.TrimSpace(line))
+		if lower == "" {
+			continue
+		}
+		// Skip lines that are clearly success messages
+		if strings.HasPrefix(lower, "ok ") || strings.Contains(lower, "no errors") {
+			continue
+		}
+		if strings.Contains(lower, "error") {
 			e = append(e, strings.TrimSpace(line))
 		}
 	}

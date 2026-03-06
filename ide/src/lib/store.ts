@@ -1,11 +1,11 @@
 'use client'
 import { create } from 'zustand'
-import { applyTheme, applyUiScale } from './themes'
+import { applyTheme, applyUiScale, applyFontRendering } from './themes'
 
-export type Screen = 'welcome' | 'ide' | 'settings'
+export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'language' | 'developer'
 
 export interface FileNode {
   id: string
@@ -104,6 +104,29 @@ export interface SettingsState {
   ideTheme: string      // id from IDE_THEMES
   syntaxTheme: string   // id from SYNTAX_THEMES
   uiScale: number       // 0.80 – 1.25, default 1
+  showCurrentFlow: boolean  // show current-flow animation on active wires
+  // ── Experiments ──────────────────────────────────────────────────────────
+  experimentsEnabled: boolean
+  // Per-experiment toggles
+  expSandboxEnabled: boolean
+  expGitEnabled: boolean
+  expLspEnabled: boolean
+  // ── Developer ─────────────────────────────────────────────────────────────
+  developerOptions: boolean
+  // ── Language / i18n ──────────────────────────────────────────────────────
+  language: 'en' | 'es'
+  // ── Docs ─────────────────────────────────────────────────────────────────
+  docsLang: 'en' | 'es'
+  // ── Advanced ─────────────────────────────────────────────────────────────
+  fontRendering: 'auto' | 'crisp' | 'smooth' | 'subpixel'
+  tsukiFlashPath: string
+  insertSpaces: boolean
+  autoCloseBrackets: boolean
+  showLineNumbers: boolean
+  highlightActiveLine: boolean
+  saveOnFocusLoss: boolean
+  compileOnSave: boolean
+  lspEnabled: boolean
 }
 
 interface AppState {
@@ -247,6 +270,25 @@ const DEFAULT_SETTINGS: SettingsState = {
   ideTheme: 'dark',
   syntaxTheme: 'material',
   uiScale: 1,
+  showCurrentFlow: false,
+  // experiments
+  experimentsEnabled: false,
+  expSandboxEnabled: false,
+  expGitEnabled: false,
+  expLspEnabled: false,
+  developerOptions: false,
+  // advanced
+  tsukiFlashPath: '',
+  insertSpaces: true,
+  autoCloseBrackets: true,
+  showLineNumbers: true,
+  highlightActiveLine: true,
+  saveOnFocusLoss: false,
+  compileOnSave: false,
+  lspEnabled: false,
+  language: 'en',
+  docsLang: 'en',
+  fontRendering: 'auto',
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -383,7 +425,8 @@ export const useStore = create<AppState>((set, get) => ({
         await writeFile(pathJoin(path, 'tsuki_package.json'), manifestContent)
         await writeFile(pathJoin(path, 'src', mainFileName), mainContent)
         await writeFile(pathJoin(path, '.gitignore'), gitignoreContent)
-        if (gitInit) {
+        const gitExperimentEnabled = get().settings.experimentsEnabled && get().settings.expGitEnabled
+        if (gitInit && gitExperimentEnabled) {
           await runGit(['init'], path).catch(() => {})
           await runGit(['add', '-A'], path).catch(() => {})
           await runGit(['commit', '-m', 'Initial commit'], path).catch(() => {})
@@ -397,7 +440,8 @@ export const useStore = create<AppState>((set, get) => ({
 
     setTimeout(() => get().openFile('main'), 50)
     get().addLog('info', `Project "${name}" loaded · Lang: ${language} · Board: ${board} · Backend: ${backend}`)
-    get().addLog('ok', gitInit ? 'Git repo initialized · Ready.' : 'Ready (no git).')
+    const gitExperimentActive = get().settings.experimentsEnabled && get().settings.expGitEnabled
+    get().addLog('ok', (gitInit && gitExperimentActive) ? 'Git repo initialized · Ready.' : 'Ready.')
   },
 
   // ── loadFromDisk ───────────────────────────────────────────────────────────
@@ -642,6 +686,9 @@ export const useStore = create<AppState>((set, get) => ({
         if (key === 'uiScale') {
           applyUiScale(value as number)
         }
+        if (key === 'fontRendering') {
+          applyFontRendering(value as 'auto' | 'crisp' | 'smooth' | 'subpixel')
+        }
       }
 
       return { settings: next }
@@ -689,6 +736,7 @@ if (typeof window !== 'undefined') {
           // Apply theme from disk immediately
           applyTheme(merged.ideTheme, merged.syntaxTheme)
           applyUiScale(merged.uiScale)
+          applyFontRendering(merged.fontRendering)
           // Sync legacy theme flag
           const { IDE_THEMES } = require('./themes') as typeof import('./themes')
           const base = IDE_THEMES.find(t => t.id === merged.ideTheme)?.base ?? 'dark'

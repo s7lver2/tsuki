@@ -29,6 +29,50 @@ fn main() {
         return;
     }
 
+    // ── simulate subcommand ───────────────────────────────────────────────────
+    // tsuki simulate <file.go> [--steps N] [--board B]
+    if args.get(1).map(|s| s == "simulate").unwrap_or(false) {
+        let input: PathBuf = args.get(2).cloned().unwrap_or_else(|| {
+            eprintln!("error: tsuki simulate requires an input file");
+            std::process::exit(1);
+        }).into();
+
+        let steps: Option<usize> = flag_value(&args, "--steps")
+            .and_then(|s| s.parse().ok());
+        let board = flag_value(&args, "--board").unwrap_or_else(|| "uno".into());
+
+        let source = match std::fs::read_to_string(&input) {
+            Ok(s)  => s,
+            Err(e) => { eprintln!("error: {}: {}", input.display(), e); std::process::exit(1); }
+        };
+        let filename = input.to_string_lossy().into_owned();
+
+        let cfg = TranspileConfig { board, ..Default::default() };
+        let tokens = match tsuki_core::lexer::Lexer::new(&source, &filename).tokenize() {
+            Ok(t)  => t,
+            Err(e) => {
+                let err = serde_json::json!({"ok":false,"error":tsuki_core::pretty_error(&e,&source),"events":[],"pins":{},"serial":[],"ms":0});
+                println!("{}", err);
+                std::process::exit(1);
+            }
+        };
+        let prog = match tsuki_core::parser::Parser::new(tokens).parse_program() {
+            Ok(p)  => p,
+            Err(e) => {
+                let err = serde_json::json!({"ok":false,"error":tsuki_core::pretty_error(&e,&source),"events":[],"pins":{},"serial":[],"ms":0});
+                println!("{}", err);
+                std::process::exit(1);
+            }
+        };
+
+        if let Err(e) = tsuki_core::simulator::run(&prog, steps) {
+            eprintln!("simulate error: {}", e);
+            std::process::exit(1);
+        }
+        let _ = cfg; // suppress unused warning
+        return;
+    }
+
     // ── pkg subcommand ────────────────────────────────────────────────────────
     if args.get(1).map(|s| s == "pkg").unwrap_or(false) {
         handle_pkg(&args);

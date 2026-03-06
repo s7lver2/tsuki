@@ -77,11 +77,16 @@ def run(cmd, cwd=None, env=None, check=True):
     """Ejecuta un comando mostrando los argumentos."""
     display = " ".join(str(c) for c in cmd)
     print(f"  $ {display}")
-    result = subprocess.run(cmd, cwd=cwd, env=env, check=check,
+    result = subprocess.run(cmd, cwd=cwd, env=env, check=False,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.stdout.strip():
-        for line in result.stdout.strip().splitlines()[-8:]:
+        lines = result.stdout.strip().splitlines()
+        # On error show everything; on success show last 8 lines
+        show = lines if (result.returncode != 0) else lines[-8:]
+        for line in show:
             print(f"    {line}")
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout)
     return result
 
 def check_tool(name, *args):
@@ -284,6 +289,8 @@ INSTALL_SH = r'''
 #    --no-ide                No instalar la IDE Tauri (si está incluida)
 #    --avr                   Instalar soporte AVR toolchain
 #    --esp                   Instalar soporte ESP toolchain
+#    --lang <codes>          Paquetes de idioma a instalar (default: "en es")
+#                             Códigos separados por coma: en,es
 #    --uninstall             Desinstalar @@app_name@@
 #    -y, --yes               No pedir confirmación
 #    -h, --help              Mostrar esta ayuda
@@ -305,6 +312,7 @@ SYMLINKS=true
 INSTALL_IDE=true
 INSTALL_AVR=false
 INSTALL_ESP=false
+INSTALL_LANGS="en es"
 UNINSTALL=false
 YES=false
 
@@ -331,6 +339,7 @@ while [[ $# -gt 0 ]]; do
     --no-ide)         INSTALL_IDE=false; shift ;;
     --avr)            INSTALL_AVR=true;  shift ;;
     --esp)            INSTALL_ESP=true;  shift ;;
+    --lang)           INSTALL_LANGS="$2"; shift 2 ;;
     --uninstall)      UNINSTALL=true;    shift ;;
     -y|--yes)         YES=true;          shift ;;
     -h|--help)
@@ -378,6 +387,7 @@ echo -e "  Agregar PATH  : ${CYAN}$ADD_PATH${RESET}"
 echo -e "  Instalar IDE  : ${CYAN}$INSTALL_IDE${RESET}"
 echo -e "  Soporte AVR   : ${CYAN}$INSTALL_AVR${RESET}"
 echo -e "  Soporte ESP   : ${CYAN}$INSTALL_ESP${RESET}"
+echo -e "  Idiomas       : ${CYAN}$INSTALL_LANGS${RESET}"
 echo ""
 
 if [ "$YES" = false ]; then
@@ -442,6 +452,24 @@ if $ADD_PATH; then
   else
     ok "PATH ya contiene $BINDIR"
   fi
+fi
+
+# ── Paquetes de idioma ────────────────────────────────────────────
+LOCALE_SRC_DIR="$(dirname "$0")/../ide/src/locales"
+LOCALE_DEST_DIR="$DATADIR/locales"
+if [ -d "$LOCALE_SRC_DIR" ]; then
+  $SUDO mkdir -p "$LOCALE_DEST_DIR"
+  for lang in $INSTALL_LANGS; do
+    LANG_FILE="$LOCALE_SRC_DIR/$lang.json"
+    if [ -f "$LANG_FILE" ]; then
+      $SUDO cp "$LANG_FILE" "$LOCALE_DEST_DIR/$lang.json"
+      ok "Paquete de idioma instalado: $lang"
+    else
+      warn "Paquete de idioma no encontrado: $lang"
+    fi
+  done
+else
+  warn "Directorio de locales no encontrado, omitiendo paquetes de idioma"
 fi
 
 # ── IDE (si hay bundle) ───────────────────────────────────────────
@@ -629,6 +657,9 @@ Name: "esp";        Description: "Soporte ESP32 / ESP8266";                   Ty
 Name: "shortcuts";  Description: "Accesos directos en el escritorio";         Types: full standard
 Name: "ctx_menu";   Description: "Abrir carpeta con Tsuki (menú contextual)"; Types: full
 Name: "file_assoc"; Description: "Asociar archivos .goino con Tsuki";      Types: full
+Name: "lang";       Description: "Paquetes de idioma";                    Types: full standard custom
+Name: "lang\en"; Description: "Paquete de idioma: English (Inglés)";    Types: full standard custom; Flags: fixed
+Name: "lang\es"; Description: "Paquete de idioma: Español (Spanish)";   Types: full standard
 
 [Tasks]
 Name: "addtopath";      Description: "Agregar @@app_name@@ al PATH del sistema (recomendado)"; \
@@ -671,6 +702,12 @@ Source: "@@ide_bundle@@\\*"; DestDir: "{app}\\ide"; \
         Components: ide; Flags: ignoreversion recursesubdirs createallsubdirs; \
         Check: HasIdeBundle
 
+; ── Paquetes de idioma ─────────────────────────────────────────────
+Source: "@@locales_dir@@\en.json"; DestDir: "{app}\\locales"; DestName: "en.json"; \
+        Components: lang\en; Flags: ignoreversion
+Source: "@@locales_dir@@\es.json"; DestDir: "{app}\\locales"; DestName: "es.json"; \
+        Components: lang\es; Flags: ignoreversion
+
 ; ── Icono de la app ────────────────────────────────────────────────
 Source: "@@icon_file@@"; DestDir: "{app}"; DestName: "@@app_name@@.ico"; Flags: ignoreversion
 
@@ -688,7 +725,8 @@ Name: "{userdesktop}\\@@app_name@@ CLI";  Filename: "{app}\\bin\\@@binary@@.exe"
 Root: HKCU; Subkey: "Environment"; \
       ValueType: expandsz; ValueName: "Path"; \
       ValueData: "{olddata};{app}\bin"; \
-      Tasks: addtopath; Flags: preservestringtype uninsdeletekeyifempty
+      Tasks: addtopath; Flags: preservestringtype uninsdeletekeyifempty; \
+      Check: NeedsAddToPath
 
 ; ── Configuración de la aplicación ──────────────────────────────────
 Root: HKCU; Subkey: "Software\@@app_name@@"; \
@@ -1058,6 +1096,32 @@ begin
   end;
 end;
 
+// ─── Comprobar si {app}\bin ya está en el PATH (evita duplicados) ───
+function NeedsAddToPath(): Boolean;
+var
+  OldPath: String;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', OldPath) then
+    OldPath := '';
+  // Also check the machine-level PATH
+  if Pos(ExpandConstant('{app}\bin'), OldPath) > 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if RegQueryStringValue(HKLM,
+    'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+    'Path', OldPath) then
+  begin
+    if Pos(ExpandConstant('{app}\bin'), OldPath) > 0 then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
 // ─── Detectar si hay bundle de IDE disponible ───────────────────────
 function HasIdeBundle: Boolean;
 begin
@@ -1202,6 +1266,7 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@release_dir@@":  _w(RELEASE_DIR),
         "@@registry_url@@": REGISTRY_URL,
         "@@ide_exe_name@@": ide_exe_name or f"{APP_NAME}.exe",  # <-- añadir esta línea
+        "@@locales_dir@@":  _w(os.path.join(IDE_DIR, "src", "locales")),
     }
     iss_content = INNO_SCRIPT
     for placeholder, value in iss_subs.items():

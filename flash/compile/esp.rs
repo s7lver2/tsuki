@@ -176,8 +176,11 @@ fn collect_sources(dir: &Path) -> Result<Vec<PathBuf>> {
 
 fn resolve_tool(bin_dir: &Path, name: &str) -> String {
     if bin_dir.as_os_str().is_empty() { return name.to_owned(); }
-    let p = bin_dir.join(name);
-    if p.exists() { p.to_string_lossy().to_string() } else { name.to_owned() }
+    for candidate in &[name, &format!("{}.exe", name)] {
+        let p = bin_dir.join(candidate);
+        if p.exists() { return p.to_string_lossy().to_string(); }
+    }
+    name.to_owned()
 }
 
 fn which_esptool() -> Option<String> {

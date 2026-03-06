@@ -317,3 +317,25 @@ export async function runGit(args: string[], cwd: string): Promise<string> {
   }
   return invoke<string>('run_git', { args, cwd })
 }
+
+// ── Simulator helpers ─────────────────────────────────────────────────────────
+
+/** Returns an OS-correct writable temp path for the source being simulated. */
+export async function getTmpGoPath(): Promise<string> {
+  if (!isTauri()) return '/tmp/tsuki_sim_src.go'
+  return invoke<string>('get_tmp_go_path')
+}
+
+/** Returns the configured tsuki binary path, or bare 'tsuki' to resolve from PATH. */
+export async function getTsukiBin(): Promise<string> {
+  if (!isTauri()) return 'tsuki'
+  const path = await invoke<string>('get_tsuki_bin').catch(() => '')
+  // If settings is empty or returns the bare fallback, use 'tsuki' from PATH
+  return (path && path !== 'tsuki') ? path : 'tsuki'
+}
+
+/** Returns the configured default board (falls back to 'uno'). */
+export async function getDefaultBoard(): Promise<string> {
+  if (!isTauri()) return 'uno'
+  return invoke<string>('get_default_board').catch(() => 'uno')
+}

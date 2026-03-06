@@ -10,7 +10,7 @@ pub use config::TranspileConfig;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
-use crate::error::{tsukiError, Result};
+use crate::error::{TsukiError, Result};
 use crate::parser::ast::*;
 use crate::runtime::Runtime;
 
@@ -477,7 +477,7 @@ impl Transpiler {
                     if self.cfg.passthrough_unknown {
                         return Ok(format!("{}.{}", alias, field));
                     }
-                    return Err(tsukiError::codegen(format!("no mapping for {}.{}", canon, field)));
+                    return Err(TsukiError::codegen(format!("no mapping for {}.{}", canon, field)));
                 }
                 format!("{}.{}", self.emit_expr(expr)?, field)
             }
@@ -526,7 +526,7 @@ impl Transpiler {
                         if self.cfg.passthrough_unknown {
                             return Ok(format!("{}.{}({})", alias, field, arg_strs.join(", ")));
                         }
-                        return Err(tsukiError::codegen(
+                        return Err(TsukiError::codegen(
                             format!("no mapping for {}.{}", canon, field)));
                     }
 
@@ -543,7 +543,7 @@ impl Transpiler {
                         if self.cfg.passthrough_unknown {
                             return Ok(format!("{}.{}({})", alias, field, arg_strs.join(", ")));
                         }
-                        return Err(tsukiError::codegen(
+                        return Err(TsukiError::codegen(
                             format!("no method mapping for {}.{} (package: {})", alias, field, pkg_name)));
                     }
                 }
@@ -560,7 +560,7 @@ impl Transpiler {
                             if self.cfg.passthrough_unknown {
                                 return Ok(format!("{}.{}({})", sub_obj, field, arg_strs.join(", ")));
                             }
-                            return Err(tsukiError::codegen(
+                            return Err(TsukiError::codegen(
                                 format!("no mapping for {}.{}.{}", pkg_alias, sub_obj, field)));
                         }
                     }

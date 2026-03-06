@@ -7,8 +7,9 @@ pub mod lexer;
 pub mod parser;
 pub mod runtime;
 pub mod transpiler;
+pub mod simulator;
 
-pub use error::{tsukiError, Result, Span};
+pub use error::{TsukiError, Result, Span};
 pub use transpiler::TranspileConfig;
 pub use runtime::{Board, Runtime};
 pub use runtime::pkg_loader::{LibManifest, load_from_str as load_lib_from_str};
@@ -97,6 +98,6 @@ impl Pipeline {
 
 // ── Diagnostics helper ────────────────────────────────────────────────────────
 
-pub fn pretty_error(err: &tsukiError, source: &str) -> String {
+pub fn pretty_error(err: &TsukiError, source: &str) -> String {
     err.pretty(source)
 }

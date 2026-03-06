@@ -64,21 +64,18 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 	for _, goFile := range goFiles {
 		ui.Info(fmt.Sprintf("Checking %s…", filepath.Base(goFile)))
 
-		srcBytes, err := os.ReadFile(goFile)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read %s: %w", goFile, err)
-		}
-
 		// Convert []manifest.Package -> []string
 		pkgNames := make([]string, 0, len(m.Packages))
 		for _, p := range m.Packages {
 			pkgNames = append(pkgNames, p.Name)
 		}
 
+		libsDir := ""
+
 		warnings, errors, err := transpiler.Check(
-			string(srcBytes),
-			filepath.Base(goFile),
-			board,
+			goFile,   // full path to the .go file
+			board,    // the board string
+			libsDir,  // libs dir (empty unless you have packages)
 			pkgNames,
 		)
 

@@ -6,7 +6,7 @@
 pub mod ast;
 pub use ast::*;
 
-use crate::error::{tsukiError, Result, Span};
+use crate::error::{TsukiError, Result, Span};
 use crate::lexer::token::{Token, TokenKind};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ impl Parser {
             self.advance();
             Ok(sp)
         } else {
-            Err(tsukiError::parse(
+            Err(TsukiError::parse(
                 self.span(),
                 format!("expected `{:?}`, found `{:?}`", kind, self.peek_kind()),
             ))
@@ -63,7 +63,7 @@ impl Parser {
     fn expect_ident(&mut self) -> Result<String> {
         match self.peek_kind().clone() {
             TokenKind::Ident(s) => { self.advance(); Ok(s) }
-            _ => Err(tsukiError::parse(
+            _ => Err(TsukiError::parse(
                 self.span(),
                 format!("expected identifier, found `{:?}`", self.peek_kind()),
             )),
@@ -129,7 +129,7 @@ impl Parser {
         };
         let path = match self.peek_kind().clone() {
             TokenKind::LitString(s) => { self.advance(); s }
-            _ => return Err(tsukiError::parse(self.span(), "expected import path string")),
+            _ => return Err(TsukiError::parse(self.span(), "expected import path string")),
         };
         Ok(Import { alias, path })
     }
@@ -142,7 +142,7 @@ impl Parser {
             TokenKind::KwType  => self.parse_type_decl(),
             TokenKind::KwVar   => self.parse_var_decl_top(),
             TokenKind::KwConst => self.parse_const_decl_top(),
-            _ => Err(tsukiError::parse(
+            _ => Err(TsukiError::parse(
                 self.span(),
                 format!("unexpected top-level token `{:?}`", self.peek_kind()),
             )),
@@ -340,7 +340,7 @@ impl Parser {
                 Ok(builtin_type(&name))
             }
 
-            _ => Err(tsukiError::parse(
+            _ => Err(TsukiError::parse(
                 self.span(),
                 format!("expected type, found `{:?}`", self.peek_kind()),
             )),
@@ -712,7 +712,7 @@ impl Parser {
                 self.parse_composite(ty, span)
             }
 
-            _ => Err(tsukiError::parse(
+            _ => Err(TsukiError::parse(
                 span,
                 format!("unexpected token in expression: `{:?}`", self.peek_kind()),
             )),
@@ -785,6 +785,6 @@ fn parse_assign_op(op: &str) -> AssignOp {
 fn expr_list_to_names(exprs: &[Expr], span: &Span) -> Result<Vec<String>> {
     exprs.iter().map(|e| match e {
         Expr::Ident { name, .. } => Ok(name.clone()),
-        _ => Err(tsukiError::parse(span.clone(), "left side of `:=` must be identifiers")),
+        _ => Err(TsukiError::parse(span.clone(), "left side of `:=` must be identifiers")),
     }).collect()
 }

@@ -266,3 +266,17 @@ export function applyUiScale(scale: number): void {
   // Scales all rem-based Tailwind classes; editor px fontSize is unaffected
   document.documentElement.style.fontSize = scale === 1 ? '' : `${scale * 100}%`
 }
+
+export function applyFontRendering(mode: 'auto' | 'crisp' | 'smooth' | 'subpixel'): void {
+  if (typeof window === 'undefined') return
+  const el = document.documentElement
+  const smoothing: Record<string, string> = {
+    auto:     '',
+    crisp:    'none',
+    smooth:   'antialiased',
+    subpixel: 'subpixel-antialiased',
+  }
+  const s = el.style as unknown as Record<string, string>
+  s['webkitFontSmoothing'] = smoothing[mode]
+  s['MozOsxFontSmoothing'] = mode === 'smooth' ? 'grayscale' : mode === 'subpixel' ? 'auto' : ''
+}

@@ -1,6 +1,6 @@
 [package]
 name        = "tsuki"
-version     = "3.0.0"
+version     = "5.0.0"
 edition     = "2021"
 description = "Arduino Framework"
 license     = "MIT"
@@ -36,6 +36,10 @@ colored    = "2.1"
 walkdir    = "2.5"
 ureq       = { version = "2.9", features = ["json"] }
 zip        = { version = "0.6", default-features = false, features = ["deflate"] }
+tar        = "0.4"
+flate2     = { version = "1.0", default-features = false, features = ["rust_backend"] }
+bzip2      = { version = "0.4", features = ["static"] }
+lzma-rs    = "0.3"
 
 # ─── dev dependencies ─────────────────────────────────────────
 [dev-dependencies]

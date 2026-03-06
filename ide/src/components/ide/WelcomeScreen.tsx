@@ -3,7 +3,8 @@ import { useState } from 'react'
 import NewProjectModal from '@/components/ide/NewProjectModal'
 import { useStore } from '@/lib/store'
 import { Btn } from '@/components/ui/primitives'
-import { Plus, FolderOpen, Settings, Clock, ChevronRight } from 'lucide-react'
+import { Plus, FolderOpen, Settings, Clock, ChevronRight, BookOpen } from 'lucide-react'
+import { useT } from '@/lib/i18n'
 
 
 
@@ -12,6 +13,7 @@ export default function WelcomeScreen() {
   const { setScreen, loadProject, loadFromDisk, toggleTheme, theme, recentProjects } = useStore()
   const [opening, setOpening] = useState(false)
   const [showNewModal, setShowNewModal] = useState(false)
+  const t = useT()
 
 
   async function openFolder() {
@@ -53,6 +55,15 @@ export default function WelcomeScreen() {
         </div>
       </div>
 
+      {/* ── Closed beta banner ── */}
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-yellow-400/20 bg-yellow-400/5 flex-shrink-0">
+        <span className="text-yellow-400 text-base leading-none flex-shrink-0">⚠</span>
+        <div className="flex-1 min-w-0">
+          <span className="text-xs font-semibold text-yellow-400">{t('beta.badge')} — </span>
+          <span className="text-xs text-[var(--fg-muted)]">{t('beta.message')}</span>
+        </div>
+      </div>
+
       {/* Body */}
       <div className="flex-1 flex items-center justify-center px-8 overflow-auto">
         <div className="w-full max-w-[520px] flex flex-col gap-8 items-start py-10">
@@ -61,7 +72,7 @@ export default function WelcomeScreen() {
           <div className="flex-1 min-w-0 animate-fade-up">
             <h1 className="text-2xl font-semibold tracking-tight mb-1.5">Tsuki IDE</h1>
             <p className="text-sm text-[var(--fg-muted)] mb-8">
-              Write in Go · Compile to C++ · Flash to Arduino
+              {t('welcome.tagline')}
             </p>
 
             {/* Actions */}
@@ -71,7 +82,7 @@ export default function WelcomeScreen() {
                 className="flex items-center gap-3 px-3.5 py-2.5 rounded-md bg-[var(--fg)] text-[var(--accent-inv)] text-sm font-semibold hover:opacity-85 transition-opacity cursor-pointer border-0"
               >
                 <Plus size={14} />
-                New Project
+                {t('welcome.newProject')}
               </button>
               <button
                 onClick={openFolder}
@@ -79,14 +90,21 @@ export default function WelcomeScreen() {
                 className="flex items-center gap-3 px-3.5 py-2.5 rounded-md border border-[var(--border)] text-sm font-medium text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors cursor-pointer bg-transparent disabled:opacity-50"
               >
                 <FolderOpen size={14} />
-                {opening ? 'Opening…' : 'Open Folder'}
+                {opening ? t('welcome.openFolder_busy') : t('welcome.openFolder')}
               </button>
               <button
                 onClick={() => setScreen('settings')}
                 className="flex items-center gap-3 px-3.5 py-2.5 rounded-md border border-[var(--border)] text-sm font-medium text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors cursor-pointer bg-transparent"
               >
                 <Settings size={14} />
-                Settings &amp; CLI Config
+                {t('welcome.settingsCli')}
+              </button>
+              <button
+                onClick={() => setScreen('docs')}
+                className="flex items-center gap-3 px-3.5 py-2.5 rounded-md border border-[var(--border)] text-sm font-medium text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors cursor-pointer bg-transparent"
+              >
+                <BookOpen size={14} />
+                {t('common.documentation')}
               </button>
             </div>
 
@@ -94,11 +112,11 @@ export default function WelcomeScreen() {
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <Clock size={11} className="text-[var(--fg-faint)]" />
-                <span className="text-2xs font-semibold text-[var(--fg-faint)] uppercase tracking-widest">Recent</span>
+                <span className="text-2xs font-semibold text-[var(--fg-faint)] uppercase tracking-widest">{t('welcome.recent')}</span>
               </div>
               <div className="flex flex-col">
                 {recentProjects.length === 0 && (
-                  <p className="text-xs text-[var(--fg-faint)] px-2">No recent projects yet.</p>
+                  <p className="text-xs text-[var(--fg-faint)] px-2">{t('welcome.noRecent')}</p>
                 )}
                 {recentProjects.map(r => (
                   <button
@@ -130,8 +148,8 @@ export default function WelcomeScreen() {
 
       {/* Footer */}
       <div className="h-8 flex items-center px-5 border-t border-[var(--border)] flex-shrink-0">
-        <span className="text-xs text-[var(--fg-faint)] font-mono">v0.1.0</span>
-        <span className="ml-auto text-xs text-[var(--fg-faint)]">Tauri · Next.js · Go</span>
+        <span className="text-xs text-[var(--fg-faint)] font-mono">v6.0.0</span>
+        <span className="ml-auto text-xs text-[var(--fg-faint)]">{t('welcome.footer_stack')}</span>
       </div>
 
       {/* New project modal */}
