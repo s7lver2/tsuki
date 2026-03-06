@@ -5,7 +5,7 @@ import { applyTheme, applyUiScale, applyFontRendering } from './themes'
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'language' | 'developer'
 
 export interface FileNode {
   id: string
@@ -109,6 +109,12 @@ export interface SettingsState {
   experimentsEnabled: boolean
   // Per-experiment toggles
   expSandboxEnabled: boolean
+  expGitEnabled: boolean
+  expLspEnabled: boolean
+  // ── Developer ─────────────────────────────────────────────────────────────
+  developerOptions: boolean
+  // ── Language / i18n ──────────────────────────────────────────────────────
+  language: 'en' | 'es'
   // ── Docs ─────────────────────────────────────────────────────────────────
   docsLang: 'en' | 'es'
   // ── Advanced ─────────────────────────────────────────────────────────────
@@ -268,6 +274,9 @@ const DEFAULT_SETTINGS: SettingsState = {
   // experiments
   experimentsEnabled: false,
   expSandboxEnabled: false,
+  expGitEnabled: false,
+  expLspEnabled: false,
+  developerOptions: false,
   // advanced
   tsukiFlashPath: '',
   insertSpaces: true,
@@ -277,6 +286,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   saveOnFocusLoss: false,
   compileOnSave: false,
   lspEnabled: false,
+  language: 'en',
   docsLang: 'en',
   fontRendering: 'auto',
 }
@@ -415,7 +425,8 @@ export const useStore = create<AppState>((set, get) => ({
         await writeFile(pathJoin(path, 'tsuki_package.json'), manifestContent)
         await writeFile(pathJoin(path, 'src', mainFileName), mainContent)
         await writeFile(pathJoin(path, '.gitignore'), gitignoreContent)
-        if (gitInit) {
+        const gitExperimentEnabled = get().settings.experimentsEnabled && get().settings.expGitEnabled
+        if (gitInit && gitExperimentEnabled) {
           await runGit(['init'], path).catch(() => {})
           await runGit(['add', '-A'], path).catch(() => {})
           await runGit(['commit', '-m', 'Initial commit'], path).catch(() => {})
@@ -429,7 +440,8 @@ export const useStore = create<AppState>((set, get) => ({
 
     setTimeout(() => get().openFile('main'), 50)
     get().addLog('info', `Project "${name}" loaded · Lang: ${language} · Board: ${board} · Backend: ${backend}`)
-    get().addLog('ok', gitInit ? 'Git repo initialized · Ready.' : 'Ready (no git).')
+    const gitExperimentActive = get().settings.experimentsEnabled && get().settings.expGitEnabled
+    get().addLog('ok', (gitInit && gitExperimentActive) ? 'Git repo initialized · Ready.' : 'Ready.')
   },
 
   // ── loadFromDisk ───────────────────────────────────────────────────────────

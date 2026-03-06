@@ -5,25 +5,33 @@ import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/ui/prim
 import {
   ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
-  Beaker, ToggleLeft,
+  Beaker, ToggleLeft, GitBranch, Languages,
 } from 'lucide-react'
 import { useState } from 'react'
 import { clsx } from 'clsx'
+import { useT, AVAILABLE_LANGS, LANG_META, LangCode } from '@/lib/i18n'
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Nav definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAIN_NAV: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'appearance', label: 'Appearance', icon: <Palette  size={13} /> },
-  { id: 'cli',        label: 'CLI Tools',  icon: <Terminal size={13} /> },
-  { id: 'defaults',   label: 'Defaults',   icon: <Sliders  size={13} /> },
-  { id: 'editor',     label: 'Editor',     icon: <Code2    size={13} /> },
+const MAIN_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
+  { id: 'appearance', labelKey: 'settings.tab_appearance', icon: <Palette  size={13} /> },
+  { id: 'cli',        labelKey: 'settings.tab_tools',      icon: <Terminal size={13} /> },
+  { id: 'defaults',   labelKey: 'settings.tab_board',      icon: <Sliders  size={13} /> },
+  { id: 'editor',     labelKey: 'settings.tab_editor',     icon: <Code2    size={13} /> },
+  { id: 'language',   labelKey: 'settings.tab_language',   icon: <Languages size={13} /> },
 ]
 
-const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' }[] = [
+const DEV_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
+  { id: 'developer', labelKey: 'settings.tab_developer', icon: <Beaker size={13} /> },
+]
+
+const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' }[] = [
   { id: 'experiments', label: 'General',   icon: <FlaskConical size={13} /> },
   { id: 'exp-sandbox', label: 'Sandbox',   icon: <Cpu          size={13} />, settingKey: 'expSandboxEnabled' },
+  { id: 'exp-git',     label: 'Git',       icon: <GitBranch    size={13} />, settingKey: 'expGitEnabled'     },
+  { id: 'exp-lsp',     label: 'LSP',       icon: <Zap          size={13} />, settingKey: 'expLspEnabled'     },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,14 +101,15 @@ function NavItem({
 export default function SettingsScreen() {
   const { setScreen, settingsTab, setSettingsTab, toggleTheme, theme, goBack, settings } = useStore()
   const expEnabled = settings.experimentsEnabled
+  const t = useT()
 
   return (
     <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
       {/* ── Top bar ── */}
       <div className="h-11 flex items-center px-4 gap-3 border-b border-[var(--border)] flex-shrink-0">
-        <Btn variant="ghost" size="xs" onClick={goBack}><ArrowLeft size={13} /> Back</Btn>
+        <Btn variant="ghost" size="xs" onClick={goBack}><ArrowLeft size={13} /> {t('common.back')}</Btn>
         <Divider vertical />
-        <span className="text-sm font-semibold">Settings</span>
+        <span className="text-sm font-semibold">{t('settings.title')}</span>
         <div className="ml-auto">
           <Btn variant="ghost" size="xs" onClick={toggleTheme} className="font-mono text-[10px]">
             {theme === 'dark' ? '◐ dark' : '○ light'}
@@ -116,7 +125,7 @@ export default function SettingsScreen() {
           <div className="p-2 flex flex-col gap-0.5">
             {MAIN_NAV.map(n => (
               <NavItem
-                key={n.id} id={n.id} label={n.label} icon={n.icon}
+                key={n.id} id={n.id} label={t(n.labelKey)} icon={n.icon}
                 active={settingsTab === n.id}
                 onClick={() => setSettingsTab(n.id)}
               />
@@ -131,7 +140,7 @@ export default function SettingsScreen() {
             <div className="flex items-center gap-1.5 px-2 py-1.5 mb-0.5">
               <FlaskConical size={11} className="text-[var(--fg-faint)]" />
               <span className="text-[10px] font-semibold text-[var(--fg-faint)] uppercase tracking-widest">
-                Experiments
+                {t('settings.tab_experiments')}
               </span>
               {expEnabled && (
                 <span className="ml-auto text-[8px] font-mono text-green-400 bg-green-400/10 px-1 rounded">ON</span>
@@ -140,7 +149,7 @@ export default function SettingsScreen() {
 
             {/* General experiments tab — always visible */}
             <NavItem
-              id="experiments" label="General" icon={<FlaskConical size={13} />}
+              id="experiments" label={t('common.settings')} icon={<FlaskConical size={13} />}
               active={settingsTab === 'experiments'}
               onClick={() => setSettingsTab('experiments')}
               badge={
@@ -152,7 +161,6 @@ export default function SettingsScreen() {
 
             {/* Per-experiment tabs — only when that specific experiment is enabled */}
             {expEnabled && EXP_NAV.filter(n => n.id !== 'experiments').map(n => {
-              // Hide tab if the experiment itself is toggled off
               if (n.settingKey && !settings[n.settingKey]) return null
               return (
                 <NavItem
@@ -164,6 +172,29 @@ export default function SettingsScreen() {
               )
             })}
           </div>
+
+          {/* Developer options section — only visible when developerOptions is ON */}
+          {settings.developerOptions && (
+            <>
+              <div className="mx-2 border-t border-[var(--border)] mt-1" />
+              <div className="p-2 pb-3 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5 px-2 py-1.5 mb-0.5">
+                  <Beaker size={11} className="text-[var(--fg-faint)]" />
+                  <span className="text-[10px] font-semibold text-[var(--fg-faint)] uppercase tracking-widest">
+                    Developer
+                  </span>
+                </div>
+                {DEV_NAV.map(n => (
+                  <NavItem
+                    key={n.id} id={n.id} label={t(n.labelKey)} icon={n.icon}
+                    active={settingsTab === n.id}
+                    onClick={() => setSettingsTab(n.id)}
+                    badge={<span className="text-[9px] font-mono text-amber-400 bg-amber-400/10 px-1 rounded">dev</span>}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* ── Content ── */}
@@ -173,8 +204,12 @@ export default function SettingsScreen() {
             {settingsTab === 'cli'          && <CliTab />}
             {settingsTab === 'defaults'     && <DefaultsTab />}
             {settingsTab === 'editor'       && <EditorTab />}
+            {settingsTab === 'language'     && <LanguageTab />}
             {settingsTab === 'experiments'  && <ExperimentsTab />}
             {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
+            {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
+            {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
+            {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
           </div>
         </div>
       </div>
@@ -197,7 +232,7 @@ interface ExpDef {
   tag: string
   icon: React.ReactNode
   desc: string
-  settingKey: 'expSandboxEnabled'   // union grows as experiments are added
+  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled'  // union grows as experiments are added
   resources: string                 // what it costs when enabled
 }
 
@@ -211,6 +246,26 @@ const EXPERIMENTS: ExpDef[] = [
     desc: 'Virtual Arduino circuit simulator. Place components, wire them up, and visualise your firmware pin states without physical hardware.',
     settingKey: 'expSandboxEnabled',
     resources: 'Adds ~800 KB to the renderer bundle. Rendering thread only — no background processes.',
+  },
+  {
+    id: 'git',
+    tab: 'exp-git',
+    name: 'Git Integration',
+    tag: 'β',
+    icon: <GitBranch size={16} />,
+    desc: 'Source control panel with staged/unstaged changes, commit history graph, and basic push/pull operations. Requires git in PATH.',
+    settingKey: 'expGitEnabled',
+    resources: 'Runs git commands as subprocesses. No background polling — commands execute on demand only.',
+  },
+  {
+    id: 'lsp',
+    tab: 'exp-lsp',
+    name: 'Language Server (LSP)',
+    tag: 'α',
+    icon: <Zap size={16} />,
+    desc: 'Enable tsuki-lsp for completions, diagnostics, and hover docs. Supports Go, C++, and .ino files.',
+    settingKey: 'expLspEnabled',
+    resources: 'Launches a background tsuki-lsp process. Adds ~5–15 MB RAM. Requires tsuki-lsp in PATH.',
   },
 ]
 
@@ -316,6 +371,17 @@ function ExperimentsTab() {
           </span>
         </div>
       )}
+
+      <GroupHeader title="Developer" />
+      <SettingsField
+        name="Developer Options"
+        desc="Unlock a hidden Developer tab in the sidebar with tools for debugging and resetting the IDE state."
+      >
+        <Toggle
+          on={settings.developerOptions}
+          onToggle={() => updateSetting('developerOptions', !settings.developerOptions)}
+        />
+      </SettingsField>
     </div>
   )
 }
@@ -512,6 +578,8 @@ function SandboxTab() {
 
 function AppearanceTab() {
   const { settings, updateSetting } = useStore()
+  // Local draft for uiScale — only committed to store on pointer/mouse up
+  const [scaleLocal, setScaleLocal] = useState<number>(settings.uiScale ?? 1)
 
   return (
     <div>
@@ -593,11 +661,13 @@ function AppearanceTab() {
       >
         <div className="flex items-center gap-3">
           <input type="range" min="0.80" max="1.25" step="0.05"
-            value={settings.uiScale ?? 1}
-            onChange={e => updateSetting('uiScale', Number(e.target.value))}
+            value={scaleLocal}
+            onChange={e => setScaleLocal(Number(e.target.value))}
+            onMouseUp={e => updateSetting('uiScale', Number((e.target as HTMLInputElement).value))}
+            onTouchEnd={e => updateSetting('uiScale', Number((e.currentTarget as HTMLInputElement).value))}
             className="flex-1 accent-[var(--fg)]" />
           <span className="text-xs font-mono w-10 text-right text-[var(--fg-muted)]">
-            {Math.round((settings.uiScale ?? 1) * 100)}%
+            {Math.round(scaleLocal * 100)}%
           </span>
         </div>
       </SettingsField>
@@ -818,6 +888,327 @@ function EditorTab() {
           <span className="text-[10px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">soon</span>
         </div>
       </SettingsField>
+    </div>
+  )
+}
+// ─────────────────────────────────────────────────────────────────────────────
+//  Git experiment tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function GitExpTab() {
+  const { settings, updateSetting } = useStore()
+
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-7">
+        <div className="w-10 h-10 rounded-lg border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+          <GitBranch size={18} className="text-[var(--fg-muted)]" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold tracking-tight">Git Integration</h2>
+            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">active</span>
+            <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">β</span>
+          </div>
+          <p className="text-sm text-[var(--fg-muted)]">
+            Enables the Source Control sidebar tab, commit history graph, and git operations directly from the IDE.
+          </p>
+        </div>
+      </div>
+
+      <GroupHeader title="Behaviour" />
+      <SettingsField
+        name="Initialize git on new projects"
+        desc="Run git init automatically when creating a new project."
+      >
+        <Toggle
+          on={settings.verifySignatures}
+          onToggle={() => {}}
+        />
+      </SettingsField>
+
+      <GroupHeader title="Requirements" />
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3 flex flex-col gap-3 text-sm text-[var(--fg-muted)]">
+        <div className="flex items-start gap-3">
+          <GitBranch size={14} className="mt-0.5 text-[var(--fg-faint)] flex-shrink-0" />
+          <div>
+            <div className="font-medium text-[var(--fg)] mb-0.5">git must be in PATH</div>
+            <p className="text-xs text-[var(--fg-faint)]">
+              The git experiment runs <code className="font-mono bg-[var(--surface-3)] px-1 rounded">git</code> commands as subprocesses.
+              Make sure git is installed and available in your system PATH.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
+        <span className="text-yellow-400 text-xs mt-0.5">⚠</span>
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          This is an experimental feature. Push/pull to remote repositories is not yet supported. Only local git operations are available.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Language tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LanguageTab() {
+  const { settings, updateSetting } = useStore()
+  const t = useT()
+  const current = (settings.language ?? 'en') as LangCode
+
+  return (
+    <div>
+      <SectionHeader
+        title={t('settings.lang_title')}
+        desc={t('settings.lang_desc')}
+      />
+
+      <div className="flex flex-col gap-3">
+        {AVAILABLE_LANGS.map(code => {
+          const meta = LANG_META[code]
+          const isActive = current === code
+          return (
+            <button
+              key={code}
+              onClick={() => updateSetting('language', code)}
+              className={clsx(
+                'flex items-center gap-4 px-4 py-3.5 rounded-xl border text-left transition-all cursor-pointer bg-transparent w-full',
+                isActive
+                  ? 'border-[var(--fg-muted)] bg-[var(--active)]'
+                  : 'border-[var(--border)] hover:border-[var(--fg-faint)] hover:bg-[var(--hover)]',
+              )}
+            >
+              <span className="text-2xl leading-none flex-shrink-0">{meta.flag}</span>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-[var(--fg)]">{meta.nativeName}</span>
+                  <span className="text-xs text-[var(--fg-faint)]">— {meta.name}</span>
+                </div>
+                <div className="text-xs text-[var(--fg-faint)] mt-0.5 font-mono">{code}</div>
+              </div>
+              {isActive ? (
+                <span className="flex items-center gap-1 text-xs font-semibold text-green-400 bg-green-400/10 px-2 py-0.5 rounded flex-shrink-0">
+                  <Check size={10} /> {t('settings.lang_active')}
+                </span>
+              ) : (
+                <span className="text-xs text-[var(--fg-faint)] px-2 py-0.5 rounded border border-[var(--border)] flex-shrink-0">
+                  {t('settings.lang_select')}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="mt-6 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-[var(--surface-1)] border border-[var(--border)]">
+        <span className="text-base leading-none mt-0.5 flex-shrink-0">ℹ️</span>
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          {t('settings.lang_restart_hint')}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LSP experiment tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LspExpTab() {
+  const { settings, updateSetting } = useStore()
+
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-7">
+        <div className="w-10 h-10 rounded-lg border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+          <Zap size={18} className="text-[var(--fg-muted)]" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold tracking-tight">Language Server (LSP)</h2>
+            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">active</span>
+            <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">α</span>
+          </div>
+          <p className="text-sm text-[var(--fg-muted)]">
+            Provides in-editor completions, real-time diagnostics, and hover documentation via <code className="font-mono text-[var(--fg)] bg-[var(--surface-3)] px-1 rounded text-xs">tsuki-lsp</code>. Supports Go, C++, and <code className="font-mono text-[var(--fg)] bg-[var(--surface-3)] px-1 rounded text-xs">.ino</code> files.
+          </p>
+        </div>
+      </div>
+
+      <GroupHeader title="Behaviour" />
+      <SettingsField
+        name="Enable LSP"
+        desc="Start the tsuki-lsp background process when a project is opened."
+      >
+        <Toggle
+          on={settings.lspEnabled}
+          onToggle={() => updateSetting('lspEnabled', !settings.lspEnabled)}
+        />
+      </SettingsField>
+      <SettingsField
+        name="Completions"
+        desc="Show inline code completions while typing."
+      >
+        <Toggle on={settings.lspEnabled} onToggle={() => {}} />
+      </SettingsField>
+      <SettingsField
+        name="Diagnostics"
+        desc="Underline errors and warnings in real-time as you type."
+      >
+        <Toggle on={settings.lspEnabled} onToggle={() => {}} />
+      </SettingsField>
+      <SettingsField
+        name="Hover documentation"
+        desc="Show type info and docs when hovering over a symbol."
+      >
+        <Toggle on={settings.lspEnabled} onToggle={() => {}} />
+      </SettingsField>
+
+      <GroupHeader title="Supported languages" />
+      <div className="mt-3 flex flex-col gap-2">
+        {[
+          { lang: 'Go (.go)',    icon: '🐹', note: 'Full support — transpiler-aware completions for the tsuki/arduino package.' },
+          { lang: 'C++ (.cpp)', icon: '⚙️', note: 'Arduino C++ completions via clangd-compatible shim.' },
+          { lang: 'Arduino (.ino)', icon: '🔌', note: 'Treated as C++ with auto-injected Arduino.h header.' },
+        ].map(({ lang, icon, note }) => (
+          <div key={lang} className="flex items-start gap-3 px-3 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+            <span className="text-lg leading-none mt-0.5 flex-shrink-0">{icon}</span>
+            <div>
+              <div className="text-sm font-medium text-[var(--fg)] mb-0.5">{lang}</div>
+              <div className="text-xs text-[var(--fg-faint)] leading-relaxed">{note}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <GroupHeader title="Requirements" />
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3 flex flex-col gap-3 text-sm text-[var(--fg-muted)]">
+        <div className="flex items-start gap-3">
+          <Zap size={14} className="mt-0.5 text-[var(--fg-faint)] flex-shrink-0" />
+          <div>
+            <div className="font-medium text-[var(--fg)] mb-0.5">tsuki-lsp must be in PATH</div>
+            <p className="text-xs text-[var(--fg-faint)]">
+              The language server binary is built alongside <code className="font-mono bg-[var(--surface-3)] px-1 rounded">tsuki-core</code>. Run <code className="font-mono bg-[var(--surface-3)] px-1 rounded">make lsp</code> or install via the tsuki installer.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
+        <span className="text-yellow-400 text-xs mt-0.5">⚠</span>
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          This is an alpha-stage feature. Completions and diagnostics may be incomplete or inaccurate while tsuki-lsp is under active development.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Developer tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function DeveloperTab() {
+  const { goBack } = useStore()
+  const [resetting, setResetting] = useState(false)
+  const [resetDone, setResetDone] = useState(false)
+
+  function handleResetOnboarding() {
+    setResetting(true)
+    try {
+      localStorage.removeItem('tsuki-onboarding-done')
+      setResetDone(true)
+    } catch { /* private browsing */ }
+    setResetting(false)
+  }
+
+  function handleRestartWithOnboarding() {
+    try {
+      localStorage.removeItem('tsuki-onboarding-done')
+    } catch { /* private browsing */ }
+    window.location.reload()
+  }
+
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-7">
+        <div className="w-10 h-10 rounded-lg border border-amber-400/30 bg-amber-400/5 flex items-center justify-center flex-shrink-0">
+          <Beaker size={18} className="text-amber-400" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold tracking-tight">Developer Options</h2>
+            <span className="text-[9px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">dev</span>
+          </div>
+          <p className="text-sm text-[var(--fg-muted)]">
+            Internal tools for debugging and resetting IDE state. Not intended for regular use.
+          </p>
+        </div>
+      </div>
+
+      <GroupHeader title="Onboarding" />
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
+        <div>
+          <div className="text-sm font-medium mb-0.5">First-run dialog</div>
+          <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+            The welcome wizard shown on first launch. Resets the <code className="font-mono bg-[var(--surface-3)] px-1 rounded">tsuki-onboarding-done</code> flag in localStorage.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Btn
+            variant="outline"
+            size="sm"
+            onClick={handleResetOnboarding}
+            disabled={resetting || resetDone}
+            className="gap-2"
+          >
+            <RefreshCw size={12} className={resetting ? 'animate-spin' : ''} />
+            {resetDone ? 'Reset done — restart to see it' : 'Reset onboarding flag'}
+          </Btn>
+          <Btn
+            variant="outline"
+            size="sm"
+            onClick={handleRestartWithOnboarding}
+            className="gap-2"
+          >
+            <RefreshCw size={12} />
+            Restart app with onboarding
+          </Btn>
+        </div>
+        {resetDone && (
+          <div className="flex items-center gap-2 text-xs text-green-400">
+            <Check size={12} /> Flag cleared. The wizard will appear on the next app launch or after reload.
+          </div>
+        )}
+      </div>
+
+      <GroupHeader title="State" />
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-3">
+        <div className="text-sm font-medium">localStorage keys</div>
+        <div className="flex flex-col gap-1.5 font-mono text-xs text-[var(--fg-muted)]">
+          {['tsuki-onboarding-done', 'tsuki-recent', 'tsuki-settings'].map(key => {
+            let val = '(not set)'
+            try { val = localStorage.getItem(key) !== null ? '✓ set' : '(not set)' } catch {}
+            return (
+              <div key={key} className="flex items-center gap-3 py-1 border-b border-[var(--border-subtle)] last:border-0">
+                <span className="flex-1 text-[var(--fg)]">{key}</span>
+                <span className={val === '✓ set' ? 'text-green-400' : 'text-[var(--fg-faint)]'}>{val}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-amber-400/5 border border-amber-400/20">
+        <span className="text-amber-400 text-xs mt-0.5">⚠</span>
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          Developer options are intended for contributors and debugging. Disable them in the Experiments → General tab when done.
+        </p>
+      </div>
     </div>
   )
 }

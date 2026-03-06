@@ -4,15 +4,19 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { IconBtn } from '@/components/ui/primitives'
 import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Square } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useT } from '@/lib/i18n'
 import { spawnShell, listShells, type ProcessHandle, type ShellInfo } from '@/lib/tauri'
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
-const TABS: { id: BottomTab; label: string }[] = [
-  { id: 'output',   label: 'Output'   },
-  { id: 'problems', label: 'Problems' },
-  { id: 'terminal', label: 'Terminal' },
-]
+function useTabs() {
+  const t = useT()
+  return [
+    { id: 'output'   as BottomTab, label: t('bottomPanel.output')   },
+    { id: 'problems' as BottomTab, label: t('bottomPanel.problems') },
+    { id: 'terminal' as BottomTab, label: t('bottomPanel.terminal') },
+  ]
+}
 
 // ── Resize handle ─────────────────────────────────────────────────────────────
 
@@ -96,6 +100,7 @@ interface ShellTabBarProps {
 }
 
 function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onClose, loading }: ShellTabBarProps) {
+  const t = useT()
   const [open, setOpen] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
 
@@ -129,7 +134,7 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
               i === activeIdx ? 'opacity-60 hover:opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100',
             )}
             onClick={e => { e.stopPropagation(); onClose(i) }}
-            title="Close session"
+            title={t('bottomPanel.closeSession')}
           >×</button>
         </div>
       ))}
@@ -138,7 +143,7 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
         <button
           onClick={() => setOpen(o => !o)}
           disabled={loading || shells.length === 0}
-          title="New terminal session"
+          title={t('bottomPanel.newSession')}
           className={clsx(
             'flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border-0 bg-transparent cursor-pointer transition-colors',
             'text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
@@ -384,6 +389,7 @@ function SessionView({ session, projectPath, onUpdate, onSpawn }: SessionViewPro
 
 function Terminal() {
   const { projectPath } = useStore()
+  const t = useT()
   const [shells,       setShells      ] = useState<ShellInfo[]>([])
   const [sessions,     setSessions    ] = useState<ShellSession[]>([])
   const [activeIdx,    setActiveIdx   ] = useState(0)
@@ -434,7 +440,7 @@ function Terminal() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-2 text-xs text-[var(--fg-faint)] p-4 text-center">
         <span className="text-2xl">🐚</span>
-        <span>No shells detected on this system.</span>
+        <span>{t('bottomPanel.noShells')}</span>
         <span className="text-[10px]">Install Git Bash, PowerShell, or a POSIX shell to use the terminal.</span>
       </div>
     )
@@ -444,7 +450,7 @@ function Terminal() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 text-xs text-[var(--fg-faint)]">
         <span className="text-2xl">🖥️</span>
-        <span>No terminal sessions open.</span>
+        <span>{t('bottomPanel.noSessions')}</span>
         <div className="flex gap-1 flex-wrap justify-center">
           {shells.map(sh => (
             <button key={sh.id} onClick={() => newSession(sh)} className="flex items-center gap-1 px-3 py-1.5 rounded border border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] bg-transparent cursor-pointer text-xs transition-colors">
@@ -505,6 +511,7 @@ function ProblemsTab() {
 
 export default function BottomPanel() {
   const { bottomTab, setBottomTab, logs, clearLogs, problems, bottomHeight } = useStore()
+  const t = useT()
   const endRef = useRef<HTMLDivElement>(null)
 
   // KEY FIX: Terminal is mounted lazily on first open, then kept alive with CSS.
@@ -528,7 +535,7 @@ export default function BottomPanel() {
 
       {/* Tab bar */}
       <div className="h-8 flex items-center px-2 gap-0.5 border-b border-[var(--border)] flex-shrink-0">
-        {TABS.map(t => (
+        {useTabs().map(t => (
           <button
             key={t.id}
             onClick={() => setBottomTab(t.id)}

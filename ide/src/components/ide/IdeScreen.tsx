@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { showContextMenu } from '@/components/ui/ContextMenu'
+import { useT } from '@/lib/i18n'
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
@@ -30,6 +31,7 @@ export default function IdeScreen() {
     settings, setBottomTab, saveActiveFile,
   } = useStore()
 
+  const t = useT()
   const [showNewProjectModal, setShowNewProjectModal] = useState(false)
   const [sandboxOpen, setSandboxOpen] = useState(false)
   const [sandboxWidth, setSandboxWidth] = useState(480)
@@ -184,18 +186,18 @@ export default function IdeScreen() {
 
         <Btn variant="ghost" size="xs" onClick={handleCheck}
           title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
-          <Check size={12} /> Check
+          <Check size={12} /> {t('topbar.check')}
         </Btn>
 
         <Btn variant="ghost" size="xs" onClick={handleBuild}
           title={`${tsuki} build --compile${board ? ' --board ' + board : ''}`}>
-          <Zap size={12} /> Build
+          <Zap size={12} /> {t('topbar.build')}
         </Btn>
 
         <Btn variant="ghost" size="xs" onClick={handleFlash}
           title={`${tsuki} flash${board ? ' --board ' + board : ''}`}
           className="!text-green-400 hover:!text-green-400">
-          <Upload size={12} /> Flash
+          <Upload size={12} /> {t('topbar.flash')}
         </Btn>
 
         <button
@@ -210,12 +212,13 @@ export default function IdeScreen() {
 
         <Btn variant="ghost" size="xs" onClick={handleMonitor}
           title={`${tsuki} monitor${settings.defaultBaud !== '9600' ? ' --baud ' + settings.defaultBaud : ''}`}>
-          <Terminal size={12} /> Monitor
+          <Terminal size={12} /> {t('topbar.monitor')}
         </Btn>
 
         <div className="flex-1" />
 
-        {/* ── Sandbox toggle ── */}
+        {/* ── Sandbox toggle (only when experiment enabled) ── */}
+        {settings.experimentsEnabled && settings.expSandboxEnabled && (
         <button
           onClick={() => setSandboxOpen(o => !o)}
           title="Tsuki Sandbox — Arduino circuit simulator"
@@ -227,9 +230,10 @@ export default function IdeScreen() {
           )}
         >
           <Cpu size={11} />
-          Sandbox
+          {t('topbar.sandbox')}
           <span className="text-[9px] opacity-60 font-mono">β</span>
         </button>
+        )}
 
         <Btn variant="ghost" size="xs" onClick={toggleTheme}>
           {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
@@ -237,7 +241,7 @@ export default function IdeScreen() {
         <Btn variant="ghost" size="xs" onClick={() => setScreen('settings')}>
           <Settings size={13} />
         </Btn>
-        <Btn variant="ghost" size="xs" title="New project" onClick={() => setShowNewProjectModal(true)}>
+        <Btn variant="ghost" size="xs" title={t('topbar.newProject')} onClick={() => setShowNewProjectModal(true)}>
           <Plus size={13} />
         </Btn>
         <Btn variant="ghost" size="xs" onClick={() => setScreen('welcome')}>
@@ -251,10 +255,10 @@ export default function IdeScreen() {
         {/* Activity bar */}
         <div className="w-10 flex flex-col items-center py-1.5 gap-0.5 border-r border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
           {[
-            { id: 'files',    icon: <Files size={17} />,     tip: 'Explorer'                   },
-            { id: 'git',      icon: <GitBranch size={17} />, tip: 'Source Control'              },
-            { id: 'packages', icon: <Package size={17} />,   tip: 'Packages  (tsuki pkg/deps)'  },
-          ].map(({ id, icon, tip }) => (
+            { id: 'files',    icon: <Files size={17} />,     tip: t('sidebar.explorer'),  show: true },
+            { id: 'git',      icon: <GitBranch size={17} />, tip: t('sidebar.git'),       show: settings.experimentsEnabled && settings.expGitEnabled },
+            { id: 'packages', icon: <Package size={17} />,   tip: t('sidebar.packages'),  show: true },
+          ].filter(item => item.show).map(({ id, icon, tip }) => (
             <button
               key={id} title={tip}
               onClick={() => toggleSidebar(id as any)}
@@ -304,10 +308,10 @@ export default function IdeScreen() {
                 key={tab.fileId}
                 onClick={() => openFile(tab.fileId)}
                 onContextMenu={e => showContextMenu(e, [
-                  { label: 'Close',             action: () => closeTab(i) },
-                  { label: 'Close Others',      action: () => openTabs.forEach((_, j) => j !== i && closeTab(j > i ? openTabs.length - 1 - (j - i) : j)), sep: false },
+                  { label: t('editor.closeTab'),    action: () => closeTab(i) },
+                  { label: t('editor.closeOthers'), action: () => openTabs.forEach((_, j) => j !== i && closeTab(j > i ? openTabs.length - 1 - (j - i) : j)), sep: false },
                   { label: 'Copy filename',     action: () => navigator.clipboard.writeText(tab.name).catch(() => {}), sep: true },
-                  { label: 'Save',              shortcut: 'Ctrl+S', action: () => saveActiveFile() },
+                  { label: t('editor.save'),    shortcut: 'Ctrl+S', action: () => saveActiveFile() },
                 ])}
                 className={clsx(
                   'flex items-center gap-1.5 px-3 h-full rounded-t border-t cursor-pointer text-xs font-medium transition-colors flex-shrink-0 group',
@@ -348,8 +352,8 @@ export default function IdeScreen() {
           <BottomPanel />
         </div>
 
-        {/* ── Sandbox right panel ── */}
-        {sandboxOpen && (
+        {/* ── Sandbox right panel (experiment-gated) ── */}
+        {settings.experimentsEnabled && settings.expSandboxEnabled && sandboxOpen && (
           <>
             {/* Resize handle */}
             <div
@@ -366,8 +370,8 @@ export default function IdeScreen() {
           </>
         )}
 
-        {/* Collapsed sandbox tab */}
-        {!sandboxOpen && (
+        {/* Collapsed sandbox tab (experiment-gated) */}
+        {settings.experimentsEnabled && settings.expSandboxEnabled && !sandboxOpen && (
           <div className="w-6 border-l border-[var(--border)] bg-[var(--surface-1)] flex flex-col items-center py-2 flex-shrink-0">
             <button
               onClick={() => setSandboxOpen(true)}
