@@ -11,45 +11,27 @@ type OS = 'linux' | 'mac' | 'win'
 const OS_LABELS: Record<OS, string> = { linux: '🐧 Linux', mac: '🍎 macOS', win: '🪟 Windows' }
 
 const INSTALL_COMMANDS: Record<OS, string> = {
-  linux: `# 1. Clone the repository
-git clone https://github.com/s7lver2/tsuki
-cd tsuki
+  linux: `# 1. Download the repository Release Installer and run it
+curl http://tsuki.s7lver.xyz/installer.sh | bash
 
-# 2. Build all binaries (requires Rust + Go)
-make all
-
-# 3. Install to /usr/local/bin
-sudo make install
-
-# 4. Verify
+# 2. Done
 tsuki --version`,
 
-  mac: `# 1. Clone the repository
-git clone https://github.com/s7lver2/tsuki
-cd tsuki
+  mac: `# 1. Download the repository Release Installer and run it
+curl http://tsuki.s7lver.xyz/installer.sh | bash
 
-# 2. Build all binaries (requires Rust + Go)
-make all
-
-# 3. Install to /usr/local/bin
-sudo make install
-
-# 4. Verify
+# 2. Done
 tsuki --version`,
 
-  win: `# 1. Clone the repository
-git clone https://github.com/s7lver2/tsuki
-cd tsuki
+  win: `# 1. Download Installer
+curl -O http://tsuki.s7lver.xyz/installer.exe
 
-# 2. Build the Rust binaries
-cargo build --release
 
-# 3. Build the Go CLI
-cd cli && go build -o tsuki.exe ./cmd/tsuki
+# 2. Run the installer
+./installer.exe
 
-# 4. Add the binaries folder to your PATH
-# Then verify:
-tsuki --version`,
+# 3. Done
+tsuki --version`
 }
 
 const CONFIG_ROWS: string[][] = [
@@ -73,9 +55,7 @@ export default function InstallationPage() {
 
       <H2>Prerequisites</H2>
       <UL>
-        <LI><strong style={{ color: 'var(--fg)' }}>Rust</strong> ≥ 1.75 — install from <InlineCode>rustup.rs</InlineCode></LI>
-        <LI><strong style={{ color: 'var(--fg)' }}>Go</strong> ≥ 1.21 — install from <InlineCode>go.dev/dl</InlineCode></LI>
-        <LI>A USB cable and a supported Arduino / ESP board</LI>
+        <LI>A USB cable and a supported Arduino / ESP board (Optional)</LI>
       </UL>
 
       <Note kind="tip">
