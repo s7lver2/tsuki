@@ -15,7 +15,7 @@ const STEPS = [
 
 const STEP_DESC: Record<string, string> = {
   go:    'Your Go source file. Write type-safe, readable code with full Go tooling support.',
-  core:  'tsuki-core Rust binary transpiles Go → C++ Arduino. Handles type mapping and package bindings.',
+  core:  'tsuki-core transpiles Go → C++ Arduino. Handles type mapping and package bindings.',
   cpp:   'Generated C++ ready for avr-gcc. Includes a .ino stub for Arduino compatibility.',
   flash: 'tsuki-flash compiles C++ to AVR machine code without needing arduino-cli.',
   hex:   'The final firmware binary, ready to be flashed to your board via USB.',
@@ -120,7 +120,7 @@ export default function IntroductionPage() {
     <div>
       <P>
         <strong style={{ color: 'var(--fg)' }}>tsuki</strong> is a framework for writing Arduino firmware
-        in Go. Instead of C++, you write familiar Go code — with types, imports, and standard syntax —
+        in Go, or other languages. Instead of C++, you write familiar Go code — with types, imports, and standard syntax —
         and tsuki transpiles it to valid Arduino C++ automatically.
       </P>
 
@@ -137,7 +137,7 @@ export default function IntroductionPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
         <FeatureCard icon={<Code2 size={13} />} title="Readable syntax" desc="No header files, no pointer arithmetic. Just clean Go with import statements." />
-        <FeatureCard icon={<Package size={13} />} title="Package manager" desc="Install community packages with tsuki pkg install." />
+        <FeatureCard icon={<Package size={13} />} title="Package manager" desc="Install community packages for use native cpp libraries with tsuki pkg install." />
         <FeatureCard icon={<Cpu size={13} />} title="Multi-board" desc="Uno, Nano, Mega, ESP32, ESP8266, Pico, Teensy, Portenta and more." />
         <FeatureCard icon={<Zap size={13} />} title="No arduino-cli" desc="tsuki-flash compiles and flashes natively. Auto-downloads the AVR SDK." />
       </div>
