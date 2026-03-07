@@ -1,0 +1,4 @@
+{
+  "name": "Basic Temperature Read",
+  "description": "Read temperature and humidity from a DHT22 sensor and print values to Serial."
+}

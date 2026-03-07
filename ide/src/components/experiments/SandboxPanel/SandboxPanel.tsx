@@ -244,7 +244,7 @@ interface WireInProgress {
 }
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
-  const { openTabs, activeTabIdx, board, settings, projectPath } = useStore()
+  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit } = useStore()
   const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
 
   // View state
@@ -258,6 +258,17 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
 
   // Circuit state
   const [circuit, setCircuit] = useState<TsukiCircuit>({ ...DEFAULT_CIRCUIT, board: board || 'uno' })
+
+  // ── Consume pendingCircuit from store (loaded via Examples panel) ──────────
+  useEffect(() => {
+    if (!pendingCircuit) return
+    const parsed = textToCircuit(JSON.stringify(pendingCircuit.data))
+    if (parsed) {
+      setCircuit(parsed)
+      setView('canvas')
+    }
+    clearPendingCircuit()
+  }, [pendingCircuit?.id]) // eslint-disable-line
   const [textDraft, setTextDraft] = useState('')
   const [textError, setTextError] = useState('')
 

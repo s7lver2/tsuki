@@ -1,0 +1,4 @@
+{
+  "name": "Live Counter",
+  "description": "Display a live incrementing counter and uptime on the OLED."
+}

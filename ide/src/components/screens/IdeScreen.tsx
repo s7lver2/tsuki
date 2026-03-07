@@ -6,12 +6,13 @@ import { Btn, Divider } from '@/components/shared/primitives'
 import FilesSidebar from '@/components/other/FilesSidebar'
 import GitSidebar from '@/components/experiments/GitSidebar/GitSidebar'
 import PackagesSidebar from '@/components/other/PackagesSidebar'
+import ExamplesSidebar from '@/components/experiments/ExamplesSidebar/ExamplesSidebar'
 import CodeEditor from '@/components/other/CodeEditor'
 import BottomPanel from '@/components/other/BottomPanel'
 import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
-  Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, ChevronLeft,
+  Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, ChevronLeft, BookOpen,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import TsukiLogo from '@/components/shared/TsukiLogo'
@@ -37,6 +38,14 @@ export default function IdeScreen() {
   const [sandboxOpen, setSandboxOpen] = useState(false)
   const [sandboxWidth, setSandboxWidth] = useState(480)
   const [resizing, setResizing] = useState(false)
+
+  // Auto-open sandbox when a circuit is dispatched from Examples panel
+  const pendingCircuit = useStore(s => s.pendingCircuit)
+  useEffect(() => {
+    if (pendingCircuit && settings.experimentsEnabled && settings.expSandboxEnabled) {
+      setSandboxOpen(true)
+    }
+  }, [pendingCircuit?.id]) // eslint-disable-line
 
   const activeTab  = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
   const activeNode = activeTab ? tree.find(n => n.id === activeTab.fileId) : null
@@ -241,6 +250,7 @@ export default function IdeScreen() {
             { id: 'files',    icon: <Files size={17} />,     tip: t('sidebar.explorer'),  show: true },
             { id: 'git',      icon: <GitBranch size={17} />, tip: t('sidebar.git'),       show: settings.experimentsEnabled && settings.expGitEnabled },
             { id: 'packages', icon: <Package size={17} />,   tip: t('sidebar.packages'),  show: true },
+            { id: 'examples', icon: <BookOpen size={17} />,  tip: 'Examples',             show: true },
           ].filter(item => item.show).map(({ id, icon, tip }) => (
             <button
               key={id} title={tip}
@@ -276,6 +286,7 @@ export default function IdeScreen() {
           {sidebarOpen && sidebarTab === 'files'    && <FilesSidebar />}
           {sidebarOpen && sidebarTab === 'git'      && <GitSidebar />}
           {sidebarOpen && sidebarTab === 'packages' && <PackagesSidebar />}
+          {sidebarOpen && sidebarTab === 'examples' && <ExamplesSidebar />}
         </div>
 
         {/* Editor + bottom panel */}

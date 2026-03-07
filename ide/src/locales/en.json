@@ -69,7 +69,8 @@
   "sidebar": {
     "explorer": "Explorer",
     "git": "Source Control",
-    "packages": "Packages"
+    "packages": "Packages",
+    "examples": "Examples"
   },
   "files": {
     "newFile": "New File",

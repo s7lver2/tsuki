@@ -1,0 +1,4 @@
+{
+  "name": "Dual Sensor + Heat Index",
+  "description": "Read two DHT sensors and compute the heat index from temperature and humidity."
+}

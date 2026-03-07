@@ -1,14 +1,21 @@
 'use client'
 import { useStore } from '@/lib/store'
 import { useState } from 'react'
-import { Package, RefreshCw, Plus, Minus, Search, ExternalLink } from 'lucide-react'
+import {
+  Package, RefreshCw, Plus, Minus, Search,
+  ExternalLink,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 
 export default function PackagesSidebar() {
-  const { packages, togglePackage, setPackageInstalling, addLog, settings, projectPath } = useStore()
+  const {
+    packages, togglePackage, setPackageInstalling,
+    addLog, settings, projectPath,
+    dispatchCommand, setBottomTab,
+  } = useStore()
   const [query, setQuery] = useState('')
 
-  const tsuki = settings.tsukiPath || 'tsuki'
+  const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^"|"$/g, '')
   const cwd   = projectPath || undefined
 
   const filtered = packages.filter(p =>
@@ -19,65 +26,42 @@ export default function PackagesSidebar() {
   const installed = filtered.filter(p => p.installed)
   const available = filtered.filter(p => !p.installed)
 
-  /**
-   * Install: tsuki pkg install <name>
-   * Remove:  tsuki pkg install <name>  (no remove command documented, use deps)
-   *          tsuki deps add <name>  /  tsuki deps remove <name>
-   */
   async function handleToggle(name: string, currentlyInstalled: boolean) {
     setPackageInstalling(name, true)
+    setBottomTab('terminal')
 
-    // Determine command: deps add/remove affects tsuki_package.json
-    // pkg install downloads the lib definition itself
-    const cmd  = tsuki
     const args = currentlyInstalled
       ? ['deps', 'remove', name]
       : ['deps', 'add', name]
 
-    const displayCmd = [cmd, ...args].join(' ')
-    addLog('info', `> ${displayCmd}`)
+    addLog('info', `> ${tsuki} ${args.join(' ')}`)
+    dispatchCommand(tsuki, args, cwd)
 
-    // Route to terminal if visible, otherwise just log
-    const termFn = (window as any).__terminalSpawn
-    if (termFn) {
-      try {
-        const handle = await termFn(cmd, args, cwd)
-        await handle?.done
-      } catch {}
-    } else {
-      // Simulate with a short delay and mock output
-      await new Promise(r => setTimeout(r, 600))
-      const msg = currentlyInstalled
-        ? `✓  Removed ${name} from tsuki_package.json`
-        : `✓  Added ${name} v1.0.0 to tsuki_package.json`
-      addLog('ok', msg)
-    }
-
+    await new Promise(r => setTimeout(r, 800))
     setPackageInstalling(name, false)
     togglePackage(name)
   }
 
+  async function handleInstallDef(name: string) {
+    setBottomTab('terminal')
+    addLog('info', `> ${tsuki} pkg install ${name}`)
+    dispatchCommand(tsuki, ['pkg', 'install', name], cwd)
+  }
+
   async function handleRefresh() {
+    setBottomTab('terminal')
     addLog('info', `> ${tsuki} pkg list`)
-    const termFn = (window as any).__terminalSpawn
-    if (termFn) {
-      termFn(tsuki, ['pkg', 'list'], cwd)
-    } else {
-      addLog('info', 'Terminal not open — run `tsuki pkg list` manually')
-    }
+    dispatchCommand(tsuki, ['pkg', 'list'], cwd)
   }
 
   async function handleSearch() {
+    setBottomTab('terminal')
     addLog('info', `> ${tsuki} pkg search`)
-    const termFn = (window as any).__terminalSpawn
-    if (termFn) {
-      termFn(tsuki, ['pkg', 'search'], cwd)
-    }
+    dispatchCommand(tsuki, ['pkg', 'search'], cwd)
   }
 
   return (
     <div className="flex flex-col h-full text-[var(--fg)] text-xs">
-      {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] flex-shrink-0">
         <span className="font-semibold text-[10px] uppercase tracking-widest text-[var(--fg-faint)]">
           Packages
@@ -100,7 +84,6 @@ export default function PackagesSidebar() {
         </div>
       </div>
 
-      {/* Search filter */}
       <div className="px-2 py-1.5 flex-shrink-0">
         <div className="flex items-center gap-1.5 bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1">
           <Search size={10} className="text-[var(--fg-faint)] flex-shrink-0" />
@@ -113,18 +96,12 @@ export default function PackagesSidebar() {
         </div>
       </div>
 
-      {/* Lists */}
       <div className="flex-1 overflow-y-auto">
         {installed.length > 0 && (
           <>
             <SectionLabel label={`In project (${installed.length})`} />
             {installed.map(pkg => (
-              <PkgRow
-                key={pkg.name}
-                pkg={pkg}
-                tsuki={tsuki}
-                onToggle={handleToggle}
-              />
+              <PkgRow key={pkg.name} pkg={pkg} tsuki={tsuki} onToggle={handleToggle} onInstallDef={handleInstallDef} />
             ))}
           </>
         )}
@@ -133,12 +110,7 @@ export default function PackagesSidebar() {
           <>
             <SectionLabel label={`Available (${available.length})`} />
             {available.map(pkg => (
-              <PkgRow
-                key={pkg.name}
-                pkg={pkg}
-                tsuki={tsuki}
-                onToggle={handleToggle}
-              />
+              <PkgRow key={pkg.name} pkg={pkg} tsuki={tsuki} onToggle={handleToggle} onInstallDef={handleInstallDef} />
             ))}
           </>
         )}
@@ -151,7 +123,6 @@ export default function PackagesSidebar() {
         )}
       </div>
 
-      {/* Footer hint */}
       <div className="px-3 py-2 border-t border-[var(--border)] flex-shrink-0">
         <span className="text-[10px] text-[var(--fg-faint)] font-mono">
           {tsuki} pkg install &lt;name&gt;
@@ -172,22 +143,20 @@ function SectionLabel({ label }: { label: string }) {
 }
 
 function PkgRow({
-  pkg,
-  tsuki,
-  onToggle,
+  pkg, tsuki, onToggle, onInstallDef,
 }: {
   pkg: import('@/lib/store').PackageEntry
   tsuki: string
   onToggle: (name: string, installed: boolean) => void
+  onInstallDef: (name: string) => void
 }) {
-  const cmd = pkg.installed
-    ? `${tsuki} deps remove ${pkg.name}`
-    : `${tsuki} deps add ${pkg.name}`
+  const depsCmd    = pkg.installed ? `${tsuki} deps remove ${pkg.name}` : `${tsuki} deps add ${pkg.name}`
+  const installCmd = `${tsuki} pkg install ${pkg.name}`
 
   return (
     <div
       className="group flex items-start gap-2 px-3 py-1.5 hover:bg-[var(--hover)] transition-colors cursor-default"
-      title={cmd}
+      title={depsCmd}
     >
       <div className={clsx(
         'w-1.5 h-1.5 rounded-full mt-1 flex-shrink-0',
@@ -200,12 +169,21 @@ function PkgRow({
           <span className="text-[10px] text-[var(--fg-faint)] font-mono flex-shrink-0">{pkg.version}</span>
         </div>
         <div className="text-[var(--fg-muted)] text-[10px] leading-tight mt-0.5 truncate">{pkg.desc}</div>
+        <div className="hidden group-hover:flex items-center gap-2 mt-1">
+          <button
+            onClick={() => onInstallDef(pkg.name)}
+            title={installCmd}
+            className="text-[9px] text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer p-0 transition-colors"
+          >
+            ↓ pkg install
+          </button>
+        </div>
       </div>
 
       <button
         onClick={() => !pkg.installing && onToggle(pkg.name, pkg.installed)}
         disabled={pkg.installing}
-        title={cmd}
+        title={depsCmd}
         className={clsx(
           'w-5 h-5 flex items-center justify-center rounded cursor-pointer border-0 transition-colors flex-shrink-0',
           'opacity-0 group-hover:opacity-100',

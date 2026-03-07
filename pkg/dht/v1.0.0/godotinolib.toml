@@ -51,3 +51,9 @@ cpp = "DHT22"
 [[constant]]
 go  = "DHT21"
 cpp = "DHT21"
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/basic"
+
+[[example]]
+dir = "examples/dual_sensor"

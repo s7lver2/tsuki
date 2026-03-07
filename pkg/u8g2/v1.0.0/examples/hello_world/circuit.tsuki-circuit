@@ -1,0 +1,67 @@
+{
+  "version": "1",
+  "name": "OLED Hello World",
+  "board": "uno",
+  "description": "SSD1306 128\u00d764 OLED via I\u00b2C (0x3C). SDA \u2192 A4, SCL \u2192 A5.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "3.3V",
+      "x": 280,
+      "y": 30,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 280,
+      "y": 220,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "uno",
+      "fromPin": "SDA",
+      "toComp": "uno",
+      "toPin": "A4",
+      "color": "#06b6d4",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "uno",
+      "fromPin": "SCL",
+      "toComp": "uno",
+      "toPin": "A5",
+      "color": "#06b6d4",
+      "waypoints": []
+    }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "x": 300,
+      "y": 80,
+      "text": "SSD1306 OLED (I\u00b2C)\nVCC \u2190 3.3V or 5V\nGND \u2190 GND\nSDA \u2190 A4\nSCL \u2190 A5\nI\u00b2C addr: 0x3C",
+      "color": "#06b6d4"
+    }
+  ]
+}

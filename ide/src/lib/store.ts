@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import { applyTheme, applyUiScale, applyFontRendering } from './themes'
 
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
-export type SidebarTab = 'files' | 'git' | 'packages'
+export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
 export type BottomTab = 'output' | 'problems' | 'terminal'
 export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'language' | 'developer'
 
@@ -145,6 +145,7 @@ interface AppState {
   setProjectPath: (p: string) => void
   loadProject: (name: string, board: string, template: string, backend?: string, gitInit?: boolean, path?: string, language?: string) => Promise<void>
   loadFromDisk: (folder: string) => Promise<void>
+  openExample: (example: { name: string; board?: string; files: Array<{ path: string; name: string; content: string }> }) => void
   sidebarOpen: boolean
   sidebarTab: SidebarTab
   toggleSidebar: (tab: SidebarTab) => void
@@ -181,6 +182,9 @@ interface AppState {
   pendingCommand: { cmd: string; args: string[]; cwd?: string; chainArgs?: string[]; id: number } | null
   dispatchCommand: (cmd: string, args: string[], cwd?: string, chainArgs?: string[]) => void
   clearPendingCommand: () => void
+  pendingCircuit: { data: Record<string, unknown>; id: number } | null
+  loadCircuitInSandbox: (data: Record<string, unknown>) => void
+  clearPendingCircuit: () => void
   settings: SettingsState
   updateSetting: <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => void
   packages: PackageEntry[]
@@ -484,6 +488,53 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  // ── openExample ────────────────────────────────────────────────────────────
+  openExample: ({ name, board, files }) => {
+    const exBoard = board ?? get().board ?? 'uno'
+    const mainFile = files.find(f => f.name.endsWith('.go') || f.name === 'main.go' || f.name.endsWith('.ino')) ?? files[0]
+    const manifestContent = manifest(name, exBoard)
+
+    // Build tree
+    const nodes: FileNode[] = []
+    const srcChildren: string[] = []
+    const circuitChildren: string[] = []
+
+    files.forEach((f, i) => {
+      const id = `ex_${i}_${Math.random().toString(36).slice(2, 6)}`
+      const ext = f.name.split('.').pop() ?? ''
+      const inCircuits = f.path.startsWith('circuits/')
+      const node: FileNode = { id, name: f.name, type: 'file', ext, content: f.content, git: 'A' }
+      nodes.push(node)
+      if (inCircuits) circuitChildren.push(id)
+      else srcChildren.push(id)
+    })
+
+    const srcId = 'ex_src'
+    const circId = 'ex_circuits'
+    const manifestId = 'ex_manifest'
+    const rootId = 'root'
+
+    const manifestNode: FileNode = { id: manifestId, name: 'tsuki_package.json', type: 'file', ext: 'json', content: manifestContent, git: 'A' }
+    const srcDir: FileNode = { id: srcId, name: 'src', type: 'dir', open: true, children: srcChildren }
+    const rootChildren = [manifestId, srcId]
+
+    if (circuitChildren.length > 0) {
+      const circDir: FileNode = { id: circId, name: 'circuits', type: 'dir', open: false, children: circuitChildren }
+      nodes.push(circDir)
+      rootChildren.push(circId)
+    }
+
+    const rootNode: FileNode = { id: rootId, name: name, type: 'dir', open: true, children: rootChildren }
+    const tree = [rootNode, manifestNode, srcDir, ...nodes]
+
+    set({ projectName: name, board: exBoard, tree, openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [], projectPath: '' })
+
+    const mainNode = nodes.find(n => mainFile && n.name === mainFile.name)
+    if (mainNode) setTimeout(() => get().openFile(mainNode.id), 50)
+    get().addLog('info', `Example "${name}" loaded · Board: ${exBoard}`)
+    get().addLog('ok', 'Ready. This is an in-memory preview — use Save or set a project path to persist.')
+  },
+
   sidebarOpen: true,
   sidebarTab: 'files',
   toggleSidebar: (tab) => {
@@ -671,6 +722,10 @@ export const useStore = create<AppState>((set, get) => ({
     set({ pendingCommand: { cmd, args, cwd, chainArgs, id: Date.now() } })
   },
   clearPendingCommand: () => set({ pendingCommand: null }),
+
+  pendingCircuit: null,
+  loadCircuitInSandbox: (data) => set({ pendingCircuit: { data, id: Date.now() } }),
+  clearPendingCircuit: () => set({ pendingCircuit: null }),
 
   settings: DEFAULT_SETTINGS,
 

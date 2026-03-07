@@ -477,24 +477,18 @@ function Terminal() {
 
     const runDirect = async (cmdStr: string, argsArr: string[], cwdStr?: string): Promise<number> => {
       const label = [cmdStr, ...argsArr].join(' ')
+      addLineToActive(`❯ ${label}`, 'prompt')
       setActiveRunning(true)
 
       try {
-        const handle = await spawnInSession(cmdStr, argsArr, cwdStr)
+        const handle = await spawnProcess(cmdStr, argsArr, cwdStr, (line, isErr) => {
+          addLineToActive(line, isErr ? 'err' : 'out')
+          useStore.getState().addLog(isErr ? 'err' : 'ok', line)
+        })
         const code = await handle.done
         handle.dispose()
         setActiveRunning(false)
         useStore.getState().refreshTree().catch(() => {})
-        if (code !== 0) addLineToActive(`[exit ${code}]`, 'err')
-        return code
-      } catch (e) {
-        const msg = String(e)
-        addLineToActive(`[error: ${msg}]`, 'err')
-        useStore.getState().addLog('err', msg)
-        setActiveRunning(false)
-        return 1
-      }
-    }
         if (code !== 0) addLineToActive(`[exit ${code}]`, 'err')
         return code
       } catch (e) {

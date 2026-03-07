@@ -1,0 +1,4 @@
+{
+  "name": "Rainbow Cycle",
+  "description": "Cycle a full rainbow pattern across a WS2812/NeoPixel strip."
+}

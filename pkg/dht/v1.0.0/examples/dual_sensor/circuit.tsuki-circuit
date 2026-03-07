@@ -1,0 +1,175 @@
+{
+  "version": "1",
+  "name": "DHT Dual Sensor",
+  "board": "uno",
+  "description": "Two DHT sensors: DHT22 on D2, DHT11 on D3. Each needs a 4.7k\u03a9 pull-up.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "dht1",
+      "type": "dht11",
+      "label": "DHT22 (D2)",
+      "x": 310,
+      "y": 60,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "dht2",
+      "type": "dht11",
+      "label": "DHT11 (D3)",
+      "x": 310,
+      "y": 170,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "r1",
+      "type": "resistor",
+      "label": "4.7k\u03a9",
+      "x": 230,
+      "y": 48,
+      "rotation": 0,
+      "color": "",
+      "props": {
+        "ohms": 4700
+      }
+    },
+    {
+      "id": "r2",
+      "type": "resistor",
+      "label": "4.7k\u03a9",
+      "x": 230,
+      "y": 158,
+      "rotation": 0,
+      "color": "",
+      "props": {
+        "ohms": 4700
+      }
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "5V",
+      "x": 190,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 360,
+      "y": 290,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "dht1",
+      "toPin": "vcc",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "r1",
+      "toPin": "pin1",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w3",
+      "fromComp": "r1",
+      "fromPin": "pin2",
+      "toComp": "dht1",
+      "toPin": "data",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w4",
+      "fromComp": "uno",
+      "fromPin": "D2",
+      "toComp": "dht1",
+      "toPin": "data",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w5",
+      "fromComp": "dht1",
+      "fromPin": "gnd",
+      "toComp": "gnd1",
+      "toPin": "gnd",
+      "color": "#6b7280",
+      "waypoints": []
+    },
+    {
+      "id": "w6",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "dht2",
+      "toPin": "vcc",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w7",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "r2",
+      "toPin": "pin1",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w8",
+      "fromComp": "r2",
+      "fromPin": "pin2",
+      "toComp": "dht2",
+      "toPin": "data",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w9",
+      "fromComp": "uno",
+      "fromPin": "D3",
+      "toComp": "dht2",
+      "toPin": "data",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w10",
+      "fromComp": "dht2",
+      "fromPin": "gnd",
+      "toComp": "gnd1",
+      "toPin": "gnd",
+      "color": "#6b7280",
+      "waypoints": []
+    }
+  ],
+  "notes": []
+}

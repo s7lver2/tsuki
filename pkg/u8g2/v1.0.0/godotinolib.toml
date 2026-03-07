@@ -111,3 +111,9 @@ cpp = "U8G2_R2"
 [[constant]]
 go  = "ROTATION_R3"
 cpp = "U8G2_R3"
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/hello_world"
+
+[[example]]
+dir = "examples/counter"

@@ -18,6 +18,11 @@ const nextConfig = {
       test: /src-tauri\/target/,
       type: 'asset/resource'
     });
+    // Allow importing .tsuki-circuit files as JSON
+    config.module.rules.push({
+      test: /\.tsuki-circuit$/,
+      type: 'json',
+    });
     return config
   },
   experimental: {

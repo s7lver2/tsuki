@@ -112,3 +112,12 @@ cpp = "NEO_KHZ800"
 [[constant]]
 go  = "NEO_KHZ400"
 cpp = "NEO_KHZ400"
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/blink"
+
+[[example]]
+dir = "examples/rainbow"
+
+[[example]]
+dir = "examples/theater_chase"

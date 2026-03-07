@@ -1,0 +1,98 @@
+{
+  "version": "1",
+  "name": "NeoPixel Blink",
+  "board": "uno",
+  "description": "Single WS2812 LED on D6. 470\u03a9 series resistor on DIN, 1000\u03bcF bypass cap on power.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "r1",
+      "type": "resistor",
+      "label": "470\u03a9 (DIN)",
+      "x": 240,
+      "y": 144,
+      "rotation": 0,
+      "color": "",
+      "props": {
+        "ohms": 470
+      }
+    },
+    {
+      "id": "cap1",
+      "type": "capacitor",
+      "label": "1000\u03bcF",
+      "x": 360,
+      "y": 80,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "5V",
+      "x": 320,
+      "y": 40,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 340,
+      "y": 230,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "uno",
+      "fromPin": "D6",
+      "toComp": "r1",
+      "toPin": "pin1",
+      "color": "#f97316",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "cap1",
+      "toPin": "pos",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w3",
+      "fromComp": "cap1",
+      "fromPin": "neg",
+      "toComp": "gnd1",
+      "toPin": "gnd",
+      "color": "#6b7280",
+      "waypoints": []
+    }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "x": 370,
+      "y": 150,
+      "text": "NeoPixel / WS2812\nDIN \u2190 470\u03a9 \u2190 D6\nVCC \u2190 5V (+ 1000\u03bcF cap)\nGND \u2190 GND",
+      "color": "#22c55e"
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "version": "1",
+  "name": "DHT Basic",
+  "board": "uno",
+  "description": "DHT11 sensor on D2 \u2014 read temperature and humidity. 4.7k\u03a9 pull-up on data line.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "dht",
+      "type": "dht11",
+      "label": "DHT11",
+      "x": 300,
+      "y": 100,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "r1",
+      "type": "resistor",
+      "label": "4.7k\u03a9",
+      "x": 220,
+      "y": 66,
+      "rotation": 0,
+      "color": "",
+      "props": {
+        "ohms": 4700
+      }
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "5V",
+      "x": 190,
+      "y": 30,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 350,
+      "y": 220,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "dht",
+      "toPin": "vcc",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "vcc1",
+      "fromPin": "5v",
+      "toComp": "r1",
+      "toPin": "pin1",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w3",
+      "fromComp": "r1",
+      "fromPin": "pin2",
+      "toComp": "dht",
+      "toPin": "data",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w4",
+      "fromComp": "uno",
+      "fromPin": "D2",
+      "toComp": "dht",
+      "toPin": "data",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w5",
+      "fromComp": "dht",
+      "fromPin": "gnd",
+      "toComp": "gnd1",
+      "toPin": "gnd",
+      "color": "#6b7280",
+      "waypoints": []
+    }
+  ],
+  "notes": []
+}
