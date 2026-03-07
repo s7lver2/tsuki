@@ -6,7 +6,7 @@ import { Btn, Divider } from '@/components/shared/primitives'
 import FilesSidebar from '@/components/other/FilesSidebar'
 import GitSidebar from '@/components/experiments/GitSidebar/GitSidebar'
 import PackagesSidebar from '@/components/other/PackagesSidebar'
-import ExamplesSidebar from '@/components/experiments/ExamplesSidebar/ExamplesSidebar'
+import ExamplesSidebar from '@/components/other/ExamplesSidebar'
 import CodeEditor from '@/components/other/CodeEditor'
 import BottomPanel from '@/components/other/BottomPanel'
 import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
@@ -21,7 +21,7 @@ import { useT } from '@/lib/i18n'
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
-  'esp32','esp32s2','esp32c3','esp8266','d1_mini','nodemcu','pico',
+  'esp32','esp32s2','esp32c3','esp8266','d1_mini','nodemcu','pico','xiao_rp2040',
 ]
 
 export default function IdeScreen() {

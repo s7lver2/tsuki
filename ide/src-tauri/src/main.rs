@@ -2,12 +2,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod simulator;
+mod win_proc;
+mod pty_session;
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use tauri::Window;
+use win_proc::WinSpawn;
 
 // ── Debug logger ──────────────────────────────────────────────────────────────
 // windows_subsystem="windows" suppresses stderr entirely, so we log to a file
@@ -34,20 +37,21 @@ fn dbg(msg: &str) {
     eprintln!("{}", line);
 }
 
-// On Windows every Command::new().no_window() would flash a console window unless we set
-// CREATE_NO_WINDOW. We add a tiny extension trait so we can call .no_window()
-// on any Command in a platform-agnostic way.
+// On Windows, .no_window() uses DETACHED_PROCESS instead of CREATE_NO_WINDOW.
+// DETACHED_PROCESS allows Stdio::piped() to work correctly (no console flash,
+// no broken pipe issues). win_proc::WinSpawn is used for the main spawn calls;
+// this trait remains for simple fire-and-forget commands (git, taskkill, etc.)
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 trait NoWindow {
     fn no_window(self) -> Self;
 }
 impl NoWindow for Command {
     #[cfg(windows)]
-    fn no_window(mut self) -> Self { self.creation_flags(CREATE_NO_WINDOW); self }
+    fn no_window(mut self) -> Self { self.creation_flags(DETACHED_PROCESS); self }
     #[cfg(not(windows))]
     fn no_window(self) -> Self { self }
 }
@@ -82,11 +86,13 @@ async fn list_shells() -> Vec<ShellInfo> {
 
     #[cfg(windows)]
     {
-        // CMD — always present on Windows
+        // CMD — always present on Windows, use absolute path so portable-pty finds it
+        let cmd_path = std::env::var("COMSPEC")
+            .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
         shells.push(ShellInfo {
             id:   "cmd".into(),
             name: "Command Prompt".into(),
-            path: "cmd.exe".into(),
+            path: cmd_path,
             icon: "⬛".into(),
         });
 
@@ -205,7 +211,7 @@ async fn spawn_shell(
 
     if let Some(dir) = &cwd { c.current_dir(dir); }
 
-    let mut child = c.spawn()
+    let mut child = c.win_spawn()
         .map_err(|e| format!("Failed to spawn shell '{}': {}", shell_path, e))?;
 
     let pid   = child.id();
@@ -374,9 +380,8 @@ async fn spawn_process(
     dbg(&format!("[spawn_process] PATH  = {}", enriched_path()));
     // ─────────────────────────────────────────────────────────────────────────
 
-    // NOTE: do NOT call .no_window() here — CREATE_NO_WINDOW conflicts with
-    // Stdio::piped() on some Windows configurations and causes spawn to fail.
-    // A brief console flash on spawn is acceptable for CLI commands.
+    // Uses win_spawn() (DETACHED_PROCESS on Windows) which correctly supports
+    // Stdio::piped() without console flash or broken pipe issues.
     let mut c = Command::new(&cmd);
     c.args(&args)
      .stdin(Stdio::piped())
@@ -386,7 +391,7 @@ async fn spawn_process(
     { c.env("PATH", enriched_path()); }
     if let Some(dir) = &cwd { c.current_dir(dir); }
 
-    let mut child = c.spawn().map_err(|e| {
+    let mut child = c.win_spawn().map_err(|e| {
         let exists = std::path::Path::new(&cmd).exists();
         let kind   = e.kind();
         format!(
@@ -907,9 +912,12 @@ fn main() {
     dbg("=== tsuki-ide started ===");
     #[cfg(windows)]
     dbg(&format!("[main] TEMP={}", std::env::var("TEMP").unwrap_or_default()));
+    // Ensure child processes are killed when this process exits (Windows only)
+    win_proc::init_job_object();
     tauri::Builder::default()
         .manage(AppState { processes: Arc::new(Mutex::new(HashMap::new())) })
         .manage(SimRegState { stops: Mutex::new(HashMap::new()) })
+        .manage(pty_session::PtyState::new())
         .invoke_handler(tauri::generate_handler![
             run_shell,
             spawn_process,
@@ -938,6 +946,10 @@ fn main() {
             emit_sim_bundle,
             run_simulator,
             stop_simulator,
+            pty_session::pty_create,
+            pty_session::pty_write,
+            pty_session::pty_resize,
+            pty_session::pty_kill,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

@@ -481,3 +481,57 @@ export async function emitSimBundle(source: string, board: string, bundlePath: s
   if (!isTauri()) throw new Error('emitSimBundle: not in Tauri')
   return invoke<void>('emit_sim_bundle', { source, board, bundlePath })
 }
+// ── PTY sessions (xterm.js backend) ──────────────────────────────────────────
+//
+// These commands back the real-PTY terminal powered by portable-pty + xterm.js.
+// Unlike spawn_process (anonymous pipes), a PTY makes child processes think
+// they're talking to a real terminal, so output flushes line-by-line.
+//
+// Event protocol:
+//   pty://<id>:data  — raw bytes (utf-8, may contain ANSI escape codes)
+//   pty://<id>:exit  — i32 exit code
+
+export async function ptyCreate(
+  id:    string,
+  cmd:   string,
+  args:  string[],
+  cwd:   string | undefined,
+  cols:  number,
+  rows:  number,
+  env?:  Array<[string, string]>,   // [[key,value],…] — Rust expects Vec<[String;2]>
+): Promise<void> {
+  if (!isTauri()) throw new Error('ptyCreate: not in Tauri')
+  return invoke<void>('pty_create', {
+    id, cmd, args, cwd: cwd ?? null, cols, rows,
+    env: env ?? null,
+  })
+}
+
+export async function ptyWrite(id: string, data: string): Promise<void> {
+  if (!isTauri()) return
+  return invoke<void>('pty_write', { id, data })
+}
+
+export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
+  if (!isTauri()) return
+  return invoke<void>('pty_resize', { id, cols, rows })
+}
+
+export async function ptyKill(id: string): Promise<void> {
+  if (!isTauri()) return
+  return invoke<void>('pty_kill', { id })
+}
+
+export async function ptyOnData(
+  id:      string,
+  handler: (data: string) => void,
+): Promise<() => void> {
+  return listen(`pty://${id}:data`, handler as (payload: unknown) => void)
+}
+
+export async function ptyOnExit(
+  id:      string,
+  handler: (code: number) => void,
+): Promise<() => void> {
+  return listen(`pty://${id}:exit`, handler as (payload: unknown) => void)
+}

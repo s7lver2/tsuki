@@ -138,6 +138,7 @@ function ComponentBody({ comp, def, simPinValues }: {
   switch (type) {
     case 'arduino_uno':    return <ArduinoUnoBody   w={w} h={h} g={g} />
     case 'arduino_nano':   return <ArduinoNanoBody  w={w} h={h} g={g} />
+    case 'xiao_rp2040':    return <XiaoRp2040Body   w={w} h={h} g={g} />
     case 'led': {
       const on = (simPinValues[`${id}:anode`] ?? 0) > 0
       return <LedBody w={w} h={h} color={color} on={on} g={g} />
@@ -322,6 +323,77 @@ function ArduinoNanoBody({ w, h, g }: { w: number; h: number; g: string }) {
       {/* LEDs */}
       <circle cx={w*0.82} cy={h*0.15} r={2}   fill="#22c55e" opacity={0.9} />
       <circle cx={w*0.72} cy={h*0.15} r={1.5} fill="#f97316" opacity={0.8} />
+    </>
+  )
+}
+
+// ── XIAO RP2040 ────────────────────────────────────────────────────────────────
+function XiaoRp2040Body({ w, h, g }: { w: number; h: number; g: string }) {
+  return (
+    <>
+      <defs>
+        <linearGradient id={`xiao_${g}`} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%"   stopColor="#16a34a" />
+          <stop offset="100%" stopColor="#052e16" />
+        </linearGradient>
+        <radialGradient id={`xiao_np_${g}`} cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stopColor="#ffffff" stopOpacity="0.9" />
+          <stop offset="40%"  stopColor="#a78bfa" stopOpacity="0.7" />
+          <stop offset="100%" stopColor="#7c3aed" stopOpacity="0.3" />
+        </radialGradient>
+      </defs>
+
+      {/* PCB */}
+      <rect width={w} height={h} rx={3} fill={`url(#xiao_${g})`} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={2.5} fill="none"
+            stroke="rgba(255,255,255,0.12)" strokeWidth={0.8} />
+
+      {/* USB-C top */}
+      <rect x={w*0.28} y={-5} width={w*0.44} height={6.5} rx={1.5} fill="#999" />
+      <rect x={w*0.33} y={-4} width={w*0.34} height={4}   rx={1}   fill="#444" />
+      <text x={w*0.5}  y={-0.5} textAnchor="middle" fontSize={3.5} fill="#aaa" fontFamily="monospace">C</text>
+
+      {/* RP2040 chip */}
+      <rect x={w*0.18} y={h*0.22} width={w*0.64} height={h*0.32} rx={2} fill="#0f0f0f" />
+      <rect x={w*0.20} y={h*0.24} width={w*0.60} height={h*0.28} rx={1.5} fill="none"
+            stroke="rgba(255,255,255,0.08)" strokeWidth={0.5} />
+      {[0,1,2,3,4].map(i => (
+        <rect key={`cl${i}`} x={w*0.13}  y={h*(0.24+i*0.054)} width={w*0.07} height={2.2} rx={0.5} fill="#c8a843" />
+      ))}
+      {[0,1,2,3,4].map(i => (
+        <rect key={`cr${i}`} x={w*0.80}  y={h*(0.24+i*0.054)} width={w*0.07} height={2.2} rx={0.5} fill="#c8a843" />
+      ))}
+      <text x={w*0.5} y={h*0.365} textAnchor="middle" fontSize={4.2} fill="#777" fontFamily="monospace" fontWeight="700">RP2040</text>
+      <text x={w*0.5} y={h*0.405} textAnchor="middle" fontSize={3.2} fill="#555" fontFamily="monospace">133 MHz</text>
+
+      {/* NeoPixel RGB */}
+      <circle cx={w*0.5}  cy={h*0.68} r={4}   fill={`url(#xiao_np_${g})`} />
+      <circle cx={w*0.5}  cy={h*0.68} r={4.5} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth={0.5} />
+      <text   x={w*0.5}   y={h*0.745} textAnchor="middle" fontSize={3} fill="rgba(255,255,255,0.4)" fontFamily="monospace">NEO</text>
+
+      {/* Status LEDs: PWR · CHG · USER */}
+      <circle cx={w*0.20} cy={h*0.82} r={2}   fill="#22c55e" opacity={0.85} />
+      <circle cx={w*0.50} cy={h*0.82} r={2}   fill="#f97316" opacity={0.80} />
+      <circle cx={w*0.80} cy={h*0.82} r={2}   fill="#3b82f6" opacity={0.85} />
+      <text   x={w*0.20}  y={h*0.875} textAnchor="middle" fontSize={2.8} fill="rgba(255,255,255,0.35)" fontFamily="monospace">PWR</text>
+      <text   x={w*0.50}  y={h*0.875} textAnchor="middle" fontSize={2.8} fill="rgba(255,255,255,0.35)" fontFamily="monospace">CHG</text>
+      <text   x={w*0.80}  y={h*0.875} textAnchor="middle" fontSize={2.8} fill="rgba(255,255,255,0.35)" fontFamily="monospace">USR</text>
+
+      {/* Reset button */}
+      <rect x={w*0.35} y={h*0.91} width={w*0.12} height={h*0.055} rx={1.5} fill="#1a1a1a" stroke="#555" strokeWidth={0.5} />
+      <text x={w*0.41}  y={h*0.95}  textAnchor="middle" fontSize={2.5} fill="#666" fontFamily="monospace">RST</text>
+
+      {/* Label */}
+      <text x={w*0.5}  y={h*0.135} textAnchor="middle" fontSize={5}   fill="rgba(255,255,255,0.6)" fontFamily="monospace" fontWeight="700">XIAO</text>
+      <text x={w*0.5}  y={h*0.195} textAnchor="middle" fontSize={3.5} fill="rgba(255,255,255,0.35)" fontFamily="monospace">RP2040</text>
+
+      {/* Castellated edge pads */}
+      {[0.08,0.20,0.32,0.44,0.56,0.68,0.80].map((ry, i) => (
+        <rect key={`pl${i}`} x={0} y={h*ry - 2} width={3} height={4} rx={0.5} fill="rgba(200,168,67,0.5)" />
+      ))}
+      {[0.08,0.20,0.32,0.44,0.56,0.68,0.80].map((ry, i) => (
+        <rect key={`pr${i}`} x={w-3} y={h*ry - 2} width={3} height={4} rx={0.5} fill="rgba(200,168,67,0.5)" />
+      ))}
     </>
   )
 }

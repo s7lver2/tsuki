@@ -114,6 +114,7 @@ export interface SettingsState {
   expLspEnabled: boolean
   // ── Developer ─────────────────────────────────────────────────────────────
   developerOptions: boolean
+  winSpawnMethod: 'shell' | 'direct' | 'detached'  // Windows-only spawn strategy
   // ── Language / i18n ──────────────────────────────────────────────────────
   language: 'en' | 'es'
   // ── Docs ─────────────────────────────────────────────────────────────────
@@ -286,6 +287,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   expGitEnabled: false,
   expLspEnabled: false,
   developerOptions: false,
+  winSpawnMethod: 'shell',    // default: route through shell session (most robust)
   // advanced
   tsukiFlashPath: '',
   insertSpaces: true,

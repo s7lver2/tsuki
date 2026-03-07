@@ -1137,7 +1137,7 @@ function LspExpTab() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DeveloperTab() {
-  const { goBack } = useStore()
+  const { goBack, settings, updateSetting } = useStore()
   const [resetting, setResetting] = useState(false)
   const [resetDone, setResetDone] = useState(false)
 
@@ -1171,6 +1171,48 @@ function DeveloperTab() {
           <p className="text-sm text-[var(--fg-muted)]">
             Internal tools for debugging and resetting IDE state. Not intended for regular use.
           </p>
+        </div>
+      </div>
+
+      <GroupHeader title="Windows process spawn method" />
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          Controls how IDE toolbar buttons (Check, Build, Flash…) launch executables on Windows.
+          Switch here to diagnose issues without breaking the rest of the IDE.
+        </p>
+        <div className="flex flex-col gap-2">
+          {([
+            { value: 'shell',    label: '🐚 Shell (default)',   desc: 'Routes through the active cmd/bash session. Most compatible — recommended.' },
+            { value: 'direct',   label: '⚡ Direct spawn',      desc: 'Calls spawn_process directly with DETACHED_PROCESS flag. Use if shell routing is unreliable.' },
+            { value: 'detached', label: '🪟 Detached (legacy)', desc: 'Old behavior — spawns with no special flags. May open a console window briefly.' },
+          ] as const).map(opt => (
+            <label
+              key={opt.value}
+              className={clsx(
+                'flex items-start gap-3 p-3 rounded border cursor-pointer transition-colors',
+                settings.winSpawnMethod === opt.value
+                  ? 'border-amber-400/40 bg-amber-400/5 text-[var(--fg)]'
+                  : 'border-[var(--border)] hover:bg-[var(--hover)] text-[var(--fg-muted)]',
+              )}
+            >
+              <input
+                type="radio"
+                name="winSpawnMethod"
+                value={opt.value}
+                checked={settings.winSpawnMethod === opt.value}
+                onChange={() => updateSetting('winSpawnMethod', opt.value)}
+                className="mt-0.5 accent-amber-400 flex-shrink-0"
+              />
+              <div>
+                <div className="text-xs font-medium mb-0.5">{opt.label}</div>
+                <div className="text-[10px] text-[var(--fg-faint)] leading-relaxed">{opt.desc}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+        <div className="flex items-start gap-2 px-2 py-2 rounded bg-blue-400/5 border border-blue-400/20 text-[10px] text-[var(--fg-faint)] leading-relaxed">
+          <span className="text-blue-400 mt-0.5">ℹ</span>
+          <span>Change takes effect on the next toolbar action. No restart required. This setting only affects Windows — on Linux/macOS the shell method is always used.</span>
         </div>
       </div>
 

@@ -65,44 +65,90 @@ function CompShape({
   onPointerDown: (e: React.PointerEvent) => void
   onPinClick: (pinId: string) => void
 }) {
-  const { x, y, type, label, color } = comp
+  const { type, label, color } = comp
+  const [hoveredPin, setHoveredPin] = useState<string | null>(null)
 
-  // LED glowing state
   const ledOn = type === 'led'
     ? (simPinValues[`${comp.id}:anode`] ?? 0) > 0
     : false
 
   return (
-    <g transform={`translate(${x},${y})`} style={{ cursor: 'move' }} onPointerDown={onPointerDown}>
+    <g transform={`translate(${comp.x},${comp.y})`} style={{ cursor: 'move' }} onPointerDown={onPointerDown}>
       {/* Selection ring */}
       {selected && (
-        <rect x={-3} y={-3} width={def.w + 6} height={def.h + 6}
-          rx={5} fill="none" stroke="var(--fg)" strokeWidth={1.5} strokeDasharray="4 2" />
+        <rect x={-4} y={-4} width={def.w + 8} height={def.h + 8}
+          rx={6} fill="none" stroke="#60a5fa" strokeWidth={1.5} strokeDasharray="5 3" opacity={0.8} />
       )}
 
       {/* Body */}
-      {type === 'arduino_uno' && <ArduinoUnoBody w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'arduino_nano' && <ArduinoNanoBody w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'led' && <LedBody w={def.w} h={def.h} color={color} on={ledOn} label={label} />}
-      {type === 'resistor' && <ResistorBody w={def.w} h={def.h} color={color} label={label} props={comp.props} />}
-      {type === 'button' && <ButtonBody w={def.w} h={def.h} label={label} />}
-      {type === 'potentiometer' && <PotBody w={def.w} h={def.h} label={label} />}
-      {type === 'buzzer' && <BuzzerBody w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'power_rail' && <PowerRailBody w={def.w} h={def.h} label={label} />}
+      {type === 'arduino_uno'    && <ArduinoUnoBody    w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'arduino_nano'   && <ArduinoNanoBody   w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'led'            && <LedBody            w={def.w} h={def.h} color={color} on={ledOn} label={label} />}
+      {type === 'led_rgb'        && <LedRgbBody         w={def.w} h={def.h} label={label} />}
+      {type === 'resistor'       && <ResistorBody       w={def.w} h={def.h} label={label} props={comp.props} />}
+      {type === 'capacitor'      && <CapacitorBody      w={def.w} h={def.h} label={label} />}
+      {type === 'transistor_npn' && <TransistorBody     w={def.w} h={def.h} label={label} />}
+      {type === 'button'         && <ButtonBody         w={def.w} h={def.h} label={label} />}
+      {type === 'potentiometer'  && <PotBody            w={def.w} h={def.h} label={label} />}
+      {type === 'buzzer'         && <BuzzerBody         w={def.w} h={def.h} label={label} />}
+      {type === 'servo'          && <ServoBody          w={def.w} h={def.h} label={label} />}
+      {type === 'dht11'          && <Dht11Body          w={def.w} h={def.h} label={label} />}
+      {type === 'ldr'            && <LdrBody            w={def.w} h={def.h} label={label} />}
+      {type === 'ultrasonic'     && <UltrasonicBody     w={def.w} h={def.h} label={label} />}
+      {type === 'ir_sensor'      && <IrSensorBody       w={def.w} h={def.h} label={label} />}
+      {type === 'lcd_16x2'       && <LcdBody            w={def.w} h={def.h} label={label} />}
+      {type === 'seven_seg'      && <SevenSegBody       w={def.w} h={def.h} label={label} simPinValues={simPinValues} compId={comp.id} />}
+      {type === 'vcc_node'       && <VccNodeBody        w={def.w} h={def.h} label={label} />}
+      {type === 'gnd_node'       && <GndNodeBody        w={def.w} h={def.h} label={label} />}
+      {type === 'power_rail'     && <PowerRailBody      w={def.w} h={def.h} label={label} />}
 
-      {/* Pins */}
+      {/* Pins + hover tooltip */}
       {def.pins.map(pin => {
         const px = pin.rx * def.w
         const py = pin.ry * def.h
+        const hov = hoveredPin === pin.id
         return (
-          <g key={pin.id} onClick={e => { e.stopPropagation(); onPinClick(pin.id) }}
+          <g key={pin.id}
+            onClick={e => { e.stopPropagation(); onPinClick(pin.id) }}
+            onMouseEnter={() => setHoveredPin(pin.id)}
+            onMouseLeave={() => setHoveredPin(null)}
             style={{ cursor: 'crosshair' }}>
-            <circle cx={px} cy={py} r={6} fill="transparent" />
-            <circle cx={px} cy={py} r={3.5}
+            {/* Hit area */}
+            <circle cx={px} cy={py} r={9} fill="transparent" />
+            {/* Outer ring on hover */}
+            {hov && <circle cx={px} cy={py} r={7} fill={pinColor(pin.type)} opacity={0.25} />}
+            {/* Pin dot */}
+            <circle cx={px} cy={py} r={hov ? 4.5 : 3.5}
               fill={pinColor(pin.type)}
-              stroke="var(--surface)" strokeWidth={1}
-              className="transition-all"
+              stroke={hov ? '#fff' : 'rgba(0,0,0,0.5)'}
+              strokeWidth={hov ? 1.5 : 1}
+              style={{ transition: 'r 0.1s, stroke 0.1s' }}
             />
+            {/* Tooltip */}
+            {hov && (() => {
+              // Decide which side to show tooltip
+              const onRight = pin.rx <= 0.5
+              const onBottom = pin.ry <= 0.5
+              const tx = onRight ? px + 11 : px - 11
+              const ty = py
+              const textAnchor = onRight ? 'start' : 'end'
+              const tipText = pin.label
+              const charW = 5.5
+              const tipW = tipText.length * charW + 10
+              const tipH = 16
+              const boxX = onRight ? tx - 2 : tx - tipW + 2
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  <rect x={boxX} y={ty - tipH / 2} width={tipW} height={tipH}
+                    rx={3} fill="#1a1a2e" stroke={pinColor(pin.type)} strokeWidth={0.8} opacity={0.96} />
+                  <text x={tx + (onRight ? 3 : -3)} y={ty + 4}
+                    textAnchor={textAnchor} fontSize={9} fill="#e2e8f0"
+                    fontFamily="ui-monospace,monospace" fontWeight="500">
+                    {tipText}
+                  </text>
+                </g>
+              )
+            })()}
           </g>
         )
       })}
@@ -110,75 +156,287 @@ function CompShape({
   )
 }
 
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+function CompLabel({ x, y, text }: { x: number; y: number; text: string }) {
+  return (
+    <text x={x} y={y} textAnchor="middle" fontSize={7.5} fill="var(--fg-muted)"
+      fontFamily="ui-monospace,monospace" letterSpacing="0.02em">{text}</text>
+  )
+}
+
+function PcbBase({ w, h, rx = 4, color = '#1a5c2a', hi = 'rgba(255,255,255,0.07)', shadow = 'rgba(0,0,0,0.5)' }: {
+  w: number; h: number; rx?: number; color?: string; hi?: string; shadow?: string
+}) {
+  return (
+    <>
+      {/* Drop shadow */}
+      <rect x={2} y={2} width={w} height={h} rx={rx} fill={shadow} />
+      {/* PCB */}
+      <rect width={w} height={h} rx={rx} fill={color} />
+      {/* Subtle highlight bevel */}
+      <rect x={1} y={1} width={w - 2} height={h - 2} rx={rx - 1}
+        fill="none" stroke={hi} strokeWidth={1} />
+    </>
+  )
+}
+
+function IcChip({ x, y, w, h, label, sub }: { x: number; y: number; w: number; h: number; label: string; sub?: string }) {
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} rx={2} fill="#0d0d14" />
+      <rect x={x + 1} y={y + 1} width={w - 2} height={h - 2} rx={1.5}
+        fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={0.8} />
+      {/* notch */}
+      <path d={`M ${x + w/2 - 4} ${y} A 4 4 0 0 1 ${x + w/2 + 4} ${y}`} fill="#0d0d14" stroke="rgba(255,255,255,0.12)" strokeWidth={0.6} />
+      <text x={x + w / 2} y={y + h / 2 - (sub ? 3 : 0)} textAnchor="middle"
+        fontSize={Math.min(7, w / label.length * 1.4)} fill="#7c9cbf" fontFamily="ui-monospace,monospace" fontWeight="700">
+        {label}
+      </text>
+      {sub && <text x={x + w / 2} y={y + h / 2 + 7} textAnchor="middle"
+        fontSize={5.5} fill="#4a6a8a" fontFamily="ui-monospace,monospace">{sub}</text>}
+    </g>
+  )
+}
+
 // ── Shape sub-components ───────────────────────────────────────────────────────
 
 function ArduinoUnoBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
+  const pcb = color || '#1a5c2a'
   return (
     <>
-      <rect width={w} height={h} rx={4} fill={color} />
-      <rect x={4} y={4} width={w - 8} height={h - 8} rx={2}
-        fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={0.8} />
-      {/* USB port */}
-      <rect x={w * 0.2} y={-6} width={w * 0.35} height={6} rx={1} fill="#555" />
-      {/* ATmega chip */}
-      <rect x={w * 0.25} y={h * 0.35} width={w * 0.5} height={h * 0.28} rx={2} fill="#111" />
-      <text x={w * 0.5} y={h * 0.53} textAnchor="middle" fontSize={7} fill="#888" fontFamily="monospace">ATMEGA</text>
-      <text x={w * 0.5} y={h * 0.1} textAnchor="middle" fontSize={6.5} fill="rgba(255,255,255,0.6)"
-        fontFamily="var(--font-sans)" fontWeight="600">{label}</text>
+      <PcbBase w={w} h={h} rx={5} color={pcb} />
+
+      {/* USB-B port */}
+      <rect x={w * 0.18} y={-8} width={w * 0.36} height={9} rx={1.5} fill="#3a3a3a" stroke="#555" strokeWidth={0.6} />
+      <rect x={w * 0.22} y={-6} width={w * 0.28} height={5} rx={0.5} fill="#222" />
+
+      {/* DC barrel jack */}
+      <rect x={w * 0.7} y={-5} width={w * 0.22} height={6} rx={1} fill="#1a1a1a" stroke="#444" strokeWidth={0.5} />
+      <circle cx={w * 0.81} cy={-2} r={1.8} fill="#111" />
+
+      {/* ICSP header (2×3 dots) */}
+      {[0,1,2].map(i => [0,1].map(j => (
+        <circle key={`icsp-${i}-${j}`} cx={w * 0.6 + j * 5} cy={h * 0.12 + i * 5} r={1.2}
+          fill="#c8a832" stroke="#8a7010" strokeWidth={0.4} />
+      )))}
+
+      {/* ATmega328P chip */}
+      <IcChip x={w * 0.2} y={h * 0.33} w={w * 0.6} h={h * 0.3} label="ATmega328P" sub="16MHz" />
+
+      {/* Crystal */}
+      <rect x={w * 0.6} y={h * 0.68} width={w * 0.12} height={h * 0.1} rx={2}
+        fill="#c8c830" stroke="#a8a820" strokeWidth={0.5} />
+
+      {/* Status LEDs */}
+      {[['L','#ef4444', 0], ['TX','#22c55e', 1], ['RX','#22c55e', 2], ['ON','#22c55e', 3]].map(([n, c, i]) => (
+        <g key={String(n)}>
+          <circle cx={w * 0.08} cy={h * (0.15 + Number(i) * 0.06)} r={2}
+            fill={String(c)} stroke="rgba(0,0,0,0.3)" strokeWidth={0.4} />
+        </g>
+      ))}
+
+      {/* Reset button */}
+      <rect x={w * 0.72} y={h * 0.65} width={w * 0.16} height={h * 0.12} rx={2}
+        fill="#e63946" stroke="#c0292e" strokeWidth={0.6} />
+      <circle cx={w * 0.8} cy={h * 0.71} r={3} fill="#ff6b6b" />
+
+      {/* Pin header rows — copper pads */}
+      {Array.from({ length: 14 }, (_, i) => (
+        <rect key={`dl${i}`} x={-3} y={h * 0.065 + i * h / 15 - 1.5} width={6} height={3}
+          rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+      {Array.from({ length: 10 }, (_, i) => (
+        <rect key={`ar${i}`} x={w - 3} y={h * 0.49 + i * h / 15 - 1.5} width={6} height={3}
+          rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+      {Array.from({ length: 8 }, (_, i) => (
+        <rect key={`pw${i}`} x={w - 3} y={h * 0.065 + i * h / 15 - 1.5} width={6} height={3}
+          rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+
+      {/* Silkscreen label */}
+      <text x={w * 0.5} y={h * 0.28} textAnchor="middle" fontSize={7} fill="rgba(255,255,255,0.5)"
+        fontFamily="ui-monospace,monospace" fontWeight="700" letterSpacing="0.05em">{label}</text>
     </>
   )
 }
 
 function ArduinoNanoBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
+  const pcb = color || '#14448a'
   return (
     <>
-      <rect width={w} height={h} rx={3} fill={color} />
-      <rect x={w * 0.2} y={-5} width={w * 0.6} height={5} rx={1} fill="#444" />
-      <rect x={w * 0.2} y={h * 0.3} width={w * 0.6} height={h * 0.32} rx={2} fill="#111" />
-      <text x={w * 0.5} y={h * 0.1} textAnchor="middle" fontSize={6} fill="rgba(255,255,255,0.6)"
-        fontFamily="var(--font-sans)" fontWeight="600">{label}</text>
+      <PcbBase w={w} h={h} rx={3} color={pcb} />
+
+      {/* Mini USB */}
+      <rect x={w * 0.22} y={-5} width={w * 0.56} height={6} rx={1} fill="#2a2a2a" stroke="#555" strokeWidth={0.5} />
+      <rect x={w * 0.28} y={-3.5} width={w * 0.44} height={3.5} rx={0.5} fill="#111" />
+
+      {/* ATmega chip */}
+      <IcChip x={w * 0.12} y={h * 0.26} w={w * 0.76} h={h * 0.35} label="ATmega328" sub="NANO" />
+
+      {/* Crystal */}
+      <rect x={w * 0.3} y={h * 0.68} width={w * 0.18} height={h * 0.09} rx={2}
+        fill="#d4d420" stroke="#a0a010" strokeWidth={0.4} />
+
+      {/* Pin pads both sides */}
+      {Array.from({ length: 15 }, (_, i) => (
+        <g key={i}>
+          <rect x={-3} y={h * 0.04 + i * h / 16 - 1.5} width={6} height={3} rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+          <rect x={w - 3} y={h * 0.04 + i * h / 16 - 1.5} width={6} height={3} rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+        </g>
+      ))}
+
+      <text x={w * 0.5} y={h * 0.2} textAnchor="middle" fontSize={6} fill="rgba(255,255,255,0.55)"
+        fontFamily="ui-monospace,monospace" fontWeight="700">{label}</text>
     </>
   )
 }
 
 function LedBody({ w, h, color, on, label }: { w: number; h: number; color: string; on: boolean; label: string }) {
-  const glow = on ? color : 'transparent'
+  const bodyCol = color || '#ef4444'
+  const cx = w / 2
+  // LED shape: dome top, flat cylinder bottom, two leads
   return (
     <>
-      {on && <ellipse cx={w / 2} cy={h * 0.4} rx={18} ry={18} fill={color} opacity={0.18} />}
-      {/* Lead lines */}
-      <line x1={w / 2} y1={0} x2={w / 2} y2={h * 0.28} stroke="#888" strokeWidth={1.5} />
-      <line x1={w / 2} y1={h * 0.6} x2={w / 2} y2={h} stroke="#888" strokeWidth={1.5} />
-      {/* Body */}
-      <ellipse cx={w / 2} cy={h * 0.42} rx={w * 0.45} ry={h * 0.18}
-        fill={on ? color : color + '55'} stroke={color} strokeWidth={1} />
-      <rect x={w * 0.15} y={h * 0.22} width={w * 0.7} height={h * 0.2} rx={1}
-        fill={on ? color : color + '55'} stroke={color} strokeWidth={1} />
-      {/* Flat edge (cathode) */}
-      <rect x={w * 0.35} y={h * 0.38} width={w * 0.15} height={h * 0.12} rx={0} fill="rgba(0,0,0,0.3)" />
-      {on && <filter id={`glow-${label}`}><feGaussianBlur stdDeviation="3" result="blur" />
-        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>}
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
+      {/* Glow */}
+      {on && <ellipse cx={cx} cy={h * 0.38} rx={22} ry={22} fill={bodyCol} opacity={0.15} />}
+      {on && <ellipse cx={cx} cy={h * 0.38} rx={14} ry={14} fill={bodyCol} opacity={0.12} />}
+
+      {/* Anode lead (longer) */}
+      <line x1={cx - 3} y1={h * 0.62} x2={cx - 3} y2={h} stroke="#aaa" strokeWidth={1.5} />
+      {/* Cathode lead (shorter, flat side) */}
+      <line x1={cx + 3} y1={h * 0.62} x2={cx + 3} y2={h * 0.9} stroke="#aaa" strokeWidth={1.5} />
+      <line x1={cx + 3} y1={h * 0.9} x2={cx + 3} y2={h} stroke="#aaa" strokeWidth={1.5} />
+
+      {/* Body: cylinder */}
+      <rect x={cx - w * 0.35} y={h * 0.42} width={w * 0.7} height={h * 0.22} rx={1}
+        fill={on ? bodyCol : bodyCol + '70'} stroke={bodyCol} strokeWidth={0.8} />
+      {/* Flat edge indicator (cathode) */}
+      <rect x={cx + w * 0.12} y={h * 0.42} width={w * 0.22} height={h * 0.22}
+        fill={on ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.35)'} />
+      {/* Dome */}
+      <path d={`M ${cx - w*0.35} ${h*0.42} A ${w*0.35} ${h*0.2} 0 0 1 ${cx + w*0.35} ${h*0.42}`}
+        fill={on ? bodyCol : bodyCol + '90'} stroke={bodyCol} strokeWidth={0.8} />
+      {/* Lens highlight */}
+      <ellipse cx={cx - w * 0.08} cy={h * 0.3} rx={w * 0.08} ry={h * 0.07}
+        fill="rgba(255,255,255,0.3)" />
+
+      <CompLabel x={cx} y={h + 11} text={label} />
     </>
   )
 }
 
-function ResistorBody({ w, h, label, props }: { w: number; h: number; color: string; label: string; props: Record<string, string | number> }) {
-  const val = props.ohms ? `${props.ohms}Ω` : '1kΩ'
-  const bands = ['#f59e0b', '#555', '#a37a2c', '#ffd700']
+function LedRgbBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w / 2
   return (
     <>
-      <line x1={0} y1={h / 2} x2={w * 0.2} y2={h / 2} stroke="#888" strokeWidth={1.5} />
-      <line x1={w * 0.8} y1={h / 2} x2={w} y2={h / 2} stroke="#888" strokeWidth={1.5} />
-      <rect x={w * 0.2} y={h * 0.15} width={w * 0.6} height={h * 0.7} rx={h * 0.35}
-        fill="#c4a265" stroke="#8a6620" strokeWidth={0.8} />
-      {bands.map((c, i) => (
-        <rect key={i} x={w * (0.28 + i * 0.12)} y={h * 0.12} width={w * 0.07} height={h * 0.76}
-          fill={c} opacity={0.85} />
+      {/* 4 leads */}
+      {[-w*0.3, -w*0.1, w*0.1, w*0.3].map((ox, i) => (
+        <line key={i} x1={cx + ox} y1={h * 0.62} x2={cx + ox} y2={h} stroke="#aaa" strokeWidth={1.5} />
       ))}
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{val}</text>
+      {/* Cylinder */}
+      <rect x={cx - w * 0.42} y={h * 0.42} width={w * 0.84} height={h * 0.22} rx={1}
+        fill="#eee" stroke="#ccc" strokeWidth={0.8} />
+      {/* Dome with RGB gradient */}
+      <defs>
+        <radialGradient id="rgb-led-grad" cx="50%" cy="70%" r="50%">
+          <stop offset="0%" stopColor="#ff5555" />
+          <stop offset="40%" stopColor="#55ff55" />
+          <stop offset="100%" stopColor="#5555ff" />
+        </radialGradient>
+      </defs>
+      <path d={`M ${cx - w*0.42} ${h*0.42} A ${w*0.42} ${h*0.22} 0 0 1 ${cx + w*0.42} ${h*0.42}`}
+        fill="url(#rgb-led-grad)" stroke="#ccc" strokeWidth={0.8} />
+      <ellipse cx={cx - w * 0.08} cy={h * 0.28} rx={w * 0.09} ry={h * 0.07}
+        fill="rgba(255,255,255,0.4)" />
+      <CompLabel x={cx} y={h + 11} text={label} />
+    </>
+  )
+}
+
+function ResistorBody({ w, h, label, props }: { w: number; h: number; label: string; props: Record<string, string | number> }) {
+  const ohms = Number(props.ohms) || 1000
+  // Compute color bands from value
+  const COLORS = ['#1a1a1a','#7b4f1e','#e03030','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#888','#f0f0f0']
+  let bands: string[]
+  if (ohms < 10)        bands = [COLORS[ohms],COLORS[0],COLORS[0],'#c8a832']
+  else if (ohms < 100)  bands = [COLORS[Math.floor(ohms/10)],COLORS[ohms%10],COLORS[0],'#c8a832']
+  else if (ohms < 1000) bands = [COLORS[Math.floor(ohms/100)],COLORS[Math.floor((ohms%100)/10)],COLORS[ohms%10],'#c8a832']
+  else                  bands = [COLORS[Math.floor(ohms/1000)%10],COLORS[Math.floor((ohms%1000)/100)],COLORS[2],'#c8a832']
+  const val = ohms >= 1000 ? `${(ohms/1000).toFixed(ohms%1000?1:0)}kΩ` : `${ohms}Ω`
+  const mid = h / 2
+  return (
+    <>
+      {/* Leads */}
+      <line x1={0} y1={mid} x2={w * 0.18} y2={mid} stroke="#aaa" strokeWidth={1.5} />
+      <line x1={w * 0.82} y1={mid} x2={w} y2={mid} stroke="#aaa" strokeWidth={1.5} />
+      {/* Body */}
+      <rect x={w * 0.18} y={h * 0.16} width={w * 0.64} height={h * 0.68} rx={h * 0.34}
+        fill="#c4a265" stroke="#8a6620" strokeWidth={0.8} />
+      {/* Highlight top */}
+      <ellipse cx={w * 0.5} cy={h * 0.28} rx={w * 0.22} ry={h * 0.1}
+        fill="rgba(255,255,255,0.18)" />
+      {/* Color bands */}
+      {bands.map((c, i) => (
+        <rect key={i} x={w * (0.26 + i * 0.13)} y={h * 0.13} width={w * 0.08} height={h * 0.74}
+          fill={c} opacity={0.9} rx={1} />
+      ))}
+      <CompLabel x={w / 2} y={h + 11} text={val} />
+    </>
+  )
+}
+
+function CapacitorBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w / 2, mid = h * 0.5
+  return (
+    <>
+      {/* Lead */}
+      <line x1={cx} y1={0} x2={cx} y2={h * 0.15} stroke="#aaa" strokeWidth={1.5} />
+      <line x1={cx} y1={h * 0.85} x2={cx} y2={h} stroke="#aaa" strokeWidth={1.5} />
+      {/* Body (electrolytic cylinder) */}
+      <rect x={cx - w*0.42} y={h*0.12} width={w*0.84} height={h*0.76} rx={w*0.42}
+        fill="#2a4a7a" stroke="#1a3060" strokeWidth={0.8} />
+      {/* Negative stripe */}
+      <rect x={cx + w*0.08} y={h*0.12} width={w*0.34} height={h*0.76}
+        fill="rgba(255,255,255,0.1)" rx={0} />
+      {/* Minus marks */}
+      {[0.3,0.5,0.7].map(t => (
+        <line key={t} x1={cx+w*0.12} y1={h*t} x2={cx+w*0.38} y2={h*t} stroke="rgba(255,255,255,0.35)" strokeWidth={1} />
+      ))}
+      {/* Plus on positive side */}
+      <text x={cx - w*0.16} y={mid + 3.5} textAnchor="middle" fontSize={9} fill="rgba(255,255,255,0.6)" fontWeight="700">+</text>
+      {/* Highlight */}
+      <ellipse cx={cx - w*0.1} cy={h*0.25} rx={w*0.12} ry={h*0.07} fill="rgba(255,255,255,0.2)" />
+      <CompLabel x={cx} y={h + 11} text={label} />
+    </>
+  )
+}
+
+function TransistorBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w / 2
+  // TO-92 package — semicircle flat front
+  return (
+    <>
+      {/* 3 leads */}
+      <line x1={cx - w*0.3} y1={h*0.85} x2={cx - w*0.3} y2={h} stroke="#aaa" strokeWidth={1.5} />
+      <line x1={cx}         y1={h*0.85} x2={cx}         y2={h} stroke="#aaa" strokeWidth={1.5} />
+      <line x1={cx + w*0.3} y1={h*0.85} x2={cx + w*0.3} y2={h} stroke="#aaa" strokeWidth={1.5} />
+      {/* Base lead (horizontal) */}
+      <line x1={0} y1={h*0.45} x2={cx - w*0.42} y2={h*0.45} stroke="#aaa" strokeWidth={1.5} />
+      {/* TO-92 body: D-shape */}
+      <path d={`M ${cx-w*0.42} ${h*0.14} A ${w*0.42} ${h*0.35} 0 0 1 ${cx+w*0.42} ${h*0.14} L ${cx+w*0.42} ${h*0.85} L ${cx-w*0.42} ${h*0.85} Z`}
+        fill="#1c1c1c" stroke="#444" strokeWidth={0.8} />
+      {/* Flat face */}
+      <rect x={cx-w*0.42} y={h*0.14} width={w*0.84} height={h*0.71} rx={0}
+        fill="none" stroke="none" />
+      {/* 2N2222 label */}
+      <text x={cx} y={h*0.56} textAnchor="middle" fontSize={6} fill="#7c9cbf"
+        fontFamily="ui-monospace,monospace">2N2222</text>
+      {/* Highlight on dome */}
+      <path d={`M ${cx-w*0.2} ${h*0.2} A ${w*0.42} ${h*0.35} 0 0 1 ${cx+w*0.06} ${h*0.14}`}
+        fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={1.5} />
+      <CompLabel x={cx} y={h + 11} text={label} />
     </>
   )
 }
@@ -186,35 +444,326 @@ function ResistorBody({ w, h, label, props }: { w: number; h: number; color: str
 function ButtonBody({ w, h, label }: { w: number; h: number; label: string }) {
   return (
     <>
-      <rect width={w} height={h} rx={3} fill="#333" stroke="#555" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.28} fill="#222" stroke="#666" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.16} fill="#888" />
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
+      {/* Drop shadow */}
+      <rect x={1.5} y={1.5} width={w} height={h} rx={3} fill="rgba(0,0,0,0.4)" />
+      {/* PCB base */}
+      <rect width={w} height={h} rx={3} fill="#2a2a2a" stroke="#444" strokeWidth={0.8} />
+      {/* Corner mounting holes */}
+      {[[6,6],[w-6,6],[6,h-6],[w-6,h-6]].map(([cx,cy],i) => (
+        <g key={i}>
+          <circle cx={cx} cy={cy} r={2.5} fill="#111" stroke="#555" strokeWidth={0.5} />
+          <circle cx={cx} cy={cy} r={1.2} fill="#c8a832" />
+        </g>
+      ))}
+      {/* Button cap */}
+      <circle cx={w/2} cy={h/2} r={w*0.32} fill="#1a1a1a" stroke="#555" strokeWidth={0.8} />
+      <circle cx={w/2} cy={h/2} r={w*0.22} fill="#e63946" stroke="#c02030" strokeWidth={0.8} />
+      <circle cx={w/2} cy={h/2} r={w*0.12} fill="#ff6b6b" />
+      {/* Highlight */}
+      <ellipse cx={w/2 - w*0.06} cy={h/2 - h*0.06} rx={w*0.06} ry={h*0.05}
+        fill="rgba(255,255,255,0.3)" />
+      <CompLabel x={w/2} y={h + 11} text={label} />
     </>
   )
 }
 
 function PotBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w/2, cy = h/2
   return (
     <>
-      <rect width={w} height={h} rx={3} fill="#333" stroke="#555" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.38} fill="#1a1a1a" stroke="#555" strokeWidth={1} />
-      <line x1={w / 2} y1={h / 2} x2={w / 2} y2={h * 0.2} stroke="#888" strokeWidth={2} strokeLinecap="round" />
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
+      <rect x={1.5} y={1.5} width={w} height={h} rx={4} fill="rgba(0,0,0,0.35)" />
+      <rect width={w} height={h} rx={4} fill="#2e2e2e" stroke="#4a4a4a" strokeWidth={0.8} />
+      {/* 3 solder pads */}
+      {[0.2,0.5,0.8].map((t, i) => (
+        <circle key={i} cx={w*t} cy={h*0.88} r={2.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.4} />
+      ))}
+      {/* Outer ring */}
+      <circle cx={cx} cy={cy - h*0.04} r={w*0.42} fill="#1a1a1a" stroke="#555" strokeWidth={1} />
+      {/* Track arc */}
+      <path d={`M ${cx - w*0.3} ${cy + h*0.12} A ${w*0.36} ${w*0.36} 0 1 1 ${cx + w*0.3} ${cy + h*0.12}`}
+        fill="none" stroke="#444" strokeWidth={3} strokeLinecap="round" />
+      <path d={`M ${cx - w*0.3} ${cy + h*0.12} A ${w*0.36} ${w*0.36} 0 1 1 ${cx + w*0.3} ${cy + h*0.12}`}
+        fill="none" stroke="#c8a832" strokeWidth={1.5} strokeLinecap="round" opacity={0.5} />
+      {/* Knob */}
+      <circle cx={cx} cy={cy - h*0.04} r={w*0.28} fill="#3a3a3a" stroke="#666" strokeWidth={0.8} />
+      {/* Pointer line */}
+      <line x1={cx} y1={cy - h*0.04} x2={cx} y2={cy - h*0.28} stroke="#e2e2e2" strokeWidth={2} strokeLinecap="round" />
+      {/* Highlight */}
+      <ellipse cx={cx - w*0.08} cy={cy - h*0.14} rx={w*0.07} ry={h*0.05} fill="rgba(255,255,255,0.2)" />
+      <CompLabel x={cx} y={h + 11} text={label} />
     </>
   )
 }
 
-function BuzzerBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
+function BuzzerBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w/2, cy = h/2
   return (
     <>
-      <circle cx={w / 2} cy={h / 2} r={w / 2} fill={color} stroke="#555" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.3} fill="#111" />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.12} fill="#333" />
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
+      <circle cx={cx+1.5} cy={cy+1.5} r={w/2} fill="rgba(0,0,0,0.35)" />
+      <circle cx={cx} cy={cy} r={w/2} fill="#0f0f0f" stroke="#333" strokeWidth={0.8} />
+      {/* Ridges */}
+      {[0.38, 0.28, 0.18].map((r, i) => (
+        <circle key={i} cx={cx} cy={cy} r={w*r} fill="none" stroke="#2a2a2a" strokeWidth={1} />
+      ))}
+      {/* Center hole */}
+      <circle cx={cx} cy={cy} r={w*0.08} fill="#1a1a1a" stroke="#333" strokeWidth={0.5} />
+      {/* + marker */}
+      <line x1={cx-w*0.14} y1={cy-h*0.28} x2={cx+w*0.14} y2={cy-h*0.28} stroke="#ef4444" strokeWidth={1} />
+      <line x1={cx} y1={cy-h*0.35} x2={cx} y2={cy-h*0.21} stroke="#ef4444" strokeWidth={1} />
+      {/* Highlight */}
+      <ellipse cx={cx-w*0.12} cy={cy-h*0.18} rx={w*0.1} ry={h*0.07} fill="rgba(255,255,255,0.08)" />
+      <CompLabel x={cx} y={h + 11} text={label} />
+    </>
+  )
+}
+
+function ServoBody({ w, h, label }: { w: number; h: number; label: string }) {
+  return (
+    <>
+      {/* Shadow */}
+      <rect x={2} y={2} width={w} height={h} rx={4} fill="rgba(0,0,0,0.35)" />
+      {/* Main body */}
+      <rect width={w} height={h} rx={4} fill="#2e2e2e" stroke="#4a4a4a" strokeWidth={0.8} />
+      {/* Mounting ears */}
+      <rect x={-6} y={h*0.15} width={8} height={h*0.7} rx={2} fill="#252525" stroke="#3a3a3a" strokeWidth={0.6} />
+      <rect x={w-2} y={h*0.15} width={8} height={h*0.7} rx={2} fill="#252525" stroke="#3a3a3a" strokeWidth={0.6} />
+      {/* Ear holes */}
+      <circle cx={-2} cy={h*0.5} r={2.5} fill="#111" stroke="#555" strokeWidth={0.4} />
+      <circle cx={w+2} cy={h*0.5} r={2.5} fill="#111" stroke="#555" strokeWidth={0.4} />
+      {/* Output shaft boss */}
+      <circle cx={w*0.35} cy={h*0.4} r={w*0.2} fill="#1a1a1a" stroke="#555" strokeWidth={0.8} />
+      <circle cx={w*0.35} cy={h*0.4} r={w*0.12} fill="#333" stroke="#444" strokeWidth={0.6} />
+      {/* Spline marks */}
+      {Array.from({length:8},(_,i)=>{
+        const a = (i/8)*Math.PI*2
+        const r1=w*0.12, r2=w*0.16
+        return <line key={i}
+          x1={w*0.35+Math.cos(a)*r1} y1={h*0.4+Math.sin(a)*r1}
+          x2={w*0.35+Math.cos(a)*r2} y2={h*0.4+Math.sin(a)*r2}
+          stroke="#555" strokeWidth={0.8} />
+      })}
+      {/* IC */}
+      <IcChip x={w*0.55} y={h*0.22} w={w*0.36} h={h*0.36} label="SG90" />
+      {/* Wire leads */}
+      <rect x={w*0.06} y={h-2} width={w*0.18} height={6} rx={1} fill="#6b7280" />
+      <rect x={w*0.27} y={h-2} width={w*0.18} height={6} rx={1} fill="#ef4444" />
+      <rect x={w*0.48} y={h-2} width={w*0.18} height={6} rx={1} fill="#f97316" />
+      <CompLabel x={w/2} y={h + 14} text={label} />
+    </>
+  )
+}
+
+function Dht11Body({ w, h, label }: { w: number; h: number; label: string }) {
+  return (
+    <>
+      <rect x={1.5} y={1.5} width={w} height={h} rx={3} fill="rgba(0,0,0,0.35)" />
+      {/* Blue body */}
+      <rect width={w} height={h} rx={3} fill="#1a5fb4" stroke="#0d3d80" strokeWidth={0.8} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={2.5}
+        fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={0.8} />
+      {/* Vent grille (top half) */}
+      <rect x={w*0.08} y={h*0.05} width={w*0.84} height={h*0.48} rx={2}
+        fill="#0d2d6a" stroke="rgba(255,255,255,0.08)" strokeWidth={0.5} />
+      {/* Vent slits */}
+      {Array.from({length:6},(_,i)=>(
+        <line key={i} x1={w*0.12} y1={h*(0.1+i*0.07)} x2={w*0.88} y2={h*(0.1+i*0.07)}
+          stroke="rgba(255,255,255,0.12)" strokeWidth={0.7} />
+      ))}
+      {/* Label */}
+      <text x={w/2} y={h*0.72} textAnchor="middle" fontSize={7.5} fill="rgba(255,255,255,0.8)"
+        fontFamily="ui-monospace,monospace" fontWeight="700">DHT11</text>
+      {/* Solder pads */}
+      {[0.17,0.4,0.63,0.87].map((t,i)=>(
+        <rect key={i} x={w*t-2.5} y={h-2} width={5} height={5} rx={0.5}
+          fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+      <CompLabel x={w/2} y={h + 14} text={label} />
+    </>
+  )
+}
+
+function LdrBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w/2, cy = h/2
+  return (
+    <>
+      <circle cx={cx+1} cy={cy+1} r={w*0.46} fill="rgba(0,0,0,0.3)" />
+      {/* Body */}
+      <circle cx={cx} cy={cy} r={w*0.46} fill="#c48a00" stroke="#8a6000" strokeWidth={0.8} />
+      {/* Zigzag track */}
+      <path d={`M ${cx-w*0.22} ${cy-h*0.18} L ${cx+w*0.22} ${cy-h*0.08} L ${cx-w*0.22} ${cy+h*0.02} L ${cx+w*0.22} ${cy+h*0.12}`}
+        fill="none" stroke="#1a1a00" strokeWidth={1.8} strokeLinecap="round" />
+      {/* Photosensitive window (lighter arc) */}
+      <path d={`M ${cx-w*0.3} ${cy} A ${w*0.3} ${w*0.3} 0 0 1 ${cx+w*0.3} ${cy}`}
+        fill="rgba(255,220,80,0.15)" />
+      {/* Leads */}
+      <line x1={0} y1={cy} x2={cx-w*0.44} y2={cy} stroke="#aaa" strokeWidth={1.5} />
+      <line x1={w} y1={cy} x2={cx+w*0.44} y2={cy} stroke="#aaa" strokeWidth={1.5} />
+      <CompLabel x={cx} y={h + 11} text={label} />
+    </>
+  )
+}
+
+function UltrasonicBody({ w, h, label }: { w: number; h: number; label: string }) {
+  return (
+    <>
+      <rect x={1.5} y={1.5} width={w} height={h} rx={3} fill="rgba(0,0,0,0.35)" />
+      <rect width={w} height={h} rx={3} fill="#1a4a2a" stroke="#0d3018" strokeWidth={0.8} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={2.5}
+        fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={0.8} />
+      {/* Two transducer "eyes" */}
+      {[w*0.26, w*0.68].map((cx, i) => (
+        <g key={i}>
+          <circle cx={cx} cy={h*0.46} r={w*0.18} fill="#0d0d0d" stroke="#333" strokeWidth={0.8} />
+          <circle cx={cx} cy={h*0.46} r={w*0.13} fill="#1a1a1a" stroke="#2a2a2a" strokeWidth={0.5} />
+          <circle cx={cx} cy={h*0.46} r={w*0.07} fill="#333" />
+          <circle cx={cx-w*0.04} cy={h*0.38} r={w*0.03} fill="rgba(255,255,255,0.15)" />
+        </g>
+      ))}
+      {/* Text */}
+      <text x={w/2} y={h*0.88} textAnchor="middle" fontSize={6.5} fill="rgba(255,255,255,0.6)"
+        fontFamily="ui-monospace,monospace">HC-SR04</text>
+      {/* 4 solder pads */}
+      {[0.08,0.35,0.62,0.88].map((t,i)=>(
+        <rect key={i} x={w*t-2} y={h-2} width={4} height={5} rx={0.5}
+          fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+      <CompLabel x={w/2} y={h + 14} text={label} />
+    </>
+  )
+}
+
+function IrSensorBody({ w, h, label }: { w: number; h: number; label: string }) {
+  return (
+    <>
+      <rect x={1.5} y={1.5} width={w} height={h} rx={2} fill="rgba(0,0,0,0.35)" />
+      <rect width={w} height={h} rx={2} fill="#111" stroke="#2a2a2a" strokeWidth={0.8} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={1.5}
+        fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={0.6} />
+      {/* IR LED (transmitter, clear) */}
+      <rect x={w*0.06} y={h*0.1} width={w*0.3} height={h*0.7} rx={w*0.15}
+        fill="#2a2a2a" stroke="#444" strokeWidth={0.5} />
+      <ellipse cx={w*0.21} cy={h*0.3} rx={w*0.08} ry={h*0.06} fill="rgba(255,255,255,0.15)" />
+      {/* IR receiver (dark) */}
+      <rect x={w*0.42} y={h*0.1} width={w*0.3} height={h*0.7} rx={w*0.15}
+        fill="#0a0a0a" stroke="#333" strokeWidth={0.5} />
+      <ellipse cx={w*0.57} cy={h*0.3} rx={w*0.08} ry={h*0.06} fill="rgba(255,200,100,0.12)" />
+      {/* Status LED */}
+      <circle cx={w*0.84} cy={h*0.35} r={w*0.08} fill="#22c55e" opacity={0.7} />
+      {/* Pads */}
+      {[0.1,0.4,0.7].map((t,i)=>(
+        <rect key={i} x={-2} y={h*t} width={4} height={4} rx={0.5}
+          fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+      <CompLabel x={w/2} y={h + 11} text={label} />
+    </>
+  )
+}
+
+function LcdBody({ w, h, label }: { w: number; h: number; label: string }) {
+  return (
+    <>
+      <rect x={2} y={2} width={w} height={h} rx={4} fill="rgba(0,0,0,0.35)" />
+      {/* PCB */}
+      <rect width={w} height={h} rx={4} fill="#0a3d0a" stroke="#063006" strokeWidth={0.8} />
+      {/* LCD glass panel */}
+      <rect x={w*0.04} y={h*0.08} width={w*0.92} height={h*0.66} rx={2}
+        fill="#4a7c59" stroke="#2a5a30" strokeWidth={0.8} />
+      {/* Screen area */}
+      <rect x={w*0.07} y={h*0.12} width={w*0.86} height={h*0.56} rx={1}
+        fill="#3a6e47" />
+      {/* Pixel grid suggestion */}
+      {Array.from({length:2},(_,row)=>
+        Array.from({length:16},(_,col)=>(
+          <rect key={`c${row}-${col}`}
+            x={w*0.09 + col*(w*0.8/16)} y={h*0.16 + row*(h*0.42/2)}
+            width={w*0.8/16 - 1} height={h*0.42/2 - 1} rx={0.5}
+            fill="rgba(80,200,80,0.12)" />
+        ))
+      )}
+      {/* Backlight glow */}
+      <rect x={w*0.07} y={h*0.12} width={w*0.86} height={h*0.56} rx={1}
+        fill="rgba(80,200,60,0.06)" />
+      {/* Pin header */}
+      {Array.from({length:12},(_,i)=>(
+        <rect key={i} x={w*(0.06+i*0.076)} y={h*0.82} width={5} height={8} rx={0.5}
+          fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      ))}
+      <text x={w/2} y={h*0.08} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.4)"
+        fontFamily="ui-monospace,monospace">LCD 16×2</text>
+      <CompLabel x={w/2} y={h + 14} text={label} />
+    </>
+  )
+}
+
+function SevenSegBody({ w, h, label, simPinValues, compId }: {
+  w: number; h: number; label: string
+  simPinValues: Record<string, number>; compId: string
+}) {
+  const seg = (id: string) => (simPinValues[`${compId}:${id}`] ?? 0) > 0
+  const ON = '#ff3020', OFF = '#2a0800'
+  // Standard segment paths (normalized to 54×76)
+  const sx = w/54, sy = h/76
+  function H(x:number,y:number,lit:boolean) {
+    return <path key={`${x}${y}`}
+      d={`M${(x+3)*sx} ${y*sy} L${(x+5)*sx} ${(y-2)*sy} L${(x+w/sx-5)*sx} ${(y-2)*sy} L${(x+w/sx-3)*sx} ${y*sy} L${(x+w/sx-5)*sx} ${(y+2)*sy} L${(x+5)*sx} ${(y+2)*sy} Z`}
+      fill={lit ? ON : OFF} />
+  }
+  function V(x:number,y:number,lit:boolean) {
+    return <path key={`${x}${y}`}
+      d={`M${x*sx} ${(y+3)*sy} L${(x-2)*sx} ${(y+5)*sy} L${(x-2)*sx} ${(y+h/sy*0.3-5)*sy} L${x*sx} ${(y+h/sy*0.3-3)*sy} L${(x+2)*sx} ${(y+h/sy*0.3-5)*sy} L${(x+2)*sx} ${(y+5)*sy} Z`}
+      fill={lit ? ON : OFF} />
+  }
+  return (
+    <>
+      <rect x={1.5} y={1.5} width={w} height={h} rx={3} fill="rgba(0,0,0,0.4)" />
+      <rect width={w} height={h} rx={3} fill="#0d0d0d" stroke="#222" strokeWidth={0.8} />
+      {/* Segment A top */}
+      {H(0, 4, seg('a'))}
+      {/* Segments B,C right */}
+      {V(w/sx-4, 4, seg('b'))}
+      {V(w/sx-4, h/sy*0.48, seg('c'))}
+      {/* Segment D bottom */}
+      {H(0, h/sy-4, seg('d'))}
+      {/* Segments E,F left */}
+      {V(4, h/sy*0.48, seg('e'))}
+      {V(4, 4, seg('f'))}
+      {/* Segment G middle */}
+      {H(0, h/sy*0.48, seg('g'))}
+      {/* Decimal point */}
+      <circle cx={w*0.9} cy={h*0.92} r={w*0.07}
+        fill={seg('dp') ? ON : OFF} />
+      {/* Cathode pads */}
+      <rect x={w*0.25-2} y={h-2} width={5} height={6} rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      <rect x={w*0.75-2} y={h-2} width={5} height={6} rx={0.5} fill="#c8a832" stroke="#8a7010" strokeWidth={0.3} />
+      <CompLabel x={w/2} y={h + 14} text={label} />
+    </>
+  )
+}
+
+function VccNodeBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w/2
+  return (
+    <>
+      {/* Triangle power symbol */}
+      <polygon points={`${cx},2 ${w-2},${h-2} 2,${h-2}`}
+        fill="#7f1d1d" stroke="#ef4444" strokeWidth={1} />
+      <polygon points={`${cx},5 ${w-6},${h-5} 6,${h-5}`}
+        fill="#991b1b" />
+      <text x={cx} y={h*0.72} textAnchor="middle" fontSize={7} fill="#fca5a5"
+        fontFamily="ui-monospace,monospace" fontWeight="700">5V</text>
+    </>
+  )
+}
+
+function GndNodeBody({ w, h, label }: { w: number; h: number; label: string }) {
+  const cx = w/2, top = h*0.12
+  // Classic ground symbol: horizontal lines decreasing width
+  return (
+    <>
+      <line x1={cx} y1={top} x2={cx} y2={h*0.38} stroke="#6b7280" strokeWidth={1.5} />
+      <line x1={cx-w*0.42} y1={h*0.38} x2={cx+w*0.42} y2={h*0.38} stroke="#9ca3af" strokeWidth={1.8} />
+      <line x1={cx-w*0.28} y1={h*0.56} x2={cx+w*0.28} y2={h*0.56} stroke="#9ca3af" strokeWidth={1.5} />
+      <line x1={cx-w*0.14} y1={h*0.74} x2={cx+w*0.14} y2={h*0.74} stroke="#9ca3af" strokeWidth={1.2} />
     </>
   )
 }
@@ -222,9 +771,15 @@ function BuzzerBody({ w, h, color, label }: { w: number; h: number; color: strin
 function PowerRailBody({ w, h, label }: { w: number; h: number; label: string }) {
   return (
     <>
-      <rect width={w} height={h} rx={2} fill="#111" stroke="#333" strokeWidth={0.8} />
-      <line x1={w / 2} y1={h * 0.05} x2={w / 2} y2={h * 0.45} stroke="#ef4444" strokeWidth={2} />
-      <line x1={w / 2} y1={h * 0.55} x2={w / 2} y2={h * 0.95} stroke="#222" strokeWidth={2} />
+      <rect x={1} y={1} width={w} height={h} rx={2} fill="rgba(0,0,0,0.3)" />
+      <rect width={w} height={h} rx={2} fill="#111" stroke="#2a2a2a" strokeWidth={0.8} />
+      {/* Red VCC rail line */}
+      <line x1={w/2} y1={h*0.06} x2={w/2} y2={h*0.44} stroke="#ef4444" strokeWidth={2.5} strokeLinecap="round" />
+      {/* GND rail line */}
+      <line x1={w/2} y1={h*0.56} x2={w/2} y2={h*0.94} stroke="#6b7280" strokeWidth={2.5} strokeLinecap="round" />
+      {/* Labels */}
+      <text x={w/2+6} y={h*0.24} fontSize={6} fill="#ef4444" fontFamily="ui-monospace,monospace" fontWeight="700">+</text>
+      <text x={w/2+6} y={h*0.76} fontSize={6} fill="#6b7280" fontFamily="ui-monospace,monospace" fontWeight="700">─</text>
     </>
   )
 }

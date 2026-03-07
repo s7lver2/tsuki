@@ -34,16 +34,17 @@ const LANGUAGES = [
 ]
 
 const BOARDS = [
-  { id: 'uno',         label: 'Arduino Uno',        note: 'ATmega328P \u00b7 16 MHz \u00b7 32 KB' },
-  { id: 'nano',        label: 'Arduino Nano',        note: 'ATmega328P \u00b7 16 MHz \u00b7 compact' },
-  { id: 'mega',        label: 'Arduino Mega 2560',   note: 'ATmega2560 \u00b7 16 MHz \u00b7 256 KB' },
-  { id: 'leonardo',    label: 'Arduino Leonardo',    note: 'ATmega32u4 \u00b7 16 MHz \u00b7 native USB' },
-  { id: 'micro',       label: 'Arduino Micro',       note: 'ATmega32u4 \u00b7 16 MHz \u00b7 native USB' },
-  { id: 'pro_mini_5v', label: 'Pro Mini 5 V',        note: 'ATmega328P \u00b7 16 MHz \u00b7 breadboard' },
-  { id: 'esp32',       label: 'ESP32 Dev Module',    note: 'Dual-core \u00b7 240 MHz \u00b7 WiFi + BT' },
-  { id: 'esp8266',     label: 'ESP8266 Generic',     note: 'Single-core \u00b7 80 MHz \u00b7 WiFi' },
-  { id: 'd1_mini',     label: 'Wemos D1 Mini',       note: 'ESP8266 \u00b7 compact \u00b7 popular' },
-  { id: 'pico',        label: 'Raspberry Pi Pico',   note: 'RP2040 \u00b7 133 MHz \u00b7 2 MB' },
+  { id: 'uno',          label: 'Arduino Uno',        note: 'ATmega328P · 16 MHz · 32 KB' },
+  { id: 'nano',         label: 'Arduino Nano',        note: 'ATmega328P · 16 MHz · compact' },
+  { id: 'mega',         label: 'Arduino Mega 2560',   note: 'ATmega2560 · 16 MHz · 256 KB' },
+  { id: 'leonardo',     label: 'Arduino Leonardo',    note: 'ATmega32u4 · 16 MHz · native USB' },
+  { id: 'micro',        label: 'Arduino Micro',       note: 'ATmega32u4 · 16 MHz · native USB' },
+  { id: 'pro_mini_5v',  label: 'Pro Mini 5 V',        note: 'ATmega328P · 16 MHz · breadboard' },
+  { id: 'esp32',        label: 'ESP32 Dev Module',    note: 'Dual-core · 240 MHz · WiFi + BT' },
+  { id: 'esp8266',      label: 'ESP8266 Generic',     note: 'Single-core · 80 MHz · WiFi' },
+  { id: 'd1_mini',      label: 'Wemos D1 Mini',       note: 'ESP8266 · compact · popular' },
+  { id: 'pico',         label: 'Raspberry Pi Pico',   note: 'RP2040 · 133 MHz · 2 MB' },
+  { id: 'xiao_rp2040',  label: 'Seeed XIAO RP2040',  note: 'RP2040 · 133 MHz · 2 MB · tiny', badge: 'new' as const },
 ]
 
 const BACKENDS = [
@@ -222,7 +223,12 @@ function StepBoard({ board, setBoard }: { board: string; setBoard: (v: string) =
         {BOARDS.map(b => (
           <RadioCard key={b.id} selected={board === b.id} onClick={() => setBoard(b.id)}>
             <div className="flex items-start justify-between gap-2">
-              <span className="text-sm font-medium text-[var(--fg)] leading-tight">{b.label}</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-sm font-medium text-[var(--fg)] leading-tight">{b.label}</span>
+                {'badge' in b && b.badge === 'new' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-blue-500/15 text-blue-400 leading-none">new</span>
+                )}
+              </div>
               {board === b.id && <Check size={12} className="text-green-400 flex-shrink-0 mt-0.5" />}
             </div>
             <p className="text-[10px] text-[var(--fg-faint)] mt-0.5 font-mono">{b.note}</p>

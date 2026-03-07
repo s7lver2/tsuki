@@ -2,10 +2,10 @@
 import { useStore, BottomTab } from '@/lib/store'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { IconBtn } from '@/components/shared/primitives'
-import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Square } from 'lucide-react'
+import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
-import { spawnShell, listShells, spawnProcess, type ProcessHandle, type ShellInfo } from '@/lib/tauri'
+import { spawnShell, spawnProcess, listShells, type ShellInfo, isTauri } from '@/lib/tauri'
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
@@ -59,44 +59,25 @@ function ResizeHandle() {
   )
 }
 
-// ── Terminal line type ────────────────────────────────────────────────────────
+// ── PTY session state ─────────────────────────────────────────────────────────
 
-interface TerminalLine {
-  id:   number
-  text: string
-  type: 'out' | 'err' | 'info' | 'prompt'
-}
-
-let _lineId = 0
-
-// ── Shell session state ───────────────────────────────────────────────────────
-
-interface ShellSession {
-  id:      number
+interface PtySession {
+  id:      string
+  numId:   number
   shell:   ShellInfo
-  lines:   TerminalLine[]
-  history: string[]
-  histIdx: number
+  alive:   boolean
   running: boolean
-  process: ProcessHandle | null
 }
 
-let _sessionId = 0
-
-function makeSession(shell: ShellInfo): ShellSession {
-  return { id: _sessionId++, shell, lines: [], history: [], histIdx: -1, running: false, process: null }
-}
+let _sessionCounter = 0
+function makePtyId() { return `pty-${Date.now()}-${_sessionCounter++}` }
 
 // ── ShellTabBar ───────────────────────────────────────────────────────────────
 
 interface ShellTabBarProps {
-  shells:       ShellInfo[]
-  sessions:     ShellSession[]
-  activeIdx:    number
-  onSelect:     (idx: number) => void
-  onNewSession: (shell: ShellInfo) => void
-  onClose:      (idx: number) => void
-  loading:      boolean
+  shells: ShellInfo[]; sessions: PtySession[]; activeIdx: number
+  onSelect: (i: number) => void; onNewSession: (s: ShellInfo) => void
+  onClose: (i: number) => void; loading: boolean
 }
 
 function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onClose, loading }: ShellTabBarProps) {
@@ -105,66 +86,41 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
   const dropRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    const h = (e: MouseEvent) => { if (dropRef.current && !dropRef.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
   }, [])
 
   return (
     <div className="flex items-center gap-0.5 px-1 border-b border-[var(--border)] h-7 flex-shrink-0 overflow-x-auto">
       {sessions.map((s, i) => (
-        <div
-          key={s.id}
-          className={clsx(
-            'flex items-center gap-1 px-2 py-0.5 rounded text-[10px] cursor-pointer border border-transparent select-none flex-shrink-0 group',
-            i === activeIdx
-              ? 'bg-[var(--active)] text-[var(--fg)] border-[var(--border)]'
-              : 'text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
-          )}
-          onClick={() => onSelect(i)}
-        >
+        <div key={s.id}
+          className={clsx('flex items-center gap-1 px-2 py-0.5 rounded text-[10px] cursor-pointer border border-transparent select-none flex-shrink-0 group',
+            i === activeIdx ? 'bg-[var(--active)] text-[var(--fg)] border-[var(--border)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]')}
+          onClick={() => onSelect(i)}>
           <span>{s.shell.icon}</span>
           <span className="max-w-[80px] truncate">{s.shell.name}</span>
-          {s.running && <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" title="running" />}
-          <button
-            className={clsx(
-              'ml-0.5 rounded-sm hover:bg-red-500/30 hover:text-red-400 transition-colors px-0.5 border-0 bg-transparent cursor-pointer leading-none',
-              i === activeIdx ? 'opacity-60 hover:opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100',
-            )}
-            onClick={e => { e.stopPropagation(); onClose(i) }}
-            title={t('bottomPanel.closeSession')}
-          >×</button>
+          {s.running && <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 flex-shrink-0 animate-pulse" title="running" />}
+          {!s.alive  && <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" title="ended" />}
+          <button className={clsx('ml-0.5 rounded-sm hover:bg-red-500/30 hover:text-red-400 transition-colors px-0.5 border-0 bg-transparent cursor-pointer leading-none',
+              i === activeIdx ? 'opacity-60 hover:opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100')}
+            onClick={e => { e.stopPropagation(); onClose(i) }} title={t('bottomPanel.closeSession')}>×</button>
         </div>
       ))}
-
       <div className="relative flex-shrink-0" ref={dropRef}>
-        <button
-          onClick={() => setOpen(o => !o)}
-          disabled={loading || shells.length === 0}
+        <button onClick={() => setOpen(o => !o)} disabled={loading || shells.length === 0}
           title={t('bottomPanel.newSession')}
-          className={clsx(
-            'flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border-0 bg-transparent cursor-pointer transition-colors',
-            'text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
-            'disabled:opacity-40 disabled:cursor-not-allowed',
-          )}
-        >
+          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border-0 bg-transparent cursor-pointer transition-colors text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed">
           {loading ? <span className="animate-spin inline-block">⟳</span> : <span className="text-[11px] font-bold">+</span>}
           {shells.length > 0 && <span>{shells[0]?.icon}</span>}
           <span style={{ fontSize: '8px' }}>▾</span>
         </button>
-
         {open && shells.length > 0 && (
           <div className="absolute left-0 top-full mt-0.5 z-50 min-w-[160px] rounded border border-[var(--border)] bg-[var(--surface-2)] shadow-lg py-1">
             {shells.map(sh => (
-              <button
-                key={sh.id}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] text-left border-0 bg-transparent cursor-pointer transition-colors"
-                onClick={() => { setOpen(false); onNewSession(sh) }}
-              >
-                <span>{sh.icon}</span>
-                <span>{sh.name}</span>
+              <button key={sh.id} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] text-left border-0 bg-transparent cursor-pointer"
+                onClick={() => { setOpen(false); onNewSession(sh) }}>
+                <span>{sh.icon}</span><span>{sh.name}</span>
               </button>
             ))}
           </div>
@@ -174,388 +130,398 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
   )
 }
 
-// ── Single shell session view ─────────────────────────────────────────────────
+// ── XtermView — xterm.js display + spawnShell backend ────────────────────────
+//
+// Uses the existing spawnShell (works on all platforms including Windows) as
+// the process backend, and xterm.js purely as the renderer.
+// portable-pty is not used because ConPTY conflicts with win_proc.rs on Windows.
 
-interface SessionViewProps {
-  session:     ShellSession
-  projectPath: string | null
-  onUpdate:    (patch: Partial<ShellSession>) => void
-  onSpawn:     (fn: (cmd: string, args: string[], cwd?: string) => Promise<ProcessHandle>) => void
+interface XtermViewProps {
+  session: PtySession; projectPath: string | null
+  onAlive: (b: boolean) => void; onRunning: (b: boolean) => void
+  onReady: (sendFn: (cmd: string, args: string[]) => Promise<number>) => void
 }
 
-const typeClass: Record<TerminalLine['type'], string> = {
-  out:    'text-[var(--fg-muted)]',
-  err:    'text-red-400',
-  info:   'text-[var(--info,#60a5fa)]',
-  prompt: 'text-[var(--fg)] font-semibold',
+let _xtermLoading: Promise<void> | null = null
+function loadXterm(): Promise<void> {
+  if (_xtermLoading) return _xtermLoading
+  _xtermLoading = new Promise<void>((resolve, reject) => {
+    if (typeof window === 'undefined') { reject(new Error('no window')); return }
+    if ((window as any).Terminal) { resolve(); return }
+    const CSS = `https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css`
+    const JS  = `https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js`
+    const FIT = `https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js`
+    if (!document.querySelector(`link[href="${CSS}"]`)) {
+      const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = CSS
+      document.head.appendChild(l)
+    }
+    const s1 = document.createElement('script'); s1.src = JS
+    s1.onerror = () => reject(new Error('Failed to load xterm from CDN'))
+    s1.onload  = () => {
+      const s2 = document.createElement('script'); s2.src = FIT
+      s2.onerror = () => reject(new Error('Failed to load addon-fit from CDN'))
+      s2.onload  = () => resolve()
+      document.head.appendChild(s2)
+    }
+    document.head.appendChild(s1)
+  })
+  return _xtermLoading
 }
 
-function SessionView({ session, projectPath, onUpdate, onSpawn }: SessionViewProps) {
-  const { addLog, setBottomTab, refreshTree } = useStore()
-  const [input, setInput] = useState('')
-  const endRef   = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermViewProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const termRef      = useRef<any>(null)
+  const fitRef       = useRef<any>(null)
+  const handleRef    = useRef<any>(null)
+  const resolveRef   = useRef<((code: number) => void) | null>(null)
 
-  const sessionRef      = useRef(session)
-  const addLogRef       = useRef(addLog)
-  const setBottomTabRef = useRef(setBottomTab)
-  const projectPathRef  = useRef(projectPath)
-  const onUpdateRef     = useRef(onUpdate)
-  const interceptRef    = useRef<((line: string, isErr: boolean) => void) | null>(null)
+  useEffect(() => {
+    if (!containerRef.current) return
+    let cancelled = false
 
-  useEffect(() => { sessionRef.current      = session    }, [session])
-  useEffect(() => { addLogRef.current       = addLog     }, [addLog])
-  useEffect(() => { setBottomTabRef.current = setBottomTab }, [setBottomTab])
-  useEffect(() => { projectPathRef.current  = projectPath  }, [projectPath])
-  useEffect(() => { onUpdateRef.current     = onUpdate     }, [onUpdate])
+    const init = async () => {
+      try {
+        await loadXterm()
+        if (cancelled || !containerRef.current) return
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [session.lines])
-  useEffect(() => { inputRef.current?.focus() }, [session.id])
+        const w        = window as any
+        const Terminal = w.Terminal
+        const FitAddon = w.FitAddon?.FitAddon ?? w.FitAddon
+        if (typeof Terminal !== 'function') throw new Error(`Terminal not a function (got ${typeof Terminal})`)
+        if (typeof FitAddon  !== 'function') throw new Error(`FitAddon not a function (got ${typeof w.FitAddon})`)
 
-  function addLine(text: string, type: TerminalLine['type'] = 'out') {
-    onUpdateRef.current({ lines: [...sessionRef.current.lines, { id: _lineId++, text, type }] })
-  }
+        const cs = getComputedStyle(document.documentElement)
+        const v  = (k: string) => cs.getPropertyValue(k).trim() || undefined
 
-  const spawnInSession = useCallback(async (
-    cmd: string,
-    args: string[],
-    _cwd?: string,
-  ): Promise<ProcessHandle> => {
-    const sess = sessionRef.current
-    const label = [cmd, ...args].join(' ')
-    addLine(`❯ ${label}`, 'prompt')
-    setBottomTabRef.current('terminal')
+        const term = new Terminal({
+          fontFamily:       'JetBrains Mono, Menlo, Consolas, "Courier New", monospace',
+          fontSize:         12, lineHeight: 1.4,
+          cursorBlink:      true, cursorStyle: 'bar',
+          scrollback:       5000,
+          convertEol:       true,  // spawnShell sends \n, xterm needs \r\n
+          allowProposedApi: true,
+          theme: {
+            background:          v('--surface-1') ?? '#1a1a1a',
+            foreground:          v('--fg')        ?? '#d4d4d4',
+            cursor:              v('--fg')        ?? '#d4d4d4',
+            cursorAccent:        v('--surface-1') ?? '#1a1a1a',
+            selectionBackground: 'rgba(255,255,255,0.2)',
+            black:   '#1e1e1e', brightBlack:   '#666666',
+            red:     '#f44747', brightRed:     '#f44747',
+            green:   '#4ec94e', brightGreen:   '#4ec94e',
+            yellow:  '#dcdcaa', brightYellow:  '#dcdcaa',
+            blue:    '#569cd6', brightBlue:    '#569cd6',
+            magenta: '#c586c0', brightMagenta: '#c586c0',
+            cyan:    '#9cdcfe', brightCyan:    '#9cdcfe',
+            white:   '#d4d4d4', brightWhite:   '#ffffff',
+          },
+        })
 
-    const sentinel = `__tsuki_done_${Date.now()}__`
-    let resolveDone!: (code: number) => void
-    const done = new Promise<number>(r => { resolveDone = r })
+        const fitAddon = new FitAddon()
+        term.loadAddon(fitAddon)
+        term.open(containerRef.current!)
+        fitAddon.fit()
+        termRef.current = term
+        fitRef.current  = fitAddon
 
-    const origOnLine = (line: string, isErr: boolean) => {
-      if (line.includes(sentinel)) {
-        resolveDone(0)
-        refreshTree().catch(() => {})
-        return
+        // ── Launch interactive shell ───────────────────────────────────────────
+        term.writeln(`\x1b[90mLaunching ${session.shell.name}…\x1b[0m`)
+
+        const handle = await spawnShell(session.shell, projectPath ?? undefined, (line, isErr) => {
+          // Shell prompt + interactive output (not dispatch output — see onReady)
+          term.writeln(isErr ? `\x1b[31m${line}\x1b[0m` : line)
+        })
+
+        if (cancelled) { handle.kill().catch(() => {}); handle.dispose(); return }
+        handleRef.current = handle
+
+        handle.done.then(code => {
+          term.writeln(`\r\n\x1b[90m[${session.shell.name} exited — code ${code}]\x1b[0m`)
+          onAlive(false); onRunning(false)
+          resolveRef.current?.(code)
+          resolveRef.current = null; sentinelRef.current = null
+        })
+
+        // ── Local line buffer (no PTY = no echo/line-editing from shell) ──────
+        // xterm fires onData per keystroke. Without a PTY the shell receives
+        // raw bytes immediately — buffer locally, echo on screen, send on Enter.
+        let lineBuf = ''
+        term.onData((data: string) => {
+          const code = data.charCodeAt(0)
+          if (data === '\r' || data === '\n') {
+            term.write('\r\n')
+            if (lineBuf.trim()) handle.write(lineBuf + '\r\n').catch(() => {})
+            lineBuf = ''
+          } else if (code === 127 || code === 8) {
+            if (lineBuf.length > 0) { lineBuf = lineBuf.slice(0, -1); term.write('\b \b') }
+          } else if (code === 3) {
+            handle.write('\x03').catch(() => {}); lineBuf = ''; term.write('^C\r\n')
+          } else if (code === 12) {
+            term.clear(); lineBuf = ''
+          } else if (code >= 32) {
+            lineBuf += data; term.write(data)
+          }
+        })
+
+        // ── Toolbar dispatch: uses spawnProcess directly ───────────────────────
+        // When the user clicks Check / Build / Flash, we DON'T route through the
+        // interactive shell. Instead we call spawnProcess directly so the child
+        // inherits our pipe — no separate console window, output streams here.
+        onReady((cmd: string, args: string[]): Promise<number> => {
+          const p = new Promise<number>(r => { resolveRef.current = r })
+          onRunning(true)
+          const label = [cmd, ...args].join(' ')
+          term.writeln(`\x1b[90m❯ ${label}\x1b[0m`)
+
+          spawnProcess(cmd, args, projectPath ?? undefined, (line, isErr) => {
+            term.writeln(isErr ? `\x1b[31m${line}\x1b[0m` : line)
+          }).then(h => {
+            h.done.then(code => {
+              h.dispose()
+              resolveRef.current?.(code)
+              resolveRef.current = null
+              onRunning(false)
+              if (code !== 0) term.writeln(`\x1b[31m[exit ${code}]\x1b[0m`)
+              useStore.getState().refreshTree().catch(() => {})
+            })
+          }).catch(e => {
+            term.writeln(`\x1b[31m[error: ${e}]\x1b[0m`)
+            resolveRef.current?.(1)
+            resolveRef.current = null
+            onRunning(false)
+          })
+
+          return p
+        })
+
+      } catch (err) {
+        console.error('[XtermView] init failed:', err)
+        if (!cancelled && containerRef.current) {
+          containerRef.current.innerHTML = `
+            <div style="padding:16px;font-family:monospace;font-size:11px;color:var(--fg-muted);line-height:1.8">
+              <div style="color:#f44747;font-weight:600;margin-bottom:6px">Terminal init failed</div>
+              <div style="color:var(--fg-faint)">${String(err)}</div>
+            </div>`
+        }
       }
-      addLine(line, isErr ? 'err' : 'out')
-      addLogRef.current(isErr ? 'err' : 'ok', line)
     }
 
-    interceptRef.current = origOnLine
-    onUpdateRef.current({ running: true })
+    init()
 
-    if (sess.process) {
-      const shellId  = sess.shell.id
-      const echoCmd  = (shellId === 'cmd')
-        ? `${label} & echo ${sentinel}`
-        : `${label}; echo ${sentinel}`
-      await sess.process.write(echoCmd)
-    } else {
-      addLine('[no shell running — cannot execute command]', 'err')
-      resolveDone(1)
-    }
-
-    done.then(code => {
-      interceptRef.current = null
-      onUpdateRef.current({ running: false })
-      if (code !== 0) {
-        addLine(`[exit ${code}]`, 'err')
-        addLogRef.current('err', `process exited with code ${code}`)
-      }
-    })
-
-    return {
-      pid:     sess.process?.pid ?? -1,
-      done,
-      write:   async () => {},
-      kill:    async () => { sess.process?.write('\x03').catch(() => {}) },
-      dispose: () => {},
+    return () => {
+      cancelled = true
+      handleRef.current?.kill().catch(() => {})
+      handleRef.current?.dispose()
+      handleRef.current = null
+      termRef.current?.dispose()
+      termRef.current = null
+      fitRef.current  = null
     }
   }, []) // eslint-disable-line
 
-  useEffect(() => { onSpawn(spawnInSession) }, [onSpawn, spawnInSession])
-
-  // Launch the shell once when the session is first created
   useEffect(() => {
-    const shell = sessionRef.current.shell
-    const cwd_  = projectPathRef.current ?? undefined
-    addLine(`Launching ${shell.name}…`, 'info')
-    onUpdateRef.current({ running: true })
-    setBottomTabRef.current('terminal')
-
-    spawnShell(shell, cwd_, (line, isErr) => {
-      if (interceptRef.current) {
-        interceptRef.current(line, isErr)
-      } else {
-        addLine(line, isErr ? 'err' : 'out')
-        addLogRef.current(isErr ? 'err' : 'ok', line)
-      }
-    }).then(handle => {
-      onUpdateRef.current({ process: handle })
-      handle.done.then(code => {
-        onUpdateRef.current({ process: null, running: false })
-        addLine(
-          code === 0 || code === 130
-            ? `[${shell.name} session ended]`
-            : `[${shell.name} exited with code ${code}]`,
-          code === 0 || code === 130 ? 'info' : 'err',
-        )
-      })
-    }).catch(err => {
-      addLine(`Failed to launch ${shell.name}: ${err}`, 'err')
-      onUpdateRef.current({ running: false })
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      if (!fitRef.current || !termRef.current) return
+      try { fitRef.current.fit() } catch { /* ignore */ }
     })
-  }, []) // eslint-disable-line — run once per session mount
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
-      const val = input.trim()
-      setInput('')
-      if (!val) return
-      const newHistory = [val, ...session.history.slice(0, 49)]
-      onUpdateRef.current({ history: newHistory, histIdx: -1 })
-      if (val === 'clear' || val === 'cls') { onUpdateRef.current({ lines: [] }); return }
-      if (session.process) { session.process.write(val).catch(() => {}); addLine(val, 'prompt') }
-      else { const [exe, ...args] = val.split(/\s+/); spawnInSession(exe, args) }
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      const next = Math.min(session.histIdx + 1, session.history.length - 1)
-      onUpdateRef.current({ histIdx: next }); setInput(session.history[next] ?? '')
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      const next = Math.max(session.histIdx - 1, -1)
-      onUpdateRef.current({ histIdx: next }); setInput(next === -1 ? '' : session.history[next] ?? '')
-    } else if (e.key === 'c' && e.ctrlKey) {
-      if (session.process) { session.process.kill().then(() => { addLine('^C', 'info'); onUpdateRef.current({ process: null, running: false }) }) }
-    } else if (e.key === 'l' && e.ctrlKey) {
-      e.preventDefault(); onUpdateRef.current({ lines: [] }); setInput('')
-    }
-  }
-
-  function stopProcess() {
-    if (!session.process) return
-    session.process.kill().then(() => {
-      session.process?.dispose()
-      addLine('^C  process terminated', 'info')
-      onUpdateRef.current({ process: null, running: false })
-    })
-  }
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [session.id])
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden font-mono text-xs select-text" onClick={() => inputRef.current?.focus()}>
-      <div className="flex items-center gap-1.5 px-3 pt-1.5 pb-0.5 flex-shrink-0">
-        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--hover)] text-[var(--fg-muted)]">
-          {session.shell.icon} {session.shell.name}
-        </span>
-        {session.running && (
-          <span className="text-[9px] text-green-400 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block animate-pulse" /> running
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-3 py-1">
-        {session.lines.map(l => (
-          <div key={l.id} className={clsx('leading-[18px] whitespace-pre-wrap break-all', typeClass[l.type])}>
-            {l.text}
-          </div>
-        ))}
-
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className={clsx('flex-shrink-0 text-[10px]', session.running ? 'text-yellow-400' : 'text-green-400')}>
-            {session.running ? '◉' : '❯'}
-          </span>
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            className="flex-1 bg-transparent outline-none text-[var(--fg)] caret-[var(--fg)] border-0 font-mono text-xs"
-            placeholder={session.running ? 'Enter → send  ·  Ctrl+C → kill  ·  Ctrl+L → clear' : 'command…  (Ctrl+L to clear)'}
-            spellCheck={false} autoCorrect="off" autoCapitalize="off"
-          />
-          {session.running && (
-            <button onClick={stopProcess} title="Kill process" className="flex items-center justify-center w-5 h-5 rounded text-red-400 hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors">
-              <Square size={10} />
-            </button>
-          )}
-        </div>
-        <div ref={endRef} />
-      </div>
-    </div>
+    <div
+      ref={containerRef}
+      className="flex-1 overflow-hidden"
+      style={{ background: 'var(--surface-1)', padding: '4px 2px 2px' }}
+      onClick={() => termRef.current?.focus()}
+    />
   )
 }
 
-// ── Terminal: multi-session manager ──────────────────────────────────────────
+
+// ── Fallback line type (Path B direct-spawn output) ───────────────────────────
+
+interface FbLine { id: number; text: string; type: 'out'|'err'|'info'|'prompt' }
+let _lid = 0
+
+// ── Terminal: session manager ─────────────────────────────────────────────────
 
 function Terminal() {
-  const { projectPath, pendingCommand, clearPendingCommand } = useStore()
+  const { projectPath, pendingCommand, clearPendingCommand, settings } = useStore()
   const t = useT()
   const [shells,        setShells       ] = useState<ShellInfo[]>([])
-  const [sessions,      setSessions     ] = useState<ShellSession[]>([])
+  const [sessions,      setSessions     ] = useState<PtySession[]>([])
   const [activeIdx,     setActiveIdx    ] = useState(0)
   const [loadingShells, setLoadingShells] = useState(true)
+  const [fbLines,       setFbLines      ] = useState<FbLine[]>([])
+  const fbEndRef     = useRef<HTMLDivElement>(null)
+  const settingsRef  = useRef(settings)
+  const activeIdxRef = useRef(activeIdx)
+  const sendFnsRef   = useRef<Record<string, (cmd: string, args: string[]) => Promise<number>>>({})
+
+  useEffect(() => { settingsRef.current = settings   }, [settings])
+  useEffect(() => { activeIdxRef.current = activeIdx }, [activeIdx])
+  useEffect(() => { fbEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [fbLines])
+
+  const addFb = useCallback((text: string, type: FbLine['type'] = 'out') => {
+    setFbLines(prev => [...prev, { id: _lid++, text, type }])
+  }, [])
 
   useEffect(() => {
     listShells().then(list => {
       setShells(list)
       setLoadingShells(false)
-      if (list.length > 0) { setSessions([makeSession(list[0])]); setActiveIdx(0) }
+      if (list.length > 0 && isTauri()) {
+        setSessions([{ id: makePtyId(), numId: _sessionCounter - 1, shell: list[0], alive: true, running: false }])
+        setActiveIdx(0)
+      }
     }).catch(() => setLoadingShells(false))
   }, [])
 
-  function updateSession(idx: number, patch: Partial<ShellSession>) {
-    setSessions(prev => { const next = [...prev]; if (next[idx]) next[idx] = { ...next[idx], ...patch }; return next })
+  function updateSession(idx: number, patch: Partial<PtySession>) {
+    setSessions(prev => { const n = [...prev]; if (n[idx]) n[idx] = { ...n[idx], ...patch }; return n })
   }
 
   function newSession(shell: ShellInfo) {
-    setSessions(prev => { const next = [...prev, makeSession(shell)]; setActiveIdx(next.length - 1); return next })
+    const id = makePtyId()
+    setSessions(prev => { const n = [...prev, { id, numId: _sessionCounter - 1, shell, alive: true, running: false }]; setActiveIdx(n.length - 1); return n })
   }
 
   function closeSession(idx: number) {
     setSessions(prev => {
       const s = prev[idx]
-      s?.process?.kill().catch(() => {})
-      s?.process?.dispose()
-      const next = prev.filter((_, i) => i !== idx)
-      setActiveIdx(i => Math.min(i, Math.max(0, next.length - 1)))
-      return next
+      if (s) { delete sendFnsRef.current[s.id] }
+      const n = prev.filter((_, i) => i !== idx)
+      setActiveIdx(i => Math.min(i, Math.max(0, n.length - 1)))
+      return n
     })
   }
 
-  // ── Direct spawn infrastructure ───────────────────────────────────────────
-  // Keeps stable refs so addLineToActive can be called from async contexts
-  // without stale-closure problems.
-  const activeIdxRef = useRef(activeIdx)
-  useEffect(() => { activeIdxRef.current = activeIdx }, [activeIdx])
-
-  // Appends a line directly into the active session's line list.
-  // Stable identity (useCallback + no deps) so it never goes stale.
-  const addLineToActive = useCallback((text: string, type: TerminalLine['type'] = 'out') => {
-    setSessions(prev => {
-      const idx   = activeIdxRef.current
-      const next  = [...prev]
-      const target = next[idx] ?? next[0]  // fallback to first session if index is off
-      if (!target) return prev
-      const ti = next.indexOf(target)
-      next[ti] = { ...target, lines: [...target.lines, { id: _lineId++, text, type }] }
-      return next
-    })
-  }, []) // eslint-disable-line
-
-  const setActiveRunning = useCallback((running: boolean) => {
-    setSessions(prev => {
-      const idx    = activeIdxRef.current
-      const next   = [...prev]
-      const target = next[idx] ?? next[0]
-      if (!target) return prev
-      const ti = next.indexOf(target)
-      next[ti] = { ...target, running }
-      return next
-    })
-  }, []) // eslint-disable-line
-
-  const spawnFnRef = useRef<((cmd: string, args: string[], cwd?: string) => Promise<ProcessHandle>) | null>(null)
-
-  // ── Consume pendingCommand via DIRECT process spawn ───────────────────────
-  // Button actions (Check / Build / Flash / Run / Monitor) bypass the
-  // interactive shell entirely and call Rust's spawn_process directly.
-  //
-  // Why this fixes the Windows bug:
-  //   • spawn_process calls resolve_cmd() which runs `where.exe` with an
-  //     enriched PATH that includes all common per-user install locations.
-  //   • The enriched PATH is also passed as env to the child process.
-  //   • No shell is involved, so there are no cmd.exe PATH-resolution quirks,
-  //     no CREATE_NO_WINDOW races, and no piped-stdin timing issues.
-  //   • Works identically on macOS/Linux (which keyword via which(1)).
-  //
-  // Interactive commands typed by the user still go through the shell session
-  // (spawnFnRef / spawnInSession) — full shell experience preserved.
+  // ── Consume pendingCommand ────────────────────────────────────────────────
   useEffect(() => {
     if (!pendingCommand) return
     const { cmd, args, cwd, chainArgs } = pendingCommand
     clearPendingCommand()
+    const method = settingsRef.current.winSpawnMethod ?? 'shell'
 
-    const runDirect = async (cmdStr: string, argsArr: string[], cwdStr?: string): Promise<number> => {
+    const run = async (cmdStr: string, argsArr: string[], cwdStr?: string): Promise<number> => {
+      // Path A — through PTY (xterm.js, real-time, no buffering)
+      if (method === 'shell') {
+        const sess   = sessions[activeIdxRef.current]
+        const sendFn = sess ? sendFnsRef.current[sess.id] : null
+
+        if (!sendFn) {
+          await new Promise<void>(res => {
+            const t0 = Date.now()
+            const iv = setInterval(() => {
+              const s = sessions[activeIdxRef.current]
+              if ((s && sendFnsRef.current[s.id]) || Date.now() - t0 > 4000) { clearInterval(iv); res() }
+            }, 100)
+          })
+        }
+
+        const fn = sessions[activeIdxRef.current]
+          ? sendFnsRef.current[sessions[activeIdxRef.current].id] : null
+
+        if (fn) {
+          try {
+            const code = await fn(cmdStr, argsArr)
+            useStore.getState().refreshTree().catch(() => {})
+            return code
+          } catch (e) { addFb(`[dispatch error: ${e}]`, 'err') }
+        }
+      }
+
+      // Path B — direct spawn (fallback / 'direct' / 'detached' mode)
       const label = [cmdStr, ...argsArr].join(' ')
-      addLineToActive(`❯ ${label}`, 'prompt')
-      setActiveRunning(true)
-
+      addFb(`❯ ${label}`, 'prompt')
+      updateSession(activeIdxRef.current, { running: true })
       try {
         const handle = await spawnProcess(cmdStr, argsArr, cwdStr, (line, isErr) => {
-          addLineToActive(line, isErr ? 'err' : 'out')
+          addFb(line, isErr ? 'err' : 'out')
           useStore.getState().addLog(isErr ? 'err' : 'ok', line)
         })
         const code = await handle.done
         handle.dispose()
-        setActiveRunning(false)
+        updateSession(activeIdxRef.current, { running: false })
         useStore.getState().refreshTree().catch(() => {})
-        if (code !== 0) addLineToActive(`[exit ${code}]`, 'err')
+        if (code !== 0) addFb(`[exit ${code}]`, 'err')
         return code
       } catch (e) {
-        const msg = String(e)
-        addLineToActive(`[error: ${msg}]`, 'err')
-        useStore.getState().addLog('err', msg)
-        setActiveRunning(false)
+        addFb(`[error: ${e}]`, 'err')
+        addFb(`Spawn method: ${method} — change in Settings → Developer`, 'info')
+        useStore.getState().addLog('err', String(e))
+        updateSession(activeIdxRef.current, { running: false })
         return 1
       }
     }
 
     if (chainArgs) {
-      runDirect(cmd, args, cwd).then(code => {
-        if (code === 0) runDirect(cmd, chainArgs, cwd)
-      })
+      run(cmd, args, cwd).then(code => { if (code === 0) run(cmd, chainArgs, cwd) })
     } else {
-      runDirect(cmd, args, cwd)
+      run(cmd, args, cwd)
     }
-  }, [pendingCommand, clearPendingCommand, addLineToActive, setActiveRunning])
+  }, [pendingCommand, clearPendingCommand, addFb, sessions])
 
-  if (loadingShells) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-xs text-[var(--fg-faint)]">
-        <span className="animate-spin mr-2">⟳</span> Detecting shells…
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (loadingShells) return (
+    <div className="flex-1 flex items-center justify-center text-xs text-[var(--fg-faint)]">
+      <span className="animate-spin mr-2">⟳</span>Detecting shells…
+    </div>
+  )
+
+  if (shells.length === 0 || !isTauri()) return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-2 text-xs text-[var(--fg-faint)] p-4 text-center">
+      <span className="text-2xl">🐚</span>
+      <span>{t('bottomPanel.noShells')}</span>
+    </div>
+  )
+
+  if (sessions.length === 0) return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-3 text-xs text-[var(--fg-faint)]">
+      <span className="text-2xl">🖥️</span>
+      <span>{t('bottomPanel.noSessions')}</span>
+      <div className="flex gap-1 flex-wrap justify-center">
+        {shells.map(sh => (
+          <button key={sh.id} onClick={() => newSession(sh)}
+            className="flex items-center gap-1 px-3 py-1.5 rounded border border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] bg-transparent cursor-pointer text-xs">
+            {sh.icon} {sh.name}
+          </button>
+        ))}
       </div>
-    )
-  }
-
-  if (shells.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-xs text-[var(--fg-faint)] p-4 text-center">
-        <span className="text-2xl">🐚</span>
-        <span>{t('bottomPanel.noShells')}</span>
-        <span className="text-[10px]">Install Git Bash, PowerShell, or a POSIX shell to use the terminal.</span>
-      </div>
-    )
-  }
-
-  if (sessions.length === 0) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 text-xs text-[var(--fg-faint)]">
-        <span className="text-2xl">🖥️</span>
-        <span>{t('bottomPanel.noSessions')}</span>
-        <div className="flex gap-1 flex-wrap justify-center">
-          {shells.map(sh => (
-            <button key={sh.id} onClick={() => newSession(sh)} className="flex items-center gap-1 px-3 py-1.5 rounded border border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] bg-transparent cursor-pointer text-xs transition-colors">
-              {sh.icon} {sh.name}
-            </button>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  const active = sessions[activeIdx]
+    </div>
+  )
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <ShellTabBar shells={shells} sessions={sessions} activeIdx={activeIdx} onSelect={setActiveIdx} onNewSession={newSession} onClose={closeSession} loading={loadingShells} />
-      {active && (
-        <SessionView
-          key={active.id}
-          session={active}
-          projectPath={projectPath}
-          onUpdate={patch => updateSession(activeIdx, patch)}
-          onSpawn={fn => { spawnFnRef.current = fn }}
-        />
+    <div className="flex-1 flex flex-col overflow-hidden relative">
+      <ShellTabBar shells={shells} sessions={sessions} activeIdx={activeIdx}
+        onSelect={setActiveIdx} onNewSession={newSession} onClose={closeSession} loading={loadingShells} />
+
+      {/* All PTY sessions — mounted permanently, hidden when inactive */}
+      {sessions.map((s, i) => (
+        <div key={s.id} className={clsx('flex-1 flex flex-col overflow-hidden', i !== activeIdx && 'hidden')}>
+          <XtermView
+            session={s} projectPath={projectPath}
+            onAlive={b  => updateSession(i, { alive: b })}
+            onRunning={b => updateSession(i, { running: b })}
+            onReady={fn  => { sendFnsRef.current[s.id] = fn }}
+          />
+        </div>
+      ))}
+
+      {/* Path B fallback overlay — shows direct-spawn output above xterm */}
+      {fbLines.length > 0 && (
+        <div className="absolute bottom-0 left-0 right-0 max-h-40 overflow-y-auto bg-[var(--surface-1)]/95 border-t border-[var(--border)] px-3 py-2 font-mono text-[11px] z-20">
+          {fbLines.map(l => (
+            <div key={l.id} className={clsx('leading-[18px] whitespace-pre-wrap break-all', {
+              'text-[var(--fg-muted)]': l.type === 'out', 'text-red-400': l.type === 'err',
+              'text-blue-400': l.type === 'info', 'text-[var(--fg)] font-semibold': l.type === 'prompt',
+            })}>{l.text}</div>
+          ))}
+          <div ref={fbEndRef} />
+        </div>
       )}
     </div>
   )
@@ -565,13 +531,15 @@ function Terminal() {
 
 function ProblemsTab() {
   const { problems } = useStore()
-  if (problems.length === 0) {
-    return <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--fg-faint)]"><span className="text-green-400">✓</span>No problems detected.</div>
-  }
+  if (!problems.length) return (
+    <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--fg-faint)]">
+      <span className="text-green-400">✓</span>No problems detected.
+    </div>
+  )
   const icons = {
-    error:   <AlertCircle   size={12} className="text-red-400   flex-shrink-0" />,
+    error:   <AlertCircle   size={12} className="text-red-400    flex-shrink-0" />,
     warning: <AlertTriangle size={12} className="text-yellow-400 flex-shrink-0" />,
-    info:    <Info          size={12} className="text-blue-400  flex-shrink-0" />,
+    info:    <Info          size={12} className="text-blue-400   flex-shrink-0" />,
   }
   return (
     <div className="flex-1 overflow-y-auto">
@@ -595,11 +563,6 @@ export default function BottomPanel() {
   const t = useT()
   const endRef = useRef<HTMLDivElement>(null)
 
-  // KEY FIX: Terminal is mounted lazily on first open, then kept alive with CSS.
-  // This prevents shell sessions from being destroyed when switching tabs.
-  const terminalMounted = useRef(false)
-  if (bottomTab === 'terminal') terminalMounted.current = true
-
   useEffect(() => {
     if (bottomTab === 'output') endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs, bottomTab])
@@ -608,25 +571,17 @@ export default function BottomPanel() {
   const warnCount = problems.filter(p => p.severity === 'warning').length
 
   return (
-    <div
-      className="flex flex-col border-t border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0"
-      style={{ height: bottomHeight }}
-    >
+    <div className="flex flex-col border-t border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0 relative"
+      style={{ height: bottomHeight }}>
       <ResizeHandle />
 
-      {/* Tab bar */}
       <div className="h-8 flex items-center px-2 gap-0.5 border-b border-[var(--border)] flex-shrink-0">
-        {useTabs().map(t => (
-          <button
-            key={t.id}
-            onClick={() => setBottomTab(t.id)}
-            className={clsx(
-              'px-3 py-1 rounded text-xs cursor-pointer border-0 bg-transparent transition-colors flex items-center gap-1.5',
-              bottomTab === t.id ? 'text-[var(--fg)] bg-[var(--active)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg)]',
-            )}
-          >
-            {t.label}
-            {t.id === 'problems' && (errCount + warnCount) > 0 && (
+        {useTabs().map(tab => (
+          <button key={tab.id} onClick={() => setBottomTab(tab.id)}
+            className={clsx('px-3 py-1 rounded text-xs cursor-pointer border-0 bg-transparent transition-colors flex items-center gap-1.5',
+              bottomTab === tab.id ? 'text-[var(--fg)] bg-[var(--active)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg)]')}>
+            {tab.label}
+            {tab.id === 'problems' && (errCount + warnCount) > 0 && (
               <span className="flex items-center gap-1 text-2xs font-mono">
                 {errCount  > 0 && <span className="text-red-400">{errCount}</span>}
                 {warnCount > 0 && <span className="text-yellow-400">{warnCount}</span>}
@@ -635,36 +590,29 @@ export default function BottomPanel() {
           </button>
         ))}
         <div className="flex-1" />
-        {bottomTab === 'output' && (
-          <IconBtn tooltip="Clear output" onClick={clearLogs}><Trash2 size={11} /></IconBtn>
-        )}
+        {bottomTab === 'output' && <IconBtn tooltip="Clear output" onClick={clearLogs}><Trash2 size={11} /></IconBtn>}
       </div>
 
-      {/* Output tab */}
       {bottomTab === 'output' && (
         <div className="flex-1 overflow-y-auto px-3 py-2">
-          {logs.length === 0 && <span className="text-xs text-[var(--fg-faint)]">No output yet.</span>}
+          {!logs.length && <span className="text-xs text-[var(--fg-faint)]">No output yet.</span>}
           {logs.map(l => (
             <div key={l.id} className="flex gap-3 font-mono text-xs leading-[18px]">
               <span className="text-[var(--fg-faint)] flex-shrink-0 select-none">{l.time}</span>
-              <span className={clsx({ 'text-green-400': l.type === 'ok', 'text-red-400': l.type === 'err', 'text-yellow-400': l.type === 'warn', 'text-[var(--fg-muted)]': l.type === 'info' })}>
-                {l.msg}
-              </span>
+              <span className={clsx({ 'text-green-400': l.type==='ok', 'text-red-400': l.type==='err',
+                'text-yellow-400': l.type==='warn', 'text-[var(--fg-muted)]': l.type==='info' })}>{l.msg}</span>
             </div>
           ))}
           <div ref={endRef} />
         </div>
       )}
 
-      {/* Problems tab */}
       {bottomTab === 'problems' && <ProblemsTab />}
 
-      {/* Terminal — mounted once, then hidden via CSS to preserve sessions */}
-      {terminalMounted.current && (
-        <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'terminal' && 'hidden')}>
-          <Terminal />
-        </div>
-      )}
+      {/* Terminal — always mounted so PTY sessions survive tab switches */}
+      <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'terminal' && 'hidden')}>
+        <Terminal />
+      </div>
     </div>
   )
 }

@@ -164,6 +164,30 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     ],
   },
 
+  xiao_rp2040: {
+    type: 'xiao_rp2040', label: 'XIAO RP2040', w: 64, h: 120,
+    color: '#16a34a', borderColor: '#14532d', category: 'mcu',
+    description: 'Seeed XIAO RP2040 · RP2040 · 133 MHz · 2 MB Flash · 264 KB SRAM · USB-C · NeoPixel',
+    pins: [
+      // Left side (top→bottom) rx=0
+      { id: 'D0',  label: 'D0 A0',    type: 'analog',  rx: 0, ry: 0.08,  arduino: 26 },
+      { id: 'D1',  label: 'D1 A1',    type: 'analog',  rx: 0, ry: 0.20,  arduino: 27 },
+      { id: 'D2',  label: 'D2 A2',    type: 'analog',  rx: 0, ry: 0.32,  arduino: 28 },
+      { id: 'D3',  label: 'D3 A3',    type: 'analog',  rx: 0, ry: 0.44,  arduino: 29 },
+      { id: 'D4',  label: 'D4 SDA',   type: 'i2c',     rx: 0, ry: 0.56,  arduino: 6  },
+      { id: 'D5',  label: 'D5 SCL',   type: 'i2c',     rx: 0, ry: 0.68,  arduino: 7  },
+      { id: 'D6',  label: 'D6 TX',    type: 'digital', rx: 0, ry: 0.80,  arduino: 0  },
+      // Right side (top→bottom) rx=1
+      { id: 'D7',  label: 'D7 RX',    type: 'digital', rx: 1, ry: 0.08,  arduino: 1  },
+      { id: 'D8',  label: 'D8 SCK',   type: 'spi',     rx: 1, ry: 0.20,  arduino: 2  },
+      { id: 'D9',  label: 'D9 MISO',  type: 'spi',     rx: 1, ry: 0.32,  arduino: 4  },
+      { id: 'D10', label: 'D10 MOSI', type: 'spi',     rx: 1, ry: 0.44,  arduino: 3  },
+      { id: '3V3', label: '3.3V',     type: 'power',   rx: 1, ry: 0.56  },
+      { id: 'GND', label: 'GND',      type: 'gnd',     rx: 1, ry: 0.68  },
+      { id: '5V',  label: '5V/VBUS',  type: 'power',   rx: 1, ry: 0.80  },
+    ],
+  },
+
   // ── Output ────────────────────────────────────────────────────────────────
   led: {
     type: 'led', label: 'LED', w: 34, h: 56,
