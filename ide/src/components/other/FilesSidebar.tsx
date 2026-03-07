@@ -1,9 +1,9 @@
 'use client'
 import { useStore, FileNode } from '@/lib/store'
-import { IconBtn } from '@/components/ui/primitives'
+import { IconBtn } from '@/components/shared/primitives'
 import { FilePlus, FolderPlus, RotateCcw, ChevronRight, File, Folder, FolderOpen, Pencil, Trash2, Copy, Clipboard } from 'lucide-react'
 import { useState, useRef } from 'react'
-import { showContextMenu } from '@/components/ui/ContextMenu'
+import { showContextMenu } from '@/components/shared/ContextMenu'
 
 function getFileColor(ext?: string): string {
   const map: Record<string, string> = {

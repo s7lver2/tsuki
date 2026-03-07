@@ -2,7 +2,7 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { useStore } from '@/lib/store'
 import { highlightByExt } from '@/lib/highlight'
-import { showContextMenu } from '@/components/ui/ContextMenu'
+import { showContextMenu } from '@/components/shared/ContextMenu'
 function LineNumbers({ count, fontSize }: { count: number; fontSize: number }) {
   const lineH = Math.round(fontSize * 1.62)
   return (

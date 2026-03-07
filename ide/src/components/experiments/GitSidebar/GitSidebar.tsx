@@ -1,7 +1,7 @@
 'use client'
 import { useState, useMemo } from 'react'
 import { useStore, GitCommitNode } from '@/lib/store'
-import { Textarea, Btn } from '@/components/ui/primitives'
+import { Textarea, Btn } from '@/components/shared/primitives'
 import {
   GitBranch, Check, ChevronDown, ChevronRight,
   FileText, Plus, Minus, Edit3, Info, GitMerge,

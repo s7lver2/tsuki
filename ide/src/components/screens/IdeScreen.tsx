@@ -1,20 +1,21 @@
 'use client'
 import { useStore } from '@/lib/store'
-import NewProjectModal from '@/components/ide/NewProjectModal'
+import NewProjectModal from '@/components/other/NewProjectModal'
 import { useState, useEffect } from 'react'
-import { Btn, Divider } from '@/components/ui/primitives'
-import FilesSidebar from './FilesSidebar'
-import GitSidebar from './GitSidebar'
-import PackagesSidebar from './PackagesSidebar'
-import CodeEditor from './CodeEditor'
-import BottomPanel from './BottomPanel'
-import SandboxPanel from '../sandbox/SandboxPanel'
+import { Btn, Divider } from '@/components/shared/primitives'
+import FilesSidebar from '@/components/other/FilesSidebar'
+import GitSidebar from '@/components/experiments/GitSidebar/GitSidebar'
+import PackagesSidebar from '@/components/other/PackagesSidebar'
+import CodeEditor from '@/components/other/CodeEditor'
+import BottomPanel from '@/components/other/BottomPanel'
+import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
   Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, ChevronLeft,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { showContextMenu } from '@/components/ui/ContextMenu'
+import TsukiLogo from '@/components/shared/TsukiLogo'
+import { showContextMenu } from '@/components/shared/ContextMenu'
 import { useT } from '@/lib/i18n'
 
 const BOARDS = [
@@ -66,7 +67,7 @@ export default function IdeScreen() {
   }
 
   function handleFlash() {
-    const args = ['flash']
+    const args = ['upload']
     if (board)            args.push('--board', board)
     if (settings.verbose) args.push('--verbose')
     dispatch(args)
@@ -77,7 +78,7 @@ export default function IdeScreen() {
     const buildArgs = ['build', '--compile']
     if (board)            buildArgs.push('--board', board)
     if (settings.verbose) buildArgs.push('--verbose')
-    const flashArgs = ['flash']
+    const flashArgs = ['upload']
     if (board)            flashArgs.push('--board', board)
     if (settings.verbose) flashArgs.push('--verbose')
     // Chain: build first, flash only on success — BottomPanel handles the await
@@ -141,9 +142,7 @@ export default function IdeScreen() {
       <div className="h-10 flex items-center gap-1 px-3 border-b border-[var(--border)] flex-shrink-0 bg-[var(--surface-1)]">
 
         <div className="flex items-center gap-2 mr-1 min-w-0 max-w-[240px]">
-          <div className="w-5 h-5 rounded bg-[var(--fg)] flex items-center justify-center flex-shrink-0">
-            <span className="text-[var(--surface)] font-mono font-bold text-[10px]">G</span>
-          </div>
+          <TsukiLogo size="sm" />
           <div className="min-w-0">
             <div className="font-semibold text-sm tracking-tight leading-none truncate">
               {projectName || 'Tsuki'}
@@ -412,7 +411,7 @@ function StatusBar({ tsuki }: { tsuki: string }) {
           </span>
         ) : (
           <span className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400" /> ready
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" /> <span style={{ color: '#4ade80' }}>月</span> ready
           </span>
         )}
       </div>

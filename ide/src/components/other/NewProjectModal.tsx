@@ -1,13 +1,14 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from '@/lib/store'
-import { Input } from '@/components/ui/primitives'
+import { Input } from '@/components/shared/primitives'
 import {
   X, FolderOpen, GitBranch, ChevronRight, Check,
   Cpu, Wrench, FileCode, Folder, Code2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { pickFolder, isTauri } from '@/lib/tauri'
+import TsukiLogo from '@/components/shared/TsukiLogo'
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -428,9 +429,7 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
         {/* ── Left sidebar ── */}
         <div className="w-44 flex-shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col py-6 px-3">
           <div className="flex items-center gap-2 px-2 mb-6">
-            <div className="w-5 h-5 rounded bg-[var(--fg)] flex items-center justify-center">
-              <span className="text-[var(--surface)] font-mono font-bold text-[10px] leading-none">G</span>
-            </div>
+            <TsukiLogo size="xs" />
             <span className="text-sm font-semibold">New project</span>
           </div>
 

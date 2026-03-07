@@ -9,6 +9,10 @@ default-run = "tsuki-ide"
 edition = "2021"
 rust-version = "1.60"
 
+[[bin]]
+name = "tsuki-ide"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "1.5", features = [] }
 
@@ -36,22 +40,14 @@ tauri = { version = "1.6", features = [
   "window-unminimize",
   "window-start-dragging",
 ] }
+tsuki_core  = { path = "../../", package = "tsuki" }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 tokio       = { version = "1", features = ["full"] }
+which       = "6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
-  "Win32_Foundation",
-  "Win32_System_Threading",
-  "Win32_System_Pipes",
-  "Win32_Security",
-  "Win32_UI_Shell",
-  "Win32_Storage_FileSystem",
-] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

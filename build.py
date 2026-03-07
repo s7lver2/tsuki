@@ -35,7 +35,6 @@ APP_NAME       = "tsuki"
 BINARY         = "tsuki"          # CLI principal
 CORE_BINARY    = "tsuki-core"
 FLASH_BINARY   = "tsuki-flash"
-SIM_BINARY     = "tsuki-sim"
 GO_MODULE      = "github.com/tsuki/cli"
 BUILD_DIR      = os.path.join(PROJECT_ROOT, "dist")
 RELEASE_DIR    = os.path.join(PROJECT_ROOT, "releases")
@@ -203,7 +202,7 @@ def build_rust(platform_key):
             f"plataforma objetivo (ej. mingw-w64, aarch64-linux-gnu-gcc). "
             f"Ejecuta el build en la máquina objetivo para obtener esos binarios."
         )
-        return None, None, None
+        return None, None
 
     step(f"Compilando Rust binarios → {platform_key} (nativo)")
     plat = PLATFORMS[platform_key]
@@ -213,13 +212,13 @@ def build_rust(platform_key):
     run(["cargo", "build", "--release"], cwd=FLASH_DIR)
 
     results = []
-    for name in [CORE_BINARY, FLASH_BINARY, SIM_BINARY]:
+    for name in [CORE_BINARY, FLASH_BINARY]:
         src_path = os.path.join(FLASH_DIR, "target", "release", f"{name}{ext}")
         dst_path = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
         shutil.copy(src_path, dst_path)
         info(f"Rust binary → {os.path.basename(dst_path)}")
         results.append(dst_path)
-    return results[0], results[1], results[2]
+    return results[0], results[1]
 
 # ─────────────────────────────────────────────
 #  BUILD: TAURI IDE  (solo host actual)
@@ -240,15 +239,26 @@ def build_tauri(platform_key, version):
     release_dir = os.path.join(IDE_DIR, "src-tauri", "target", rust_target, "release")
     alt_release_dir = os.path.join(IDE_DIR, "src-tauri", "target", "release")
 
+    # Nombre del ejecutable Tauri — debe coincidir con [[bin]] name en Cargo.toml
+    # y con productName en tauri.conf.json
+    IDE_EXE_NAME = "tsuki-ide.exe"
+
     exe_src = None
+    exe_name = None
     for search_dir in [release_dir, alt_release_dir]:
         if not os.path.exists(search_dir):
             continue
+        candidate = os.path.join(search_dir, IDE_EXE_NAME)
+        if os.path.isfile(candidate):
+            exe_src  = candidate
+            exe_name = IDE_EXE_NAME
+            break
+        # Fallback: cualquier .exe que no sea instalador/dll (por si cambia el nombre)
         for f in os.listdir(search_dir):
-          if f.endswith(".exe") and not any(x in f.lower() for x in ["setup", "msi", ".dll"]):
-              exe_src = os.path.join(search_dir, f)
-              exe_name = f  # <-- Captura el nombre real: "GoDotIno IDE.exe"
-              break
+            if f.endswith(".exe") and not any(x in f.lower() for x in ["setup", "msi", ".dll"]):
+                exe_src  = os.path.join(search_dir, f)
+                exe_name = f
+                break
         if exe_src:
             break
 
@@ -293,7 +303,6 @@ VERSION="@@version@@"
 BINARY="@@binary@@"
 CORE_BINARY="@@core_binary@@"
 FLASH_BINARY="@@flash_binary@@"
-SIM_BINARY="@@sim_binary@@"
 REGISTRY_URL="@@registry_url@@"
 
 # ── Defaults ──────────────────────────────────────────────────────
@@ -346,7 +355,7 @@ CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/$BINARY"
 # ── Función de desinstalación ─────────────────────────────────────
 do_uninstall() {
   info "Desinstalando $APP v$VERSION..."
-  for f in "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY" "$BINDIR/$SIM_BINARY"; do
+  for f in "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"; do
     [ -f "$f" ] && { sudo rm -f "$f"; ok "Eliminado $f"; } || true
   done
   [ -d "$DATADIR" ] && { sudo rm -rf "$DATADIR"; ok "Eliminado $DATADIR"; } || true
@@ -398,9 +407,7 @@ $SUDO mkdir -p "$BINDIR"
 $SUDO cp "$BINARY"        "$BINDIR/$BINARY"
 $SUDO cp "$CORE_BINARY"   "$BINDIR/$CORE_BINARY"
 $SUDO cp "$FLASH_BINARY"  "$BINDIR/$FLASH_BINARY"
-[ -f "$SIM_BINARY" ] && $SUDO cp "$SIM_BINARY" "$BINDIR/$SIM_BINARY"
 $SUDO chmod +x "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"
-[ -f "$BINDIR/$SIM_BINARY" ] && $SUDO chmod +x "$BINDIR/$SIM_BINARY"
 ok "Binarios instalados"
 
 # ── Datos y configuración ─────────────────────────────────────────
@@ -417,7 +424,6 @@ cat > "$CONFDIR/config.toml" << TOML
 libs_dir    = "$LIBS_DIR"
 core_binary = "$BINDIR/$CORE_BINARY"
 flash_binary= "$BINDIR/$FLASH_BINARY"
-sim_binary  = "$BINDIR/$SIM_BINARY"
 data_dir    = "$DATADIR"
 
 [registry]
@@ -494,7 +500,7 @@ PREFIX="${1:-/usr/local}"
 BINDIR="$PREFIX/bin"
 DATADIR="$PREFIX/share/@@binary@@"
 echo "Desinstalando @@app_name@@..."
-sudo rm -f "$BINDIR/@@binary@@" "$BINDIR/@@core_binary@@" "$BINDIR/@@flash_binary@@" "$BINDIR/@@sim_binary@@"
+sudo rm -f "$BINDIR/@@binary@@" "$BINDIR/@@core_binary@@" "$BINDIR/@@flash_binary@@"
 sudo rm -rf "$DATADIR"
 for prof in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
   [ -f "$prof" ] && sed -i "/@@binary@@/d" "$prof" 2>/dev/null || true
@@ -532,7 +538,7 @@ DATADIR="$PREFIX/share/@@binary@@"
 CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/@@binary@@"
 
 echo "Este script eliminará:"
-echo "  $BINDIR/@@binary@@  $BINDIR/@@core_binary@@  $BINDIR/@@flash_binary@@  $BINDIR/@@sim_binary@@"
+echo "  $BINDIR/@@binary@@  $BINDIR/@@core_binary@@  $BINDIR/@@flash_binary@@"
 echo "  $DATADIR"
 echo "  $CONFDIR"
 echo ""
@@ -543,7 +549,7 @@ if [ "$YES" = false ]; then
 fi
 
 SUDO=""; [ -w "$BINDIR" ] || SUDO="sudo"
-for f in "$BINDIR/@@binary@@" "$BINDIR/@@core_binary@@" "$BINDIR/@@flash_binary@@" "$BINDIR/@@sim_binary@@"; do
+for f in "$BINDIR/@@binary@@" "$BINDIR/@@core_binary@@" "$BINDIR/@@flash_binary@@"; do
   [ -f "$f" ] && { $SUDO rm -f "$f"; echo "✓ Eliminado $f"; } || true
 done
 [ -d "$DATADIR" ] && { $SUDO rm -rf "$DATADIR"; echo "✓ Eliminado $DATADIR"; } || true
@@ -660,7 +666,6 @@ Name: "{localappdata}\\@@app_name@@\\config"; Flags: uninsalwaysuninstall
 Source: "@@go_bin@@";    DestDir: "{app}\\bin"; DestName: "@@binary@@.exe";       Components: cli; Flags: ignoreversion
 Source: "@@core_bin@@";  DestDir: "{app}\\bin"; DestName: "@@core_binary@@.exe";  Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 Source: "@@flash_bin@@"; DestDir: "{app}\\bin"; DestName: "@@flash_binary@@.exe"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
-Source: "@@sim_bin@@";   DestDir: "{app}\\bin"; DestName: "@@sim_binary@@.exe";   Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Paquetes locales ───────────────────────────────────────────────
 Source: "@@pkg_dir@@\\*"; DestDir: "{app}\\pkg"; Components: cli; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -711,9 +716,6 @@ Root: HKCU; Subkey: "Software\@@app_name@@"; \
       Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\@@app_name@@"; \
       ValueType: string; ValueName: "FlashBinary"; ValueData: "{app}\bin\@@flash_binary@@.exe"; \
-      Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\@@app_name@@"; \
-      ValueType: string; ValueName: "SimBinary"; ValueData: "{app}\bin\@@sim_binary@@.exe"; \
       Flags: uninsdeletekey
 
 ; ── Asociación de archivos .goino ───────────────────────────────────
@@ -1024,7 +1026,6 @@ begin
       Lines.Add('libs_dir     = "' + edLibsDir.Text + '"');
       Lines.Add('core_binary  = "' + ExpandConstant('{app}\\bin\\@@core_binary@@.exe') + '"');
       Lines.Add('flash_binary = "' + ExpandConstant('{app}\\bin\\@@flash_binary@@.exe') + '"');
-      Lines.Add('sim_binary   = "' + ExpandConstant('{app}\\bin\\@@sim_binary@@.exe') + '"');
       Lines.Add('');
       Lines.Add('[registry]');
       Lines.Add('url = "' + edRegistry.Text + '"');
@@ -1082,7 +1083,7 @@ end;
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR LINUX / MACOS
 # ─────────────────────────────────────────────
-def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, sim_bin=None):
+def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
     step(f"Creando instalador CLI → {platform_key}")
     plat_dir = os.path.join(RELEASE_DIR, f"{APP_NAME}-{version}-{platform_key}")
     os.makedirs(plat_dir, exist_ok=True)
@@ -1094,8 +1095,6 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, si
         shutil.copy(core_bin,  os.path.join(plat_dir, CORE_BINARY))
     if flash_bin:
         shutil.copy(flash_bin, os.path.join(plat_dir, FLASH_BINARY))
-    if sim_bin:
-        shutil.copy(sim_bin,   os.path.join(plat_dir, SIM_BINARY))
 
     # Copiar paquetes
     pkg_src = os.path.join(PROJECT_ROOT, "pkg")
@@ -1109,7 +1108,6 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, si
         '@@binary@@':      BINARY,
         '@@core_binary@@': CORE_BINARY,
         '@@flash_binary@@': FLASH_BINARY,
-        '@@sim_binary@@':  SIM_BINARY,
         '@@registry_url@@': REGISTRY_URL,
         '@@platform_key@@': platform_key,
     }
@@ -1172,7 +1170,7 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, si
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR WINDOWS (Inno Setup)
 # ─────────────────────────────────────────────
-def create_windows_installer(go_bin, core_bin, flash_bin, sim_bin, version, ide_bundle_dir, ide_exe_name, numeric_version):
+def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version):
     step("Creando instalador GUI Windows (Inno Setup)")
 
     # Buscar ícono
@@ -1202,11 +1200,9 @@ def create_windows_installer(go_bin, core_bin, flash_bin, sim_bin, version, ide_
         "@@binary@@":       BINARY,
         "@@core_binary@@":  CORE_BINARY,
         "@@flash_binary@@": FLASH_BINARY,
-        "@@sim_binary@@":   SIM_BINARY,
         "@@go_bin@@":       _w(go_bin),
         "@@core_bin@@":     _w(core_bin),
         "@@flash_bin@@":    _w(flash_bin),
-        "@@sim_bin@@":      _w(sim_bin) if sim_bin else "",
         "@@icon_file@@":    _w(icon_file),
         "@@ide_bundle@@":   _w(ide_bundle) if ide_bundle else "",
         "@@pkg_dir@@":      _w(pkg_dir),
@@ -1331,8 +1327,8 @@ def main():
 
         try:
             go_bin      = None if args.skip_go   else build_go(pk, version, commit, date)
-            core_bin, flash_bin, sim_bin = (None, None, None) if args.skip_rust else build_rust(pk)
-            results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin, "sim": sim_bin}
+            core_bin, flash_bin = (None, None) if args.skip_rust else build_rust(pk)
+            results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin}
         except subprocess.CalledProcessError as e:
             error(f"Build fallido para {pk}: {e}")
             continue
@@ -1373,10 +1369,9 @@ def main():
                     go_bin=r["go"],
                     core_bin=r["core"],
                     flash_bin=r["flash"],
-                    sim_bin=r.get("sim"),
                     version=version,
                     ide_bundle_dir=ide_bundle,
-                    ide_exe_name=ide_exe_name,
+                    ide_exe_name=ide_exe_name,   # <-- añadir
                     numeric_version=numeric_version,
                 )
         else:
@@ -1386,7 +1381,6 @@ def main():
                 go_bin=r["go"],
                 core_bin=r["core"],
                 flash_bin=r["flash"],
-                sim_bin=r.get("sim"),
                 version=version,
             )
 

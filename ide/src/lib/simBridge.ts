@@ -6,8 +6,8 @@
 //  pin is wired to each Arduino pin via CircuitWire. This module bridges them.
 // ══════════════════════════════════════════════════════════════════════════════
 
-import type { TsukiCircuit } from '@/components/sandbox/SandboxDefs'
-import { COMP_DEFS } from '@/components/sandbox/SandboxDefs'
+import type { TsukiCircuit } from '@/components/experiments/SandboxPanel/SandboxDefs'
+import { COMP_DEFS } from '@/components/experiments/SandboxPanel/SandboxDefs'
 import type { StepResult, SimEvent } from './useSimulator'
 
 // ── Types ──────────────────────────────────────────────────────────────────────

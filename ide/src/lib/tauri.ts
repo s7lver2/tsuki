@@ -320,9 +320,36 @@ export async function runGit(args: string[], cwd: string): Promise<string> {
 
 // ── Simulator helpers ─────────────────────────────────────────────────────────
 
+/**
+ * Runs a command and waits for it to finish, collecting all output.
+ *
+ * Uses spawnProcess instead of run_shell so the binary is resolved
+ * via the same resolve_cmd + enriched PATH path that the toolbar buttons
+ * already use successfully — fixing the Windows "not found" bug even when
+ * the full absolute path is passed.
+ */
 export async function runShell(cmd: string, args: string[], cwd?: string): Promise<string> {
   if (!isTauri()) throw new Error('runShell: not in Tauri')
-  return invoke<string>('run_shell', { cmd, args, cwd: cwd ?? null })
+
+  const outLines: string[] = []
+  const errLines: string[] = []
+
+  const handle = await spawnProcess(cmd, args, cwd, (line, isErr) => {
+    if (isErr) errLines.push(line)
+    else outLines.push(line)
+  })
+
+  const code = await handle.done
+  handle.dispose()
+
+  if (code !== 0) {
+    // Prefer stderr for error messages; fall back to stdout
+    const msg = errLines.join('\n').trim() || outLines.join('\n').trim() || `exited with code ${code}`
+    throw new Error(msg)
+  }
+
+  // Return stdout if present, otherwise stderr (some tools write to stderr only)
+  return outLines.join('\n') || errLines.join('\n')
 }
 
 /** Returns an OS-correct writable temp path for the source being simulated. */
@@ -379,4 +406,78 @@ export async function getTsukiSimBin(): Promise<string> {
 export async function getDefaultBoard(): Promise<string> {
   if (!isTauri()) return 'uno'
   return invoke<string>('get_default_board').catch(() => 'uno')
+}
+
+// ── In-process transpilation ──────────────────────────────────────────────────
+// These call the tsuki_core library DIRECTLY inside the Tauri process —
+// no tsuki-core.exe subprocess is spawned, so they work on every OS regardless
+// of PATH, install location, or exe permissions.
+
+/**
+ * Transpile a Go source string → C++ string, entirely in-process.
+ * Replaces: spawnProcess(coreBin, [tmpPath, '--board', board], ...)
+ */
+export async function transpileSource(source: string, board: string): Promise<string> {
+  if (!isTauri()) throw new Error('transpileSource: not in Tauri')
+  return invoke<string>('transpile_source', { source, board })
+}
+
+/**
+ * Runs the tsuki simulator in-process (no tsuki-sim.exe subprocess).
+ * Emits the same Tauri events as spawnProcess so the existing event
+ * protocol in SandboxPanel works without changes.
+ *
+ * Returns a ProcessHandle-compatible object with .done, .kill(), .write(), .dispose().
+ */
+export async function runSimulator(
+  eventId:  string,
+  source:   string,
+  board:    string,
+  steps:    number | undefined,
+  onLine:   (line: string, isErr: boolean) => void,
+): Promise<ProcessHandle> {
+  if (!isTauri()) throw new Error('runSimulator: not in Tauri')
+
+  let resolveExit!: (code: number) => void
+  const donePromise = new Promise<number>(r => { resolveExit = r })
+
+  const { listen } = await import('@tauri-apps/api/event')
+  const unsubs: Array<() => void> = []
+
+  const sub = async (suffix: string, handler: (payload: string) => void) => {
+    const u = await listen<string>(`proc://${eventId}:${suffix}`, e => handler(e.payload))
+    unsubs.push(u)
+  }
+
+  await sub('stdout', line => onLine(line, false))
+  await sub('stderr', line => onLine(line, true))
+  await sub('done',   raw  => {
+    const code = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
+    resolveExit(isNaN(code) ? 0 : code)
+    unsubs.forEach(u => u())
+    unsubs.length = 0
+  })
+
+  await invoke('run_simulator', {
+    eventId,
+    source,
+    board,
+    steps: steps ?? null,
+  })
+
+  return {
+    pid: -1,  // Add this line (dummy PID since this is an in-process simulator)
+    done: donePromise,
+    kill: async () => { await invoke('stop_simulator', { eventId }).catch(() => {}) },
+    write: async (_data: string) => { /* stdin not used by simulator */ },
+    dispose: () => { unsubs.forEach(u => u()); unsubs.length = 0 },
+  }
+}
+/**
+ * Transpile a Go source string and write a .sim.json bundle to bundlePath.
+ * Replaces: runShell(coreBin, [tmpPath, '--board', board, '--emit-sim', bundlePath])
+ */
+export async function emitSimBundle(source: string, board: string, bundlePath: string): Promise<void> {
+  if (!isTauri()) throw new Error('emitSimBundle: not in Tauri')
+  return invoke<void>('emit_sim_bundle', { source, board, bundlePath })
 }

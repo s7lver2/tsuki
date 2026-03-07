@@ -1,10 +1,11 @@
 'use client'
 import { useState } from 'react'
-import NewProjectModal from '@/components/ide/NewProjectModal'
+import NewProjectModal from '@/components/other/NewProjectModal'
 import { useStore } from '@/lib/store'
-import { Btn } from '@/components/ui/primitives'
+import { Btn } from '@/components/shared/primitives'
 import { Plus, FolderOpen, Settings, Clock, ChevronRight, BookOpen } from 'lucide-react'
 import { useT } from '@/lib/i18n'
+import TsukiLogo from '@/components/shared/TsukiLogo'
 
 
 
@@ -40,10 +41,7 @@ export default function WelcomeScreen() {
       {/* Titlebar */}
       <div className="h-11 flex items-center px-5 border-b border-[var(--border)] flex-shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-5 h-5 rounded bg-[var(--fg)] flex items-center justify-center">
-            <span className="text-[var(--surface)] font-mono font-bold text-[10px] leading-none">G</span>
-          </div>
-          <span className="font-semibold text-sm tracking-tight">Tsuki</span>
+          <TsukiLogo size="sm" showText />
         </div>
         <div className="ml-auto flex items-center gap-1">
           <Btn variant="ghost" size="xs" onClick={toggleTheme} className="font-mono text-[10px]">
@@ -70,7 +68,10 @@ export default function WelcomeScreen() {
 
           {/* Left */}
           <div className="flex-1 min-w-0 animate-fade-up">
-            <h1 className="text-2xl font-semibold tracking-tight mb-1.5">Tsuki IDE</h1>
+            <div className="flex items-center gap-3 mb-1.5">
+              <TsukiLogo size="lg" />
+              <h1 className="text-2xl font-semibold tracking-tight">tsuki</h1>
+            </div>
             <p className="text-sm text-[var(--fg-muted)] mb-8">
               {t('welcome.tagline')}
             </p>

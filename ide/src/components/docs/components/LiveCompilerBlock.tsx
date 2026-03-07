@@ -9,11 +9,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import React, { useState, useRef, useCallback } from 'react'
-import { useStore } from '@/lib/store'
 import {
   isTauri,
-  writeFile,
-  spawnProcess,
+  transpileSource,
   deleteFile,
   getTmpGoPath,
   type ProcessHandle,
@@ -151,9 +149,6 @@ export function LiveCompilerBlock({
   board = 'uno',
   filename = 'main.go',
 }: LiveCompilerBlockProps) {
-  const { settings } = useStore()
-  const coreBin = settings.tsukiCorePath || 'tsuki-core'
-
   const original = initialCode.trim()
   const [code,    setCode]    = useState(original)
   const [editing, setEditing] = useState(false)
@@ -187,42 +182,28 @@ export function LiveCompilerBlock({
     setElapsed(null)
     const t0 = Date.now()
 
-    let tmpPath = ''
     try {
-      tmpPath = await getTmpGoPath()
-      pushLine({ kind: 'meta', text: `→ writing to ${tmpPath}` })
-      await writeFile(tmpPath, code)
+      pushLine({ kind: 'meta', text: `→ transpiling with board: ${board}` })
 
-      pushLine({ kind: 'meta', text: `→ ${coreBin} ${tmpPath} --board ${board}` })
-
-      let exitCode = 0
-      const handle = await spawnProcess(
-        coreBin,
-        [tmpPath, '--board', board],
-        undefined,
-        (text, isErr) => pushLine({ kind: isErr ? 'stderr' : 'stdout', text }),
-      )
-      handleRef.current = handle
-      exitCode = await handle.done
-      handle.dispose()
-      handleRef.current = null
+      // In-process transpilation — no tsuki-core.exe subprocess needed
+      const cpp = await transpileSource(code, board)
 
       const ms = Date.now() - t0
       setElapsed(ms)
 
-      if (exitCode === 0) {
-        pushLine({ kind: 'ok', text: `✓ transpile OK  (${ms} ms)` })
-        setState('ok')
-      } else {
-        pushLine({ kind: 'err', text: `✗ exit ${exitCode}` })
-        setState('error')
-      }
+      // Show the generated C++ in the output panel
+      cpp.split('\n').slice(0, 80).forEach(line => pushLine({ kind: 'stdout', text: line }))
+      if (cpp.split('\n').length > 80) pushLine({ kind: 'meta', text: `… (${cpp.split('\n').length} lines total)` })
+
+      pushLine({ kind: 'ok', text: `✓ transpile OK  (${ms} ms)` })
+      setState('ok')
     } catch (err: unknown) {
-      pushLine({ kind: 'err', text: `✗ ${(err as Error)?.message ?? String(err)}` })
+      const ms = Date.now() - t0
+      setElapsed(ms)
+      const msg = (err as Error)?.message ?? String(err)
+      msg.split('\n').forEach(line => pushLine({ kind: 'stderr', text: line }))
+      pushLine({ kind: 'err', text: `✗ transpile failed` })
       setState('error')
-    } finally {
-      // Clean up temp file silently
-      if (tmpPath) deleteFile(tmpPath).catch(() => {})
     }
   }
 
@@ -438,7 +419,7 @@ export function LiveCompilerBlock({
           borderTop: '1px solid var(--border)',
           fontSize: 10, color: 'var(--fg-faint)', fontFamily: 'var(--font-mono)',
         }}>
-          edit code · click ▶ compile to transpile with {coreBin}
+          edit code · click ▶ compile to transpile Go → C++
         </div>
       )}
 

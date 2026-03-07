@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '@/lib/store'
-import { getTmpGoPath, getTmpSimBundlePath, getTsukiCoreBin, writeFile, getTsukiSimBin, runShell, spawnProcess, type ProcessHandle } from '@/lib/tauri'
+import { getTmpSimBundlePath, writeFile, emitSimBundle, runSimulator, type ProcessHandle } from '@/lib/tauri'
 import {
   buildPinMap, applyStepResult,
   getAnalogInputPins, getDigitalInputPins,
@@ -834,22 +834,13 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
           accumRef.current = { latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false }
           setSimMs(0)
           try {
-            const tmpPath    = await getTmpGoPath()
             const bundlePath = await getTmpSimBundlePath()
-            await writeFile(tmpPath, code)
-
-            const coreBin   = await getTsukiCoreBin().catch(() => 'tsuki-core')
-            const simBin    = await getTsukiSimBin().catch(() => 'tsuki-sim')
-            const boardName = board || 'uno'
-            const energyFlag = showCurrentFlow ? ['--energy'] : []
+            const boardName  = board || 'uno'
 
             // ── Auto-bootstrap circuit if empty ───────────────────────────────
-            // If the canvas has no MCU, add an Uno + LED on D13 so a basic
-            // blink sketch shows something immediately without manual wiring.
             setCircuit(cur => {
               const hasMcu = cur.components.some(c => COMP_DEFS[c.type]?.category === 'mcu')
               if (hasMcu) return cur
-              // Detect which pins the sketch uses (simple regex for digitalWrite calls)
               const usedPins = new Set<number>()
               const re = /digitalWrite\s*\(\s*(\w+)\s*,/g
               let m: RegExpExecArray | null
@@ -880,21 +871,23 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
               return { ...cur, components: newComps, wires: newWires }
             })
 
-            // ── Step 1: tsuki-core --emit-sim (synchronous, fire-and-wait) ────
+            // ── Step 1: transpile in-process (no tsuki-core.exe subprocess) ──
             try {
-              await runShell(coreBin, [tmpPath, '--board', boardName, '--emit-sim', bundlePath], projectPath ?? undefined)
+              await emitSimBundle(code, boardName, bundlePath)
             } catch (e) {
-              setSimLoadError(`tsuki-core: ${e instanceof Error ? e.message : String(e)}`)
+              setSimLoadError(e instanceof Error ? e.message : String(e))
               setSimStatus('error')
               return
             }
 
-            // ── Step 2: tsuki-sim --bundle (direct spawn, real PID → real kill) ─
+            // ── Step 2: run simulator in-process (no tsuki-sim.exe subprocess) ─
+            const simEventId = `sim-${Date.now()}`
             ;(window as any).__sandboxJsonHandler = (result: StepResult & { energy?: unknown }) => {
               const acc = accumRef.current
+              // Apply pin snapshot from this segment (emitted at each delay boundary by Rust)
               for (const [p, v] of Object.entries(result.pins)) {
                 acc.latestPins[p] = v as number
-                if ((acc.peakPins[p] ?? 0) < (v as number)) acc.peakPins[p] = v as number
+                acc.peakPins[p]   = v as number  // peakPins = latestPins (Rust handles timing)
               }
               if (result.serial?.length) acc.serial.push(...result.serial)
               acc.ms    = result.ms
@@ -910,11 +903,13 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
             if (tickRef.current) clearInterval(tickRef.current)
             tickRef.current = setInterval(flushAccum, 150)
             setSimStatus('running')
-            setSimLog([{ t: 0, level: 'info', msg: `▶ tsuki-sim · board=${boardName}` }])
+            setSimLog([{ t: 0, level: 'info', msg: `▶ simulator · board=${boardName}` }])
 
-            const handle = await spawnProcess(
-              simBin, ['--bundle', bundlePath, ...energyFlag],
-              projectPath ?? undefined,
+            const handle = await runSimulator(
+              simEventId,
+              code,
+              boardName,
+              undefined,
               (line) => {
                 if (!line.trim().startsWith('{')) return
                 try {
@@ -924,12 +919,6 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
               }
             )
             simHandleRef.current = handle
-
-            // Send initial inputs
-            for (const [pin, val] of Object.entries(analogInputs))
-              handle.write(JSON.stringify({ type: 'analog',   pin: Number(pin), val }) + '\n').catch(() => {})
-            for (const [pin, high] of Object.entries(digitalInputs))
-              handle.write(JSON.stringify({ type: 'digital',  pin: Number(pin), val: high ? 1 : 0 }) + '\n').catch(() => {})
 
             handle.done.then(() => {
               ;(window as any).__sandboxJsonHandler = null

@@ -1,7 +1,7 @@
 'use client'
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
-import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/ui/primitives'
+import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/shared/primitives'
 import {
   ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,

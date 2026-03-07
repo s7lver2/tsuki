@@ -2,13 +2,13 @@
 import { useStore } from '@/lib/store'
 import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { ContextMenuProvider } from '@/components/ui/ContextMenu'
-import SplashScreen from '@/components/ide/SplashScreen'
-import OnboardingModal from '@/components/ide/OnboardingModal'
+import { ContextMenuProvider } from '@/components/shared/ContextMenu'
+import SplashScreen from '@/components/screens/SplashScreen'
+import OnboardingModal from '@/components/other/OnboardingModal'
 
-const WelcomeScreen  = dynamic(() => import('@/components/ide/WelcomeScreen'),  { ssr: false })
-const IdeScreen      = dynamic(() => import('@/components/ide/IdeScreen'),      { ssr: false })
-const SettingsScreen = dynamic(() => import('@/components/ide/SettingsScreen'), { ssr: false })
+const WelcomeScreen  = dynamic(() => import('@/components/screens/WelcomeScreen'),  { ssr: false })
+const IdeScreen      = dynamic(() => import('@/components/screens/IdeScreen'),      { ssr: false })
+const SettingsScreen = dynamic(() => import('@/components/screens/SettingsScreen'), { ssr: false })
 const DocsScreen     = dynamic(() => import('@/components/docs/DocsScreen'),     { ssr: false })
 
 export default function Page() {

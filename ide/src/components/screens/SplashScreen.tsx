@@ -1,4 +1,5 @@
 'use client'
+import TsukiLogo from '@/components/shared/TsukiLogo'
 import { useEffect, useState } from 'react'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
@@ -60,22 +61,12 @@ export default function SplashScreen({ ready, onDone }: SplashScreenProps) {
             className="absolute inset-0 rounded-2xl opacity-20 blur-xl"
             style={{ background: 'var(--fg)', transform: 'scale(1.4)' }}
           />
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center relative"
-            style={{ background: 'var(--fg)' }}
-          >
-            <span
-              className="font-mono font-bold text-2xl leading-none"
-              style={{ color: 'var(--surface)' }}
-            >
-              G
-            </span>
-          </div>
+          <TsukiLogo size="lg" />
         </div>
 
         <div className="text-center">
           <div className="text-lg font-semibold tracking-tight" style={{ color: 'var(--fg)' }}>
-            Tsuki IDE
+            tsuki
           </div>
           <div className="text-xs mt-1 font-mono" style={{ color: 'var(--fg-faint)' }}>
             Go · Arduino · Firmware
@@ -93,7 +84,7 @@ export default function SplashScreen({ ready, onDone }: SplashScreenProps) {
             className="h-full rounded-full transition-all"
             style={{
               width: `${progress}%`,
-              background: 'var(--fg)',
+              background: '#4ade80',
               transitionDuration: progress === 100 ? '300ms' : '600ms',
               transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)',
             }}

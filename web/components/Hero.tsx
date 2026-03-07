@@ -145,14 +145,14 @@ export default function Hero() {
           <button onClick={copy} className="cmd-box" style={{ width: "100%" }}>
             <span style={{ fontFamily: "var(--f-mono)", fontSize: 12, color: "var(--accent)", opacity: 0.7, flexShrink: 0 }}>$</span>
             <span style={{ fontFamily: "var(--f-mono)", fontSize: 12.5, color: "#ccc", flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              curl -fsSL https://tsuki.sh/install.sh | sh
+              curl -fsSL https://tsuki.s7lver.xyz/install.sh | sh
             </span>
             <span style={{ padding: "3px 10px", background: copied ? "rgba(0,229,176,0.1)" : "rgba(255,255,255,0.04)", border: "1px solid", borderColor: copied ? "rgba(0,229,176,0.3)" : "var(--border)", borderRadius: 4, fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.06em", color: copied ? "var(--accent)" : "var(--fg-f)", transition: "all 0.2s", flexShrink: 0 }}>
               {copied ? "Copied!" : "Copy"}
             </span>
           </button>
           <p style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, color: "var(--fg-f)", textAlign: "center", marginTop: 10 }}>
-            macOS & Linux · Windows: <code style={{ color: "var(--s4)" }}>irm tsuki.sh/install.bat | iex</code>
+            macOS & Linux · Windows: <code style={{ color: "var(--s4)" }}>irm tsuki.s7lver.xyz/install.bat | iex</code>
           </p>
         </div>
 

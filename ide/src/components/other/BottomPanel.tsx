@@ -1,11 +1,11 @@
 'use client'
 import { useStore, BottomTab } from '@/lib/store'
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { IconBtn } from '@/components/ui/primitives'
+import { IconBtn } from '@/components/shared/primitives'
 import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Square } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
-import { spawnShell, listShells, type ProcessHandle, type ShellInfo } from '@/lib/tauri'
+import { spawnShell, listShells, spawnProcess, type ProcessHandle, type ShellInfo } from '@/lib/tauri'
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
@@ -422,26 +422,98 @@ function Terminal() {
     })
   }
 
+  // ── Direct spawn infrastructure ───────────────────────────────────────────
+  // Keeps stable refs so addLineToActive can be called from async contexts
+  // without stale-closure problems.
+  const activeIdxRef = useRef(activeIdx)
+  useEffect(() => { activeIdxRef.current = activeIdx }, [activeIdx])
+
+  // Appends a line directly into the active session's line list.
+  // Stable identity (useCallback + no deps) so it never goes stale.
+  const addLineToActive = useCallback((text: string, type: TerminalLine['type'] = 'out') => {
+    setSessions(prev => {
+      const idx   = activeIdxRef.current
+      const next  = [...prev]
+      const target = next[idx] ?? next[0]  // fallback to first session if index is off
+      if (!target) return prev
+      const ti = next.indexOf(target)
+      next[ti] = { ...target, lines: [...target.lines, { id: _lineId++, text, type }] }
+      return next
+    })
+  }, []) // eslint-disable-line
+
+  const setActiveRunning = useCallback((running: boolean) => {
+    setSessions(prev => {
+      const idx    = activeIdxRef.current
+      const next   = [...prev]
+      const target = next[idx] ?? next[0]
+      if (!target) return prev
+      const ti = next.indexOf(target)
+      next[ti] = { ...target, running }
+      return next
+    })
+  }, []) // eslint-disable-line
+
   const spawnFnRef = useRef<((cmd: string, args: string[], cwd?: string) => Promise<ProcessHandle>) | null>(null)
 
-  // Consume pendingCommand from the store — no window globals, no timeouts
+  // ── Consume pendingCommand via DIRECT process spawn ───────────────────────
+  // Button actions (Check / Build / Flash / Run / Monitor) bypass the
+  // interactive shell entirely and call Rust's spawn_process directly.
+  //
+  // Why this fixes the Windows bug:
+  //   • spawn_process calls resolve_cmd() which runs `where.exe` with an
+  //     enriched PATH that includes all common per-user install locations.
+  //   • The enriched PATH is also passed as env to the child process.
+  //   • No shell is involved, so there are no cmd.exe PATH-resolution quirks,
+  //     no CREATE_NO_WINDOW races, and no piped-stdin timing issues.
+  //   • Works identically on macOS/Linux (which keyword via which(1)).
+  //
+  // Interactive commands typed by the user still go through the shell session
+  // (spawnFnRef / spawnInSession) — full shell experience preserved.
   useEffect(() => {
-    if (!pendingCommand || !spawnFnRef.current) return
+    if (!pendingCommand) return
     const { cmd, args, cwd, chainArgs } = pendingCommand
     clearPendingCommand()
-    const spawn = spawnFnRef.current
+
+    const runDirect = async (cmdStr: string, argsArr: string[], cwdStr?: string): Promise<number> => {
+      const label = [cmdStr, ...argsArr].join(' ')
+      setActiveRunning(true)
+
+      try {
+        const handle = await spawnInSession(cmdStr, argsArr, cwdStr)
+        const code = await handle.done
+        handle.dispose()
+        setActiveRunning(false)
+        useStore.getState().refreshTree().catch(() => {})
+        if (code !== 0) addLineToActive(`[exit ${code}]`, 'err')
+        return code
+      } catch (e) {
+        const msg = String(e)
+        addLineToActive(`[error: ${msg}]`, 'err')
+        useStore.getState().addLog('err', msg)
+        setActiveRunning(false)
+        return 1
+      }
+    }
+        if (code !== 0) addLineToActive(`[exit ${code}]`, 'err')
+        return code
+      } catch (e) {
+        const msg = String(e)
+        addLineToActive(`[error: ${msg}]`, 'err')
+        useStore.getState().addLog('err', msg)
+        setActiveRunning(false)
+        return 1
+      }
+    }
+
     if (chainArgs) {
-      // Chain: run first command, then second only if exit code is 0
-      spawn(cmd, args, cwd).then(handle => {
-        if (!handle) return
-        handle.done.then(code => {
-          if (code === 0) spawn(cmd, chainArgs, cwd)
-        })
+      runDirect(cmd, args, cwd).then(code => {
+        if (code === 0) runDirect(cmd, chainArgs, cwd)
       })
     } else {
-      spawn(cmd, args, cwd)
+      runDirect(cmd, args, cwd)
     }
-  }, [pendingCommand, clearPendingCommand])
+  }, [pendingCommand, clearPendingCommand, addLineToActive, setActiveRunning])
 
   if (loadingShells) {
     return (

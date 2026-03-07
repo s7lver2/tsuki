@@ -16,10 +16,6 @@ path = "src/main.rs"
 name = "tsuki-flash"
 path = "flash/main.rs"
 
-[[bin]]
-name = "tsuki-sim"
-path = "sim/main.rs"
-
 # ─── library (used by CLI / IDE integrations) ─────────────────
 [lib]
 name = "tsuki_core"

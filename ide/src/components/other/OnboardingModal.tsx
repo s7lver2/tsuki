@@ -21,13 +21,13 @@ interface Step {
 const STEPS: Step[] = [
   {
     id: 'welcome',
-    title: 'Welcome to Tsuki IDE',
+    title: 'Welcome to tsuki',
     subtitle: 'A quick guide to get you up and running',
     icon: <span className="text-3xl">🚀</span>,
   },
   {
     id: 'usage',
-    title: 'How will you use Tsuki?',
+    title: 'How will you use tsuki?',
     subtitle: 'Personal use is free · Professional use requires a license',
     icon: <span className="text-3xl">🏷️</span>,
   },
@@ -316,7 +316,7 @@ function UsageStep({
   return (
     <div className="flex flex-col gap-5">
       <p className="text-sm text-[var(--fg-muted)] leading-relaxed">
-        Tsuki is <strong className="text-[var(--fg)]">free for personal use</strong>. Professional use in a commercial context requires a license key.
+        tsuki is <strong className="text-[var(--fg)]">free for personal use</strong>. Professional use in a commercial context requires a license key.
       </p>
 
       <div className="grid grid-cols-2 gap-3">
@@ -421,7 +421,7 @@ function WelcomeStep() {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-[var(--fg-muted)] leading-relaxed">
-        Tsuki lets you write Arduino firmware in <strong className="text-[var(--fg)]">Go</strong>. The IDE handles transpiling your code to C++, compiling it, and flashing it to your board — all in one place.
+        tsuki lets you write Arduino firmware in <strong className="text-[var(--fg)]">Go</strong>. The IDE handles transpiling your code to C++, compiling it, and flashing it to your board — all in one place.
       </p>
 
       <div className="grid grid-cols-3 gap-3 mt-2">

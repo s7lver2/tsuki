@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Tsuki IDE',
+  title: 'tsuki',
   description: 'Write in Go · Upload in C++ · Made for Arduino',
 }
 
