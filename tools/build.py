@@ -30,7 +30,7 @@ import textwrap
 # ─────────────────────────────────────────────
 #  CONFIGURACIÓN CENTRAL
 # ─────────────────────────────────────────────
-PROJECT_ROOT   = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_NAME       = "tsuki"
 BINARY         = "tsuki"          # CLI principal
 CORE_BINARY    = "tsuki-core"

@@ -67,6 +67,8 @@ export interface PackageEntry {
   version: string
   installed: boolean
   installing?: boolean
+  /** Latest version URL from registry (used to fetch toml for details) */
+  url?: string
 }
 
 export interface RecentProject {
@@ -115,7 +117,6 @@ export interface SettingsState {
   expLspEnabled: boolean
   // ── Developer ─────────────────────────────────────────────────────────────
   developerOptions: boolean
-  winSpawnMethod: 'shell' | 'direct' | 'detached'  // Windows-only spawn strategy
   // ── Language / i18n ──────────────────────────────────────────────────────
   language: 'en' | 'es'
   // ── Docs ─────────────────────────────────────────────────────────────────
@@ -144,6 +145,8 @@ export interface SettingsState {
   lspAutoDownloadLibs: boolean  // silently download missing libs without prompting
   lspShowLibPrompt: boolean     // show popup when a missing lib import is detected
   lspIgnoredLibs: string[]      // libs the user has clicked "don't ask again" for
+  // ── Windows ──────────────────────────────────────────────────────────────
+  winSpawnMethod: 'shell' | 'direct' | 'detached'
 }
 
 interface AppState {
@@ -205,6 +208,8 @@ interface AppState {
   settings: SettingsState
   updateSetting: <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => void
   packages: PackageEntry[]
+  packagesLoaded: boolean
+  setPackages: (packages: PackageEntry[]) => void
   togglePackage: (name: string) => void
   setPackageInstalling: (name: string, installing: boolean) => void
   recentProjects: RecentProject[]
@@ -258,18 +263,6 @@ function ts() {
 
 let logId = 0
 
-const DEFAULT_PACKAGES: PackageEntry[] = [
-  { name: 'dht',           desc: 'DHT11/DHT22 temperature & humidity sensor', version: 'v1.0.0', installed: true  },
-  { name: 'ws2812',        desc: 'NeoPixel / WS2812 LED strip driver',        version: 'v1.0.0', installed: true  },
-  { name: 'u8g2',          desc: 'OLED / LCD display library (SSD1306, etc)', version: 'v1.0.0', installed: true  },
-  { name: 'Servo',         desc: 'Servo motor control',                       version: 'v1.0.0', installed: false },
-  { name: 'LiquidCrystal', desc: 'LCD display (parallel, HD44780)',           version: 'v1.0.0', installed: false },
-  { name: 'IRremote',      desc: 'Infrared remote receiver/transmitter',      version: 'v1.0.0', installed: false },
-  { name: 'RTClib',        desc: 'Real-time clock — DS1307 / DS3231',         version: 'v1.0.0', installed: false },
-  { name: 'MFRC522',       desc: 'SPI RFID reader/writer',                   version: 'v1.0.0', installed: false },
-  { name: 'Stepper',       desc: 'Stepper motor driver (4-wire)',             version: 'v1.0.0', installed: false },
-  { name: 'Adafruit_GFX', desc: 'Adafruit graphics core library',            version: 'v1.0.0', installed: false },
-]
 
 const DEFAULT_SETTINGS: SettingsState = {
   tsukiPath: '',
@@ -304,7 +297,6 @@ const DEFAULT_SETTINGS: SettingsState = {
   expGitEnabled: false,
   expLspEnabled: false,
   developerOptions: false,
-  winSpawnMethod: 'shell',    // default: route through shell session (most robust)
   // advanced
   tsukiFlashPath: '',
   insertSpaces: true,
@@ -327,6 +319,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   lspAutoDownloadLibs: false,
   lspShowLibPrompt: true,
   lspIgnoredLibs: [],
+  winSpawnMethod: 'shell',
   language: 'en',
   docsLang: 'en',
   fontRendering: 'auto',
@@ -810,7 +803,9 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
-  packages: DEFAULT_PACKAGES,
+  packages: [],
+  packagesLoaded: false,
+  setPackages: (packages) => set({ packages, packagesLoaded: true }),
   togglePackage: (name) => set((s) => ({ packages: s.packages.map(p => p.name === name ? { ...p, installed: !p.installed } : p) })),
   setPackageInstalling: (name, installing) => set((s) => ({ packages: s.packages.map(p => p.name === name ? { ...p, installing } : p) })),
 

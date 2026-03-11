@@ -1,6 +1,7 @@
 'use client'
 import { useStore } from '@/lib/store'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { loadRegistry } from '@/lib/packageRegistry'
 import {
   Package, RefreshCw, Plus, Minus, Search,
   ExternalLink,
@@ -13,6 +14,7 @@ export default function PackagesSidebar() {
     packages, togglePackage, setPackageInstalling,
     addLog, settings, projectPath,
     dispatchCommand, setBottomTab,
+    setPackages, packagesLoaded,
   } = useStore()
   const [query, setQuery] = useState('')
 
@@ -20,6 +22,20 @@ export default function PackagesSidebar() {
   const cwd   = projectPath || undefined
 
   const [exeWarning, setExeWarning] = useState<{ command: string; action: () => void } | null>(null)
+  const [loadError, setLoadError]   = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  // Load package list from registry on first mount (or when URL changes)
+  useEffect(() => {
+    if (packagesLoaded) return
+    const url = settings.registryUrl?.trim()
+    if (!url) return
+    loadRegistry(url, packages).then(entries => {
+      setPackages(entries)
+      setLoadError(false)
+    }).catch(() => setLoadError(true))
+  }, [settings.registryUrl]) // eslint-disable-line
+
 
   function guardExe(command: string, action: () => void) {
     if (tsuki.toLowerCase().endsWith('.exe')) setExeWarning({ command, action })
@@ -59,6 +75,18 @@ export default function PackagesSidebar() {
   }
 
   async function handleRefresh() {
+    const url = settings.registryUrl?.trim()
+    if (url) {
+      setRefreshing(true)
+      setLoadError(false)
+      import('@/lib/packageRegistry').then(({ loadRegistry, invalidateRegistryCache }) => {
+        invalidateRegistryCache()
+        loadRegistry(url, packages, true).then(entries => {
+          setPackages(entries)
+        }).catch(() => setLoadError(true)).finally(() => setRefreshing(false))
+      })
+    }
+    // Also run CLI list for terminal feedback
     const args = ['pkg', 'list']
     const cmd = `${tsuki} ${args.join(' ')}`
     guardExe(cmd, () => {
@@ -97,7 +125,7 @@ export default function PackagesSidebar() {
             onClick={handleRefresh}
             className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent transition-colors"
           >
-            <RefreshCw size={11} />
+            <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
@@ -133,7 +161,19 @@ export default function PackagesSidebar() {
           </>
         )}
 
-        {filtered.length === 0 && (
+        {!packagesLoaded && !loadError && (
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-[var(--fg-faint)]">
+            <RefreshCw size={16} className="animate-spin" />
+            <span className="text-xs">Loading registry…</span>
+          </div>
+        )}
+        {loadError && (
+          <div className="flex flex-col items-center justify-center gap-2 py-6 px-3 text-center">
+            <span className="text-[11px] text-[var(--err)]">Failed to load registry</span>
+            <span className="text-[10px] text-[var(--fg-faint)]">Check your registry URL in settings</span>
+          </div>
+        )}
+        {packagesLoaded && filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 py-8 text-[var(--fg-faint)]">
             <Package size={20} />
             <span className="text-xs">No packages found</span>

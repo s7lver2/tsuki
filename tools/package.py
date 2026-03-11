@@ -79,5 +79,8 @@ def zip_directory(dir_path='.', zip_path='archive.zip', additional_ignores=[]):
 
 # Usage: zip the current directory, with optional additional ignores
 if __name__ == '__main__':
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _out  = _os.path.join(_root, 'archive.zip')
     # Example: additional_ignores = ['some_dir/', 'another_dir/file.txt']
-    zip_directory(additional_ignores=[])
+    zip_directory(dir_path=_root, zip_path=_out, additional_ignores=[])

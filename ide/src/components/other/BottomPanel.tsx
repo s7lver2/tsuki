@@ -131,13 +131,10 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
 }
 
 // ── XtermView — xterm.js display + spawnShell backend ────────────────────────
-//
-// Uses the existing spawnShell (works on all platforms including Windows) as
-// the process backend, and xterm.js purely as the renderer.
-// portable-pty is not used because ConPTY conflicts with win_proc.rs on Windows.
 
 interface XtermViewProps {
   session: PtySession; projectPath: string | null
+  isActive: boolean
   onAlive: (b: boolean) => void; onRunning: (b: boolean) => void
   onReady: (sendFn: (cmd: string, args: string[]) => Promise<number>) => void
 }
@@ -146,6 +143,7 @@ let _xtermLoading: Promise<void> | null = null
 function loadXterm(): Promise<void> {
   if (_xtermLoading) return _xtermLoading
   _xtermLoading = new Promise<void>((resolve, reject) => {
+    const fail = (e: Error) => { _xtermLoading = null; reject(e) }
     if (typeof window === 'undefined') { reject(new Error('no window')); return }
     if ((window as any).Terminal) { resolve(); return }
     const CSS = `https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css`
@@ -156,10 +154,10 @@ function loadXterm(): Promise<void> {
       document.head.appendChild(l)
     }
     const s1 = document.createElement('script'); s1.src = JS
-    s1.onerror = () => reject(new Error('Failed to load xterm from CDN'))
+    s1.onerror = () => fail(new Error('Failed to load xterm from CDN'))
     s1.onload  = () => {
       const s2 = document.createElement('script'); s2.src = FIT
-      s2.onerror = () => reject(new Error('Failed to load addon-fit from CDN'))
+      s2.onerror = () => fail(new Error('Failed to load addon-fit from CDN'))
       s2.onload  = () => resolve()
       document.head.appendChild(s2)
     }
@@ -168,12 +166,22 @@ function loadXterm(): Promise<void> {
   return _xtermLoading
 }
 
-function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermViewProps) {
+function XtermView({ session, projectPath, isActive, onAlive, onRunning, onReady }: XtermViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef      = useRef<any>(null)
   const fitRef       = useRef<any>(null)
   const handleRef    = useRef<any>(null)
   const resolveRef   = useRef<((code: number) => void) | null>(null)
+
+  // Re-fit whenever the tab becomes visible (xterm can't measure a display:none container)
+  useEffect(() => {
+    if (!isActive || !fitRef.current || !termRef.current) return
+    // rAF ensures the browser has painted and the container has real dimensions
+    const id = requestAnimationFrame(() => {
+      try { fitRef.current?.fit() } catch { /* ignore */ }
+    })
+    return () => cancelAnimationFrame(id)
+  }, [isActive])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -198,7 +206,7 @@ function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermV
           fontSize:         12, lineHeight: 1.4,
           cursorBlink:      true, cursorStyle: 'bar',
           scrollback:       5000,
-          convertEol:       true,  // spawnShell sends \n, xterm needs \r\n
+          convertEol:       true,
           allowProposedApi: true,
           theme: {
             background:          v('--surface-1') ?? '#1a1a1a',
@@ -224,11 +232,9 @@ function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermV
         termRef.current = term
         fitRef.current  = fitAddon
 
-        // ── Launch interactive shell ───────────────────────────────────────────
         term.writeln(`\x1b[90mLaunching ${session.shell.name}…\x1b[0m`)
 
         const handle = await spawnShell(session.shell, projectPath ?? undefined, (line, isErr) => {
-          // Shell prompt + interactive output (not dispatch output — see onReady)
           term.writeln(isErr ? `\x1b[31m${line}\x1b[0m` : line)
         })
 
@@ -239,12 +245,9 @@ function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermV
           term.writeln(`\r\n\x1b[90m[${session.shell.name} exited — code ${code}]\x1b[0m`)
           onAlive(false); onRunning(false)
           resolveRef.current?.(code)
-          resolveRef.current = null; sentinelRef.current = null
+          resolveRef.current = null
         })
 
-        // ── Local line buffer (no PTY = no echo/line-editing from shell) ──────
-        // xterm fires onData per keystroke. Without a PTY the shell receives
-        // raw bytes immediately — buffer locally, echo on screen, send on Enter.
         let lineBuf = ''
         term.onData((data: string) => {
           const code = data.charCodeAt(0)
@@ -263,10 +266,6 @@ function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermV
           }
         })
 
-        // ── Toolbar dispatch: uses spawnProcess directly ───────────────────────
-        // When the user clicks Check / Build / Flash, we DON'T route through the
-        // interactive shell. Instead we call spawnProcess directly so the child
-        // inherits our pipe — no separate console window, output streams here.
         onReady((cmd: string, args: string[]): Promise<number> => {
           const p = new Promise<number>(r => { resolveRef.current = r })
           onRunning(true)
@@ -340,7 +339,6 @@ function XtermView({ session, projectPath, onAlive, onRunning, onReady }: XtermV
   )
 }
 
-
 // ── Fallback line type (Path B direct-spawn output) ───────────────────────────
 
 interface FbLine { id: number; text: string; type: 'out'|'err'|'info'|'prompt' }
@@ -349,7 +347,7 @@ let _lid = 0
 // ── Terminal: session manager ─────────────────────────────────────────────────
 
 function Terminal() {
-  const { projectPath, pendingCommand, clearPendingCommand, settings } = useStore()
+  const { projectPath, pendingCommand, clearPendingCommand, settings, bottomTab } = useStore()
   const t = useT()
   const [shells,        setShells       ] = useState<ShellInfo[]>([])
   const [sessions,      setSessions     ] = useState<PtySession[]>([])
@@ -399,7 +397,6 @@ function Terminal() {
     })
   }
 
-  // ── Consume pendingCommand ────────────────────────────────────────────────
   useEffect(() => {
     if (!pendingCommand) return
     const { cmd, args, cwd, chainArgs } = pendingCommand
@@ -407,7 +404,6 @@ function Terminal() {
     const method = settingsRef.current.winSpawnMethod ?? 'shell'
 
     const run = async (cmdStr: string, argsArr: string[], cwdStr?: string): Promise<number> => {
-      // Path A — through PTY (xterm.js, real-time, no buffering)
       if (method === 'shell') {
         const sess   = sessions[activeIdxRef.current]
         const sendFn = sess ? sendFnsRef.current[sess.id] : null
@@ -434,7 +430,6 @@ function Terminal() {
         }
       }
 
-      // Path B — direct spawn (fallback / 'direct' / 'detached' mode)
       const label = [cmdStr, ...argsArr].join(' ')
       addFb(`❯ ${label}`, 'prompt')
       updateSession(activeIdxRef.current, { running: true })
@@ -465,7 +460,6 @@ function Terminal() {
     }
   }, [pendingCommand, clearPendingCommand, addFb, sessions])
 
-  // ── Render ────────────────────────────────────────────────────────────────
   if (loadingShells) return (
     <div className="flex-1 flex items-center justify-center text-xs text-[var(--fg-faint)]">
       <span className="animate-spin mr-2">⟳</span>Detecting shells…
@@ -499,11 +493,11 @@ function Terminal() {
       <ShellTabBar shells={shells} sessions={sessions} activeIdx={activeIdx}
         onSelect={setActiveIdx} onNewSession={newSession} onClose={closeSession} loading={loadingShells} />
 
-      {/* All PTY sessions — mounted permanently, hidden when inactive */}
       {sessions.map((s, i) => (
         <div key={s.id} className={clsx('flex-1 flex flex-col overflow-hidden', i !== activeIdx && 'hidden')}>
           <XtermView
             session={s} projectPath={projectPath}
+            isActive={i === activeIdx && bottomTab === 'terminal'}
             onAlive={b  => updateSession(i, { alive: b })}
             onRunning={b => updateSession(i, { running: b })}
             onReady={fn  => { sendFnsRef.current[s.id] = fn }}
@@ -511,7 +505,6 @@ function Terminal() {
         </div>
       ))}
 
-      {/* Path B fallback overlay — shows direct-spawn output above xterm */}
       {fbLines.length > 0 && (
         <div className="absolute bottom-0 left-0 right-0 max-h-40 overflow-y-auto bg-[var(--surface-1)]/95 border-t border-[var(--border)] px-3 py-2 font-mono text-[11px] z-20">
           {fbLines.map(l => (
@@ -609,7 +602,6 @@ export default function BottomPanel() {
 
       {bottomTab === 'problems' && <ProblemsTab />}
 
-      {/* Terminal — always mounted so PTY sessions survive tab switches */}
       <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'terminal' && 'hidden')}>
         <Terminal />
       </div>
