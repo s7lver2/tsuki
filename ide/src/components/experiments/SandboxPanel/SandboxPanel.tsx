@@ -81,26 +81,15 @@ function CompShape({
       )}
 
       {/* Body */}
-      {type === 'arduino_uno'    && <ArduinoUnoBody    w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'arduino_nano'   && <ArduinoNanoBody   w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'led'            && <LedBody            w={def.w} h={def.h} color={color} on={ledOn} label={label} />}
-      {type === 'led_rgb'        && <LedRgbBody         w={def.w} h={def.h} label={label} />}
-      {type === 'resistor'       && <ResistorBody       w={def.w} h={def.h} label={label} props={comp.props} />}
-      {type === 'capacitor'      && <CapacitorBody      w={def.w} h={def.h} label={label} />}
-      {type === 'transistor_npn' && <TransistorBody     w={def.w} h={def.h} label={label} />}
-      {type === 'button'         && <ButtonBody         w={def.w} h={def.h} label={label} />}
-      {type === 'potentiometer'  && <PotBody            w={def.w} h={def.h} label={label} />}
-      {type === 'buzzer'         && <BuzzerBody         w={def.w} h={def.h} label={label} />}
-      {type === 'servo'          && <ServoBody          w={def.w} h={def.h} label={label} />}
-      {type === 'dht11'          && <Dht11Body          w={def.w} h={def.h} label={label} />}
-      {type === 'ldr'            && <LdrBody            w={def.w} h={def.h} label={label} />}
-      {type === 'ultrasonic'     && <UltrasonicBody     w={def.w} h={def.h} label={label} />}
-      {type === 'ir_sensor'      && <IrSensorBody       w={def.w} h={def.h} label={label} />}
-      {type === 'lcd_16x2'       && <LcdBody            w={def.w} h={def.h} label={label} />}
-      {type === 'seven_seg'      && <SevenSegBody       w={def.w} h={def.h} label={label} simPinValues={simPinValues} compId={comp.id} />}
-      {type === 'vcc_node'       && <VccNodeBody        w={def.w} h={def.h} label={label} />}
-      {type === 'gnd_node'       && <GndNodeBody        w={def.w} h={def.h} label={label} />}
-      {type === 'power_rail'     && <PowerRailBody      w={def.w} h={def.h} label={label} />}
+      {type === 'arduino_uno' && <ArduinoUnoBody w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'arduino_nano' && <ArduinoNanoBody w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'xiao_rp2040' && <XiaoRP2040Body w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'led' && <LedBody w={def.w} h={def.h} color={color} on={ledOn} label={label} />}
+      {type === 'resistor' && <ResistorBody w={def.w} h={def.h} color={color} label={label} props={comp.props} />}
+      {type === 'button' && <ButtonBody w={def.w} h={def.h} label={label} />}
+      {type === 'potentiometer' && <PotBody w={def.w} h={def.h} label={label} />}
+      {type === 'buzzer' && <BuzzerBody w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'power_rail' && <PowerRailBody w={def.w} h={def.h} label={label} />}
 
       {/* Pins + hover tooltip */}
       {def.pins.map(pin => {
@@ -293,86 +282,63 @@ function ArduinoNanoBody({ w, h, color, label }: { w: number; h: number; color: 
   )
 }
 
+function XiaoRP2040Body({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
+  const c = color || '#1c3a5e'
+  return (
+    <>
+      {/* Board */}
+      <rect width={w} height={h} rx={4} fill={c} />
+      {/* USB-C connector on top */}
+      <rect x={w * 0.3} y={-4} width={w * 0.4} height={6} rx={2} fill="#555" />
+      <rect x={w * 0.33} y={-3} width={w * 0.34} height={3} rx={1} fill="#888" />
+      {/* RP2040 chip */}
+      <rect x={w * 0.18} y={h * 0.28} width={w * 0.64} height={h * 0.36} rx={2} fill="#111" stroke="#333" strokeWidth={0.5} />
+      <text x={w * 0.5} y={h * 0.44} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.5)"
+        fontFamily="var(--font-sans)" fontWeight="600">RP2040</text>
+      <text x={w * 0.5} y={h * 0.53} textAnchor="middle" fontSize={4.5} fill="rgba(255,255,255,0.35)"
+        fontFamily="var(--font-sans)">133 MHz</text>
+      {/* NeoPixel LED indicator */}
+      <circle cx={w * 0.5} cy={h * 0.76} r={3} fill="#222" stroke="#444" strokeWidth={0.5} />
+      {/* Label */}
+      <text x={w * 0.5} y={h * 0.14} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.7)"
+        fontFamily="var(--font-sans)" fontWeight="700">XIAO</text>
+      <text x={w * 0.5} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
+        fontFamily="var(--font-sans)">{label}</text>
+    </>
+  )
+}
+
 function LedBody({ w, h, color, on, label }: { w: number; h: number; color: string; on: boolean; label: string }) {
-  const bodyCol = color || '#ef4444'
-  const cx = w / 2
-  // LED shape: dome top, flat cylinder bottom, two leads
+  const glow = on ? color : 'transparent'
   return (
     <>
-      {/* Glow */}
-      {on && <ellipse cx={cx} cy={h * 0.38} rx={22} ry={22} fill={bodyCol} opacity={0.15} />}
-      {on && <ellipse cx={cx} cy={h * 0.38} rx={14} ry={14} fill={bodyCol} opacity={0.12} />}
-
-      {/* Anode lead (longer) */}
-      <line x1={cx - 3} y1={h * 0.62} x2={cx - 3} y2={h} stroke="#aaa" strokeWidth={1.5} />
-      {/* Cathode lead (shorter, flat side) */}
-      <line x1={cx + 3} y1={h * 0.62} x2={cx + 3} y2={h * 0.9} stroke="#aaa" strokeWidth={1.5} />
-      <line x1={cx + 3} y1={h * 0.9} x2={cx + 3} y2={h} stroke="#aaa" strokeWidth={1.5} />
-
-      {/* Body: cylinder */}
-      <rect x={cx - w * 0.35} y={h * 0.42} width={w * 0.7} height={h * 0.22} rx={1}
-        fill={on ? bodyCol : bodyCol + '70'} stroke={bodyCol} strokeWidth={0.8} />
-      {/* Flat edge indicator (cathode) */}
-      <rect x={cx + w * 0.12} y={h * 0.42} width={w * 0.22} height={h * 0.22}
-        fill={on ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.35)'} />
-      {/* Dome */}
-      <path d={`M ${cx - w*0.35} ${h*0.42} A ${w*0.35} ${h*0.2} 0 0 1 ${cx + w*0.35} ${h*0.42}`}
-        fill={on ? bodyCol : bodyCol + '90'} stroke={bodyCol} strokeWidth={0.8} />
-      {/* Lens highlight */}
-      <ellipse cx={cx - w * 0.08} cy={h * 0.3} rx={w * 0.08} ry={h * 0.07}
-        fill="rgba(255,255,255,0.3)" />
-
-      <CompLabel x={cx} y={h + 11} text={label} />
-    </>
-  )
-}
-
-function LedRgbBody({ w, h, label }: { w: number; h: number; label: string }) {
-  const cx = w / 2
-  return (
-    <>
-      {/* 4 leads */}
-      {[-w*0.3, -w*0.1, w*0.1, w*0.3].map((ox, i) => (
-        <line key={i} x1={cx + ox} y1={h * 0.62} x2={cx + ox} y2={h} stroke="#aaa" strokeWidth={1.5} />
-      ))}
-      {/* Cylinder */}
-      <rect x={cx - w * 0.42} y={h * 0.42} width={w * 0.84} height={h * 0.22} rx={1}
-        fill="#eee" stroke="#ccc" strokeWidth={0.8} />
-      {/* Dome with RGB gradient */}
-      <defs>
-        <radialGradient id="rgb-led-grad" cx="50%" cy="70%" r="50%">
-          <stop offset="0%" stopColor="#ff5555" />
-          <stop offset="40%" stopColor="#55ff55" />
-          <stop offset="100%" stopColor="#5555ff" />
-        </radialGradient>
-      </defs>
-      <path d={`M ${cx - w*0.42} ${h*0.42} A ${w*0.42} ${h*0.22} 0 0 1 ${cx + w*0.42} ${h*0.42}`}
-        fill="url(#rgb-led-grad)" stroke="#ccc" strokeWidth={0.8} />
-      <ellipse cx={cx - w * 0.08} cy={h * 0.28} rx={w * 0.09} ry={h * 0.07}
-        fill="rgba(255,255,255,0.4)" />
-      <CompLabel x={cx} y={h + 11} text={label} />
-    </>
-  )
-}
-
-function ResistorBody({ w, h, label, props }: { w: number; h: number; label: string; props: Record<string, string | number> }) {
-  const ohms = Number(props.ohms) || 1000
-  // Compute color bands from value
-  const COLORS = ['#1a1a1a','#7b4f1e','#e03030','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#888','#f0f0f0']
-  let bands: string[]
-  if (ohms < 10)        bands = [COLORS[ohms],COLORS[0],COLORS[0],'#c8a832']
-  else if (ohms < 100)  bands = [COLORS[Math.floor(ohms/10)],COLORS[ohms%10],COLORS[0],'#c8a832']
-  else if (ohms < 1000) bands = [COLORS[Math.floor(ohms/100)],COLORS[Math.floor((ohms%100)/10)],COLORS[ohms%10],'#c8a832']
-  else                  bands = [COLORS[Math.floor(ohms/1000)%10],COLORS[Math.floor((ohms%1000)/100)],COLORS[2],'#c8a832']
-  const val = ohms >= 1000 ? `${(ohms/1000).toFixed(ohms%1000?1:0)}kΩ` : `${ohms}Ω`
-  const mid = h / 2
-  return (
-    <>
-      {/* Leads */}
-      <line x1={0} y1={mid} x2={w * 0.18} y2={mid} stroke="#aaa" strokeWidth={1.5} />
-      <line x1={w * 0.82} y1={mid} x2={w} y2={mid} stroke="#aaa" strokeWidth={1.5} />
+      {on && <ellipse cx={w / 2} cy={h * 0.4} rx={18} ry={18} fill={color} opacity={0.18} />}
+      {/* Lead lines */}
+      <line x1={w / 2} y1={0} x2={w / 2} y2={h * 0.28} stroke="#888" strokeWidth={1.5} />
+      <line x1={w / 2} y1={h * 0.6} x2={w / 2} y2={h} stroke="#888" strokeWidth={1.5} />
       {/* Body */}
-      <rect x={w * 0.18} y={h * 0.16} width={w * 0.64} height={h * 0.68} rx={h * 0.34}
+      <ellipse cx={w / 2} cy={h * 0.42} rx={w * 0.45} ry={h * 0.18}
+        fill={on ? color : color + '55'} stroke={color} strokeWidth={1} />
+      <rect x={w * 0.15} y={h * 0.22} width={w * 0.7} height={h * 0.2} rx={1}
+        fill={on ? color : color + '55'} stroke={color} strokeWidth={1} />
+      {/* Flat edge (cathode) */}
+      <rect x={w * 0.35} y={h * 0.38} width={w * 0.15} height={h * 0.12} rx={0} fill="rgba(0,0,0,0.3)" />
+      {on && <filter id={`glow-${label}`}><feGaussianBlur stdDeviation="3" result="blur" />
+        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>}
+      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
+        fontFamily="var(--font-sans)">{label}</text>
+    </>
+  )
+}
+
+function ResistorBody({ w, h, label, props }: { w: number; h: number; color: string; label: string; props: Record<string, string | number> }) {
+  const val = props.ohms ? `${props.ohms}Ω` : '1kΩ'
+  const bands = ['#f59e0b', '#555', '#a37a2c', '#ffd700']
+  return (
+    <>
+      <line x1={0} y1={h / 2} x2={w * 0.2} y2={h / 2} stroke="#888" strokeWidth={1.5} />
+      <line x1={w * 0.8} y1={h / 2} x2={w} y2={h / 2} stroke="#888" strokeWidth={1.5} />
+      <rect x={w * 0.2} y={h * 0.15} width={w * 0.6} height={h * 0.7} rx={h * 0.35}
         fill="#c4a265" stroke="#8a6620" strokeWidth={0.8} />
       {/* Highlight top */}
       <ellipse cx={w * 0.5} cy={h * 0.28} rx={w * 0.22} ry={h * 0.1}
@@ -799,7 +765,7 @@ interface WireInProgress {
 }
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
-  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit } = useStore()
+  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit, projectLanguage } = useStore()
   const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
 
   // View state
@@ -1389,7 +1355,8 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
           if (simRunning) { handleStop(); return }
           const code = activeTab?.content ?? ''
           if (!code.trim()) {
-            setSimLog([{ t: 0, level: 'err', msg: '⚠ No file open — open a .go file first' }])
+            const hint = projectLanguage === 'cpp' ? 'a .cpp file' : projectLanguage === 'ino' ? 'a .ino file' : 'a .go file'
+            setSimLog([{ t: 0, level: 'err', msg: `⚠ No file open — open ${hint} first` }])
             return
           }
           setSimStatus('loading')
@@ -1408,11 +1375,15 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
               const hasMcu = cur.components.some(c => COMP_DEFS[c.type]?.category === 'mcu')
               if (hasMcu) return cur
               const usedPins = new Set<number>()
-              const re = /digitalWrite\s*\(\s*(\w+)\s*,/g
-              let m: RegExpExecArray | null
-              while ((m = re.exec(code)) !== null) {
-                const n = parseInt(m[1])
-                if (!isNaN(n)) usedPins.add(n)
+              // Detect pins from both C++ (digitalWrite) and Go (arduino.DigitalWrite)
+              const reC  = /digitalWrite\s*\(\s*(\w+)\s*,/g
+              const reGo = /arduino\.DigitalWrite\s*\(\s*(\w+)\s*,/g
+              for (const re of [reC, reGo]) {
+                let m: RegExpExecArray | null
+                while ((m = re.exec(code)) !== null) {
+                  const n = parseInt(m[1])
+                  if (!isNaN(n)) usedPins.add(n)
+                }
               }
               if (/LED_BUILTIN/.test(code)) usedPins.add(13)
               const pinList = usedPins.size > 0 ? Array.from(usedPins) : [13]
@@ -1537,7 +1508,8 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                 </span>
               ) : (
                 <span className="text-[10px] text-[var(--fg-faint)] flex items-center gap-1">
-                  <AlertCircle size={9}/> Open a .go file
+                  <AlertCircle size={9}/>
+                  {projectLanguage === 'cpp' ? 'Open a .cpp file' : projectLanguage === 'ino' ? 'Open a .ino file' : 'Open a .go file'}
                 </span>
               )}
 

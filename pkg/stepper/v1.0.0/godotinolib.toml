@@ -1,0 +1,123 @@
+[package]
+name        = "stepper"
+version     = "1.0.0"
+description = "AccelStepper — stepper motor driver with acceleration and speed control"
+author      = "tsuki-team"
+cpp_header  = "AccelStepper.h"
+arduino_lib = "AccelStepper"
+cpp_class   = "AccelStepper"
+
+aliases = ["accelstepper", "AccelStepper"]
+
+# ── Constructor ───────────────────────────────────────────────────────────────
+[[function]]
+go  = "New"
+cpp = "AccelStepper({0}, {1}, {2})"
+
+[[function]]
+go  = "NewFourWire"
+cpp = "AccelStepper(AccelStepper::FULL4WIRE, {0}, {1}, {2}, {3})"
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+[[function]]
+go  = "SetMaxSpeed"
+cpp = "{0}.setMaxSpeed({1})"
+
+[[function]]
+go  = "SetAcceleration"
+cpp = "{0}.setAcceleration({1})"
+
+[[function]]
+go  = "SetSpeed"
+cpp = "{0}.setSpeed({1})"
+
+[[function]]
+go  = "SetCurrentPosition"
+cpp = "{0}.setCurrentPosition({1})"
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+[[function]]
+go  = "MoveTo"
+cpp = "{0}.moveTo({1})"
+
+[[function]]
+go  = "Move"
+cpp = "{0}.move({1})"
+
+# ── Running ───────────────────────────────────────────────────────────────────
+[[function]]
+go  = "Run"
+cpp = "{0}.run()"
+
+[[function]]
+go  = "RunSpeed"
+cpp = "{0}.runSpeed()"
+
+[[function]]
+go  = "RunToPosition"
+cpp = "{0}.runToPosition()"
+
+[[function]]
+go  = "RunSpeedToPosition"
+cpp = "{0}.runSpeedToPosition()"
+
+[[function]]
+go  = "RunToNewPosition"
+cpp = "{0}.runToNewPosition({1})"
+
+[[function]]
+go  = "Stop"
+cpp = "{0}.stop()"
+
+# ── Status ────────────────────────────────────────────────────────────────────
+[[function]]
+go  = "CurrentPosition"
+cpp = "{0}.currentPosition()"
+
+[[function]]
+go  = "TargetPosition"
+cpp = "{0}.targetPosition()"
+
+[[function]]
+go  = "DistanceToGo"
+cpp = "{0}.distanceToGo()"
+
+[[function]]
+go  = "IsRunning"
+cpp = "{0}.isRunning()"
+
+[[function]]
+go  = "Speed"
+cpp = "{0}.speed()"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+[[constant]]
+go  = "DRIVER"
+cpp = "AccelStepper::DRIVER"
+
+[[constant]]
+go  = "FULL2WIRE"
+cpp = "AccelStepper::FULL2WIRE"
+
+[[constant]]
+go  = "FULL3WIRE"
+cpp = "AccelStepper::FULL3WIRE"
+
+[[constant]]
+go  = "FULL4WIRE"
+cpp = "AccelStepper::FULL4WIRE"
+
+[[constant]]
+go  = "HALF3WIRE"
+cpp = "AccelStepper::HALF3WIRE"
+
+[[constant]]
+go  = "HALF4WIRE"
+cpp = "AccelStepper::HALF4WIRE"
+
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/basic"
+
+[[example]]
+dir = "examples/speed_control"

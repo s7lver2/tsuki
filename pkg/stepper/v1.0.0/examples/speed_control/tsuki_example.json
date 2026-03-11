@@ -1,0 +1,4 @@
+{
+  "name": "Potentiometer Speed Control",
+  "description": "Control stepper motor speed in real time with a potentiometer on A0. Center position = stopped, extremes = full speed forward/reverse."
+}

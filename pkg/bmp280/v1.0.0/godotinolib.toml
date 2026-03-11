@@ -1,0 +1,122 @@
+[package]
+name        = "bmp280"
+version     = "1.0.0"
+description = "BMP280/BME280 barometric pressure and temperature sensor (Adafruit BMP280)"
+author      = "tsuki-team"
+cpp_header  = "Adafruit_BMP280.h"
+arduino_lib = "Adafruit BMP280 Library"
+cpp_class   = "Adafruit_BMP280"
+
+aliases = ["BME280", "bme280"]
+
+# ── Constructor ───────────────────────────────────────────────────────────────
+[[function]]
+go  = "New"
+cpp = "Adafruit_BMP280()"
+
+# ── Init ──────────────────────────────────────────────────────────────────────
+[[function]]
+go  = "Begin"
+cpp = "{0}.begin()"
+
+[[function]]
+go  = "BeginAddr"
+cpp = "{0}.begin({1})"
+
+# ── Readings ──────────────────────────────────────────────────────────────────
+[[function]]
+go  = "ReadTemperature"
+cpp = "{0}.readTemperature()"
+
+[[function]]
+go  = "ReadPressure"
+cpp = "{0}.readPressure()"
+
+[[function]]
+go  = "ReadAltitude"
+cpp = "{0}.readAltitude({1})"
+
+[[function]]
+go  = "ReadAltitudeStd"
+cpp = "{0}.readAltitude(1013.25)"
+
+# ── Sampling config ───────────────────────────────────────────────────────────
+[[function]]
+go  = "SetSampling"
+cpp = "{0}.setSampling({1}, {2}, {3}, {4}, {5})"
+
+[[function]]
+go  = "ForcedSample"
+cpp = "{0}.takeForcedMeasurement()"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+[[constant]]
+go  = "MODE_NORMAL"
+cpp = "Adafruit_BMP280::MODE_NORMAL"
+
+[[constant]]
+go  = "MODE_FORCED"
+cpp = "Adafruit_BMP280::MODE_FORCED"
+
+[[constant]]
+go  = "MODE_SLEEP"
+cpp = "Adafruit_BMP280::MODE_SLEEP"
+
+[[constant]]
+go  = "SAMPLING_X1"
+cpp = "Adafruit_BMP280::SAMPLING_X1"
+
+[[constant]]
+go  = "SAMPLING_X2"
+cpp = "Adafruit_BMP280::SAMPLING_X2"
+
+[[constant]]
+go  = "SAMPLING_X4"
+cpp = "Adafruit_BMP280::SAMPLING_X4"
+
+[[constant]]
+go  = "SAMPLING_X8"
+cpp = "Adafruit_BMP280::SAMPLING_X8"
+
+[[constant]]
+go  = "SAMPLING_X16"
+cpp = "Adafruit_BMP280::SAMPLING_X16"
+
+[[constant]]
+go  = "FILTER_OFF"
+cpp = "Adafruit_BMP280::FILTER_OFF"
+
+[[constant]]
+go  = "FILTER_X2"
+cpp = "Adafruit_BMP280::FILTER_X2"
+
+[[constant]]
+go  = "FILTER_X4"
+cpp = "Adafruit_BMP280::FILTER_X4"
+
+[[constant]]
+go  = "FILTER_X16"
+cpp = "Adafruit_BMP280::FILTER_X16"
+
+[[constant]]
+go  = "STANDBY_MS_1"
+cpp = "Adafruit_BMP280::STANDBY_MS_1"
+
+[[constant]]
+go  = "STANDBY_MS_63"
+cpp = "Adafruit_BMP280::STANDBY_MS_63"
+
+[[constant]]
+go  = "STANDBY_MS_500"
+cpp = "Adafruit_BMP280::STANDBY_MS_500"
+
+[[constant]]
+go  = "STANDBY_MS_1000"
+cpp = "Adafruit_BMP280::STANDBY_MS_1000"
+
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/basic"
+
+[[example]]
+dir = "examples/altitude_logger"

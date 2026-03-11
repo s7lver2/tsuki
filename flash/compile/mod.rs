@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  tsuki-flash :: compile  —  compile pipeline orchestrator
+//  tsuki-flash :: compile  —  compile pipeline dispatcher
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod avr;

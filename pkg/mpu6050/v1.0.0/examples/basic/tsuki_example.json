@@ -1,0 +1,4 @@
+{
+  "name": "Basic Accel & Gyro Read",
+  "description": "Read acceleration, gyroscope and temperature from an MPU-6050 and print them to Serial."
+}

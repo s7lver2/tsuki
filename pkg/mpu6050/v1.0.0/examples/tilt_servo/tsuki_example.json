@@ -1,0 +1,4 @@
+{
+  "name": "Tilt-Controlled Servo",
+  "description": "Use X-axis tilt angle from the MPU-6050 to drive a servo. Tilt the board to rotate the servo 0–180°."
+}

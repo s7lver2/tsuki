@@ -1,0 +1,66 @@
+{
+  "version": "1",
+  "name": "IR Receiver",
+  "board": "uno",
+  "description": "TSOP38238 (or equivalent) IR receiver module on D2. Built-in LED provides visual feedback.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "ir_rx",
+      "type": "ir_receiver",
+      "label": "IR Receiver",
+      "x": 320,
+      "y": 110,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "5V",
+      "x": 285,
+      "y": 50,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 370,
+      "y": 220,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "c1",
+      "type": "capacitor",
+      "label": "100nF",
+      "x": 230,
+      "y": 100,
+      "rotation": 0,
+      "color": "",
+      "props": { "farads": 1e-7 }
+    }
+  ],
+  "wires": [
+    { "id": "w1", "fromComp": "vcc1", "fromPin": "5v", "toComp": "ir_rx", "toPin": "vcc", "color": "#ef4444", "waypoints": [] },
+    { "id": "w2", "fromComp": "vcc1", "fromPin": "5v", "toComp": "c1", "toPin": "pin1", "color": "#ef4444", "waypoints": [] },
+    { "id": "w3", "fromComp": "c1", "fromPin": "pin2", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w4", "fromComp": "ir_rx", "fromPin": "gnd", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w5", "fromComp": "uno", "fromPin": "D2", "toComp": "ir_rx", "toPin": "out", "color": "#3b82f6", "waypoints": [] }
+  ],
+  "notes": []
+}

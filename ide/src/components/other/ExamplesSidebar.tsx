@@ -1,6 +1,6 @@
 'use client'
 import { useStore } from '@/lib/store'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   BookOpen, Search, ChevronRight, ChevronDown, Play,
   Cpu, Zap, Radio, Thermometer, Layers, Activity, Sun,
@@ -283,11 +283,38 @@ func loop() {
   },
 ]
 
+// ── Path helpers ──────────────────────────────────────────────────────────────
+
+/** Cached home dir so we only call Tauri once per session */
+let _homeDir: string | null | undefined = undefined
+
+async function resolveHomeDir(): Promise<string | null> {
+  if (_homeDir !== undefined) return _homeDir
+  try {
+    const { getHomeDir } = await import('@/lib/tauri')
+    _homeDir = await getHomeDir()
+  } catch {
+    _homeDir = null
+  }
+  return _homeDir
+}
+
+/** Expand a leading "~" to the real home directory.
+ *  Falls back to the raw string if home dir can't be resolved. */
+async function expandPath(p: string): Promise<string> {
+  if (!p.startsWith('~')) return p
+  const home = await resolveHomeDir()
+  if (!home) return p
+  return home + p.slice(1)
+}
+
 // ── Load examples from a package on disk ─────────────────────────────────────
-// {libsDir}/{pkgName}/{version}/examples/{exampleDir}/
-//   tsuki_example.json    → { name, description }
-//   *.go / *.json(other)  → code files
-//   *.tsuki-circuit       → circuit data (parsed, opens in Sandbox)
+// Tries several path layouts that tsuki may use:
+//   {libsDir}/{pkgName}/{version}/examples     ← original
+//   {libsDir}/{pkgName}/examples               ← no version sub-dir
+//   {libsDir}/{pkgName.lower}/{version}/examples
+//   {libsDir}/{pkgName.lower}/examples
+// version is tried both as-is ("v1.0.0") and without the leading "v" ("1.0.0").
 
 async function loadPkgExamples(
   libsDir: string,
@@ -295,7 +322,32 @@ async function loadPkgExamples(
   version: string,
 ): Promise<ExampleDef[]> {
   const { readDirEntries, readFile } = await import('@/lib/tauri')
-  const examplesPath = `${libsDir}/${pkgName}/${version}/examples`
+
+  // Resolve the base dir (expand "~" to the real home directory)
+  const base = await expandPath(libsDir)
+
+  // Build a list of candidate "examples" directory paths to try
+  const vNoV = version.replace(/^v/, '')         // "1.0.0" from "v1.0.0"
+  const lower = pkgName.toLowerCase()
+  const candidates: string[] = [
+    `${base}/${pkgName}/${version}/examples`,
+    `${base}/${pkgName}/${vNoV}/examples`,
+    `${base}/${pkgName}/examples`,
+    `${base}/${lower}/${version}/examples`,
+    `${base}/${lower}/${vNoV}/examples`,
+    `${base}/${lower}/examples`,
+  ]
+
+  // Find the first candidate that actually exists
+  let examplesPath: string | null = null
+  for (const candidate of candidates) {
+    try {
+      await readDirEntries(candidate)   // throws if path doesn't exist
+      examplesPath = candidate
+      break
+    } catch { /* try next */ }
+  }
+  if (!examplesPath) return []
 
   let exDirs: { name: string; is_dir: boolean }[] = []
   try {
@@ -527,13 +579,14 @@ function ExampleRow({ ex, onOpen }: { ex: ExampleDef; onOpen: (ex: ExampleDef) =
 // ── Collapsible section ───────────────────────────────────────────────────────
 
 function Section({
-  label, icon, examples, loading, onOpen, defaultOpen = true,
+  label, icon, examples, loading, onOpen, onRefresh, defaultOpen = true,
 }: {
   label: string
   icon?: React.ReactNode
   examples: ExampleDef[]
   loading?: boolean
   onOpen: (ex: ExampleDef) => void
+  onRefresh?: () => void
   defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
@@ -546,16 +599,36 @@ function Section({
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         {icon && <span className="flex-shrink-0">{icon}</span>}
         <span>{label}</span>
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-1">
           {loading
             ? <RefreshCw size={9} className="animate-spin" />
             : <span className="text-[9px] font-normal">{examples.length}</span>
           }
+          {onRefresh && !loading && (
+            <span
+              role="button"
+              title="Refresh examples"
+              onClick={e => { e.stopPropagation(); onRefresh() }}
+              className="opacity-0 group-hover:opacity-100 hover:text-[var(--fg)] cursor-pointer"
+            >
+              <RefreshCw size={9} />
+            </span>
+          )}
         </span>
       </button>
       {open && !loading && examples.map(ex => (
         <ExampleRow key={ex.id} ex={ex} onOpen={onOpen} />
       ))}
+      {open && !loading && examples.length === 0 && (
+        <div className="px-6 py-2 text-[10px] text-[var(--fg-faint)] flex items-center gap-2">
+          <span>No examples found on disk.</span>
+          {onRefresh && (
+            <button onClick={onRefresh} className="underline text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer text-[10px] p-0">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
       {open && loading && (
         <div className="px-6 py-2 text-[10px] text-[var(--fg-faint)]">Loading…</div>
       )}
@@ -569,14 +642,19 @@ export default function ExamplesSidebar() {
   const { openExample, packages, settings, loadCircuitInSandbox } = useStore()
   const [query, setQuery]               = useState('')
   const [importTarget, setImportTarget] = useState<ExampleDef | null>(null)
+  // null  = loading in progress
+  // []    = loaded but empty  (still retryable via button)
+  // [...] = loaded with results
+  // key absent = never attempted
   const [pkgExamples, setPkgExamples]   = useState<Record<string, ExampleDef[] | null>>({})
+  const prevInstalled                   = useRef<Set<string>>(new Set())
 
   const libsDir       = settings.libsDir || '~/.tsuki/libs'
   const installedPkgs = packages.filter(p => p.installed)
 
-  // ── Load examples from disk for installed packages ────────────────────────
+  // ── Load examples for one package ────────────────────────────────────────
   const loadForPkg = useCallback(async (name: string, version: string) => {
-    setPkgExamples(prev => ({ ...prev, [name]: null }))
+    setPkgExamples(prev => ({ ...prev, [name]: null }))   // null = spinner
     try {
       const examples = await loadPkgExamples(libsDir, name, version)
       setPkgExamples(prev => ({ ...prev, [name]: examples }))
@@ -585,21 +663,61 @@ export default function ExamplesSidebar() {
     }
   }, [libsDir])
 
-  useEffect(() => {
-    for (const pkg of installedPkgs) {
-      if (!(pkg.name in pkgExamples)) {
-        loadForPkg(pkg.name, pkg.version)
+  // ── Retry with backoff for freshly installed packages ─────────────────────
+  // dispatchCommand is async — the package files may not land on disk for
+  // several seconds after togglePackage() fires. We poll 3 times with
+  // increasing delays until we find at least one example.
+  const retryLoad = useCallback(async (name: string, version: string) => {
+    const delays = [1500, 4000, 8000]
+    for (const delay of delays) {
+      await new Promise(r => setTimeout(r, delay))
+      setPkgExamples(prev => ({ ...prev, [name]: null }))
+      try {
+        const examples = await loadPkgExamples(libsDir, name, version)
+        setPkgExamples(prev => ({ ...prev, [name]: examples }))
+        if (examples.length > 0) return   // found — stop retrying
+      } catch {
+        setPkgExamples(prev => ({ ...prev, [name]: [] }))
       }
     }
-    const names = new Set(installedPkgs.map(p => p.name))
+  }, [libsDir])
+
+  // ── Trigger loads when installed list changes ─────────────────────────────
+  useEffect(() => {
+    const currentNames = new Set(installedPkgs.map(p => p.name))
+
+    for (const pkg of installedPkgs) {
+      const isNewlyInstalled = !prevInstalled.current.has(pkg.name)
+      // Check current pkgExamples through a functional updater trick is hard —
+      // instead, always reload freshly installed packages; rely on cache key presence.
+      setPkgExamples(prev => {
+        const neverAttempted = !(pkg.name in prev)
+        if (neverAttempted || isNewlyInstalled) {
+          // kick off load asynchronously; don't block the state update
+          if (isNewlyInstalled) {
+            // Likely still downloading — use retry backoff
+            retryLoad(pkg.name, pkg.version)
+          } else {
+            loadForPkg(pkg.name, pkg.version)
+          }
+        }
+        // mark as loading immediately so the spinner shows
+        if (neverAttempted) return { ...prev, [pkg.name]: null }
+        return prev
+      })
+    }
+
+    // Prune packages that are no longer installed
     setPkgExamples(prev => {
       const next: typeof prev = {}
       for (const k of Object.keys(prev)) {
-        if (names.has(k)) next[k] = prev[k]
+        if (currentNames.has(k)) next[k] = prev[k]
       }
       return next
     })
-  }, [installedPkgs.map(p => p.name).join(',')]) // eslint-disable-line
+
+    prevInstalled.current = currentNames
+  }, [installedPkgs.map(p => p.name + ':' + p.installed).join(','), libsDir]) // eslint-disable-line
 
   const q = query.trim().toLowerCase()
   function filterExamples(exs: ExampleDef[]) {
@@ -661,7 +779,7 @@ export default function ExamplesSidebar() {
 
         {installedPkgs.map(pkg => {
           const loaded    = pkgExamples[pkg.name]
-          const isLoading = loaded === null || loaded === undefined
+          const isLoading = loaded === null || !(pkg.name in pkgExamples)
           const examples  = filterExamples(loaded ?? [])
           if (!isLoading && q && examples.length === 0) return null
           return (
@@ -672,6 +790,7 @@ export default function ExamplesSidebar() {
               examples={examples}
               loading={isLoading}
               onOpen={handleOpen}
+              onRefresh={() => loadForPkg(pkg.name, pkg.version)}
             />
           )
         })}

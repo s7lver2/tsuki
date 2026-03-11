@@ -35,7 +35,7 @@ goduino CLI (Go)
   └── serial monitor
 ```
 
-The CLI is a thin orchestrator. It does **not** re-implement the transpiler —
+The CLI is a thin coordination layer. It does **not** re-implement the transpiler —
 it always delegates to `goduino-core`.
 
 ---

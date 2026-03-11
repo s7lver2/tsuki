@@ -1,0 +1,111 @@
+[package]
+name        = "irremote"
+version     = "1.0.0"
+description = "IR remote send and receive (IRremote library v4)"
+author      = "tsuki-team"
+cpp_header  = "IRremote.hpp"
+arduino_lib = "IRremote"
+
+aliases = ["ir", "IRremote"]
+
+# ── Receiver ──────────────────────────────────────────────────────────────────
+[[function]]
+go  = "ReceiverBegin"
+cpp = "IrReceiver.begin({0}, ENABLE_LED_FEEDBACK)"
+
+[[function]]
+go  = "ReceiverBeginNoLed"
+cpp = "IrReceiver.begin({0}, DISABLE_LED_FEEDBACK)"
+
+[[function]]
+go  = "DataAvailable"
+cpp = "IrReceiver.decode()"
+
+[[function]]
+go  = "Resume"
+cpp = "IrReceiver.resume()"
+
+[[function]]
+go  = "GetCommand"
+cpp = "IrReceiver.decodedIRData.command"
+
+[[function]]
+go  = "GetAddress"
+cpp = "IrReceiver.decodedIRData.address"
+
+[[function]]
+go  = "GetRawCode"
+cpp = "IrReceiver.decodedIRData.decodedRawData"
+
+[[function]]
+go  = "GetProtocol"
+cpp = "IrReceiver.decodedIRData.protocol"
+
+[[function]]
+go  = "PrintResultShort"
+cpp = "IrReceiver.printIRResultShort(&Serial)"
+
+[[function]]
+go  = "PrintResultRaw"
+cpp = "IrReceiver.printIRResultRawFormatted(&Serial, true)"
+
+# ── Sender ────────────────────────────────────────────────────────────────────
+[[function]]
+go  = "SenderBegin"
+cpp = "IrSender.begin({0})"
+
+[[function]]
+go  = "SendNEC"
+cpp = "IrSender.sendNEC({0}, {1}, {2})"
+
+[[function]]
+go  = "SendSony"
+cpp = "IrSender.sendSony({0}, {1}, {2})"
+
+[[function]]
+go  = "SendSamsung"
+cpp = "IrSender.sendSamsung({0}, {1}, {2})"
+
+[[function]]
+go  = "SendRC5"
+cpp = "IrSender.sendRC5({0}, {1}, {2})"
+
+[[function]]
+go  = "SendRC6"
+cpp = "IrSender.sendRC6({0}, {1}, {2})"
+
+[[function]]
+go  = "SendRaw"
+cpp = "IrSender.sendRaw({0}, {1}, 38)"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+[[constant]]
+go  = "PROTOCOL_NEC"
+cpp = "NEC"
+
+[[constant]]
+go  = "PROTOCOL_SONY"
+cpp = "SONY"
+
+[[constant]]
+go  = "PROTOCOL_SAMSUNG"
+cpp = "SAMSUNG"
+
+[[constant]]
+go  = "PROTOCOL_RC5"
+cpp = "RC5"
+
+[[constant]]
+go  = "PROTOCOL_RC6"
+cpp = "RC6"
+
+[[constant]]
+go  = "PROTOCOL_UNKNOWN"
+cpp = "UNKNOWN"
+
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/receiver"
+
+[[example]]
+dir = "examples/sender"

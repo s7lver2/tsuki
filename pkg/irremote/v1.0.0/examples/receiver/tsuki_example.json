@@ -1,0 +1,4 @@
+{
+  "name": "IR Receiver",
+  "description": "Decode IR remote signals using the IRremote library. Prints protocol, address and command over Serial and reacts to specific NEC button codes."
+}

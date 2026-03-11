@@ -1,0 +1,54 @@
+{
+  "version": "1",
+  "name": "IR Sender",
+  "board": "uno",
+  "description": "IR LED on D3 (PWM) with 100Ω current-limiting resistor.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "ir_led",
+      "type": "led",
+      "label": "IR LED 940nm",
+      "x": 360,
+      "y": 120,
+      "rotation": 0,
+      "color": "#6b7280",
+      "props": {}
+    },
+    {
+      "id": "r1",
+      "type": "resistor",
+      "label": "100Ω",
+      "x": 270,
+      "y": 120,
+      "rotation": 0,
+      "color": "",
+      "props": { "ohms": 100 }
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 410,
+      "y": 220,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    { "id": "w1", "fromComp": "uno", "fromPin": "D3", "toComp": "r1", "toPin": "pin1", "color": "#3b82f6", "waypoints": [] },
+    { "id": "w2", "fromComp": "r1", "fromPin": "pin2", "toComp": "ir_led", "toPin": "anode", "color": "#3b82f6", "waypoints": [] },
+    { "id": "w3", "fromComp": "ir_led", "fromPin": "cathode", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] }
+  ],
+  "notes": []
+}

@@ -1,0 +1,78 @@
+{
+  "version": "1",
+  "name": "MPU6050 Tilt Servo",
+  "board": "uno",
+  "description": "MPU-6050 on I2C + servo on D9. Servo powered from 5V rail.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "mpu",
+      "type": "mpu6050",
+      "label": "MPU-6050",
+      "x": 320,
+      "y": 60,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "srv",
+      "type": "servo",
+      "label": "Servo",
+      "x": 320,
+      "y": 180,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc_3v3",
+      "type": "vcc_node",
+      "label": "3.3V",
+      "x": 280,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc_5v",
+      "type": "vcc_node",
+      "label": "5V",
+      "x": 280,
+      "y": 150,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 420,
+      "y": 280,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    { "id": "w1", "fromComp": "vcc_3v3", "fromPin": "3v3", "toComp": "mpu", "toPin": "vcc", "color": "#ef4444", "waypoints": [] },
+    { "id": "w2", "fromComp": "mpu", "fromPin": "gnd", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w3", "fromComp": "uno", "fromPin": "A4", "toComp": "mpu", "toPin": "sda", "color": "#3b82f6", "waypoints": [] },
+    { "id": "w4", "fromComp": "uno", "fromPin": "A5", "toComp": "mpu", "toPin": "scl", "color": "#f59e0b", "waypoints": [] },
+    { "id": "w5", "fromComp": "vcc_5v", "fromPin": "5v", "toComp": "srv", "toPin": "vcc", "color": "#ef4444", "waypoints": [] },
+    { "id": "w6", "fromComp": "srv", "fromPin": "gnd", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w7", "fromComp": "uno", "fromPin": "D9", "toComp": "srv", "toPin": "signal", "color": "#a855f7", "waypoints": [] }
+  ],
+  "notes": []
+}

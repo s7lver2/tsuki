@@ -1,0 +1,87 @@
+{
+  "version": "1",
+  "name": "BMP280 Basic",
+  "board": "uno",
+  "description": "BMP280 sensor via I2C (SDA→A4, SCL→A5). Default I2C address 0x76.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "bmp",
+      "type": "bmp280",
+      "label": "BMP280",
+      "x": 320,
+      "y": 100,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "3.3V",
+      "x": 290,
+      "y": 40,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 380,
+      "y": 220,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "vcc1",
+      "fromPin": "3v3",
+      "toComp": "bmp",
+      "toPin": "vcc",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "bmp",
+      "fromPin": "gnd",
+      "toComp": "gnd1",
+      "toPin": "gnd",
+      "color": "#6b7280",
+      "waypoints": []
+    },
+    {
+      "id": "w3",
+      "fromComp": "uno",
+      "fromPin": "A4",
+      "toComp": "bmp",
+      "toPin": "sda",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w4",
+      "fromComp": "uno",
+      "fromPin": "A5",
+      "toComp": "bmp",
+      "toPin": "scl",
+      "color": "#f59e0b",
+      "waypoints": []
+    }
+  ],
+  "notes": []
+}

@@ -357,7 +357,7 @@ func loop() {
 User
  │
  ▼
-tsuki (Go CLI)              ← thin orchestrator
+tsuki (Go CLI)              ← thin coordination layer
  ├── internal/cli/             ← cobra commands (init, build, upload, check, config…)
  ├── internal/manifest/        ← goduino.json load / save
  ├── internal/config/          ← ~/.config/tsuki/config.json
