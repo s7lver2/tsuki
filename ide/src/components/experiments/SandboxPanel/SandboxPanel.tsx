@@ -17,10 +17,11 @@ import {
 } from '@/lib/simBridge'
 import type { StepResult } from '@/lib/useSimulator'
 import {
-  type CircuitPin, type CircuitComponentDef, type PlacedComponent,
+  type CircuitPin, type PlacedComponent,
   type CircuitWire, type CircuitNote, type TsukiCircuit,
   COMP_DEFS, getPinAbsPos, pinColor,
 } from './SandboxDefs'
+import { CompShape, SvgGlobalDefs } from './SandboxShapres'
 
 
 const WIRE_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899','#e2e2e2','#1a1a1a']
@@ -53,208 +54,7 @@ function textToCircuit(raw: string): TsukiCircuit | null {
 // ── Simulation engine is now powered by tsuki-sim WASM ───────────────────────
 // (see src/lib/useSimulator.ts + src/lib/simBridge.ts)
 
-// ── SVG Component renderer ────────────────────────────────────────────────────
 
-function CompShape({
-  comp, def, selected, simPinValues, onPointerDown, onPinClick,
-}: {
-  comp: PlacedComponent
-  def: CircuitComponentDef
-  selected: boolean
-  simPinValues: Record<string, number>
-  onPointerDown: (e: React.PointerEvent) => void
-  onPinClick: (pinId: string) => void
-}) {
-  const { x, y, type, label, color } = comp
-
-  // LED glowing state
-  const ledOn = type === 'led'
-    ? (simPinValues[`${comp.id}:anode`] ?? 0) > 0
-    : false
-
-  return (
-    <g transform={`translate(${x},${y})`} style={{ cursor: 'move' }} onPointerDown={onPointerDown}>
-      {/* Selection ring */}
-      {selected && (
-        <rect x={-3} y={-3} width={def.w + 6} height={def.h + 6}
-          rx={5} fill="none" stroke="var(--fg)" strokeWidth={1.5} strokeDasharray="4 2" />
-      )}
-
-      {/* Body */}
-      {type === 'arduino_uno' && <ArduinoUnoBody w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'arduino_nano' && <ArduinoNanoBody w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'xiao_rp2040' && <XiaoRP2040Body w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'led' && <LedBody w={def.w} h={def.h} color={color} on={ledOn} label={label} />}
-      {type === 'resistor' && <ResistorBody w={def.w} h={def.h} color={color} label={label} props={comp.props} />}
-      {type === 'button' && <ButtonBody w={def.w} h={def.h} label={label} />}
-      {type === 'potentiometer' && <PotBody w={def.w} h={def.h} label={label} />}
-      {type === 'buzzer' && <BuzzerBody w={def.w} h={def.h} color={color} label={label} />}
-      {type === 'power_rail' && <PowerRailBody w={def.w} h={def.h} label={label} />}
-
-      {/* Pins */}
-      {def.pins.map(pin => {
-        const px = pin.rx * def.w
-        const py = pin.ry * def.h
-        return (
-          <g key={pin.id} onClick={e => { e.stopPropagation(); onPinClick(pin.id) }}
-            style={{ cursor: 'crosshair' }}>
-            <circle cx={px} cy={py} r={6} fill="transparent" />
-            <circle cx={px} cy={py} r={3.5}
-              fill={pinColor(pin.type)}
-              stroke="var(--surface)" strokeWidth={1}
-              className="transition-all"
-            />
-          </g>
-        )
-      })}
-    </g>
-  )
-}
-
-// ── Shape sub-components ───────────────────────────────────────────────────────
-
-function ArduinoUnoBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
-  return (
-    <>
-      <rect width={w} height={h} rx={4} fill={color} />
-      <rect x={4} y={4} width={w - 8} height={h - 8} rx={2}
-        fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={0.8} />
-      {/* USB port */}
-      <rect x={w * 0.2} y={-6} width={w * 0.35} height={6} rx={1} fill="#555" />
-      {/* ATmega chip */}
-      <rect x={w * 0.25} y={h * 0.35} width={w * 0.5} height={h * 0.28} rx={2} fill="#111" />
-      <text x={w * 0.5} y={h * 0.53} textAnchor="middle" fontSize={7} fill="#888" fontFamily="monospace">ATMEGA</text>
-      <text x={w * 0.5} y={h * 0.1} textAnchor="middle" fontSize={6.5} fill="rgba(255,255,255,0.6)"
-        fontFamily="var(--font-sans)" fontWeight="600">{label}</text>
-    </>
-  )
-}
-
-function ArduinoNanoBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
-  return (
-    <>
-      <rect width={w} height={h} rx={3} fill={color} />
-      <rect x={w * 0.2} y={-5} width={w * 0.6} height={5} rx={1} fill="#444" />
-      <rect x={w * 0.2} y={h * 0.3} width={w * 0.6} height={h * 0.32} rx={2} fill="#111" />
-      <text x={w * 0.5} y={h * 0.1} textAnchor="middle" fontSize={6} fill="rgba(255,255,255,0.6)"
-        fontFamily="var(--font-sans)" fontWeight="600">{label}</text>
-    </>
-  )
-}
-
-function XiaoRP2040Body({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
-  const c = color || '#1c3a5e'
-  return (
-    <>
-      {/* Board */}
-      <rect width={w} height={h} rx={4} fill={c} />
-      {/* USB-C connector on top */}
-      <rect x={w * 0.3} y={-4} width={w * 0.4} height={6} rx={2} fill="#555" />
-      <rect x={w * 0.33} y={-3} width={w * 0.34} height={3} rx={1} fill="#888" />
-      {/* RP2040 chip */}
-      <rect x={w * 0.18} y={h * 0.28} width={w * 0.64} height={h * 0.36} rx={2} fill="#111" stroke="#333" strokeWidth={0.5} />
-      <text x={w * 0.5} y={h * 0.44} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.5)"
-        fontFamily="var(--font-sans)" fontWeight="600">RP2040</text>
-      <text x={w * 0.5} y={h * 0.53} textAnchor="middle" fontSize={4.5} fill="rgba(255,255,255,0.35)"
-        fontFamily="var(--font-sans)">133 MHz</text>
-      {/* NeoPixel LED indicator */}
-      <circle cx={w * 0.5} cy={h * 0.76} r={3} fill="#222" stroke="#444" strokeWidth={0.5} />
-      {/* Label */}
-      <text x={w * 0.5} y={h * 0.14} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.7)"
-        fontFamily="var(--font-sans)" fontWeight="700">XIAO</text>
-      <text x={w * 0.5} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
-    </>
-  )
-}
-
-function LedBody({ w, h, color, on, label }: { w: number; h: number; color: string; on: boolean; label: string }) {
-  const glow = on ? color : 'transparent'
-  return (
-    <>
-      {on && <ellipse cx={w / 2} cy={h * 0.4} rx={18} ry={18} fill={color} opacity={0.18} />}
-      {/* Lead lines */}
-      <line x1={w / 2} y1={0} x2={w / 2} y2={h * 0.28} stroke="#888" strokeWidth={1.5} />
-      <line x1={w / 2} y1={h * 0.6} x2={w / 2} y2={h} stroke="#888" strokeWidth={1.5} />
-      {/* Body */}
-      <ellipse cx={w / 2} cy={h * 0.42} rx={w * 0.45} ry={h * 0.18}
-        fill={on ? color : color + '55'} stroke={color} strokeWidth={1} />
-      <rect x={w * 0.15} y={h * 0.22} width={w * 0.7} height={h * 0.2} rx={1}
-        fill={on ? color : color + '55'} stroke={color} strokeWidth={1} />
-      {/* Flat edge (cathode) */}
-      <rect x={w * 0.35} y={h * 0.38} width={w * 0.15} height={h * 0.12} rx={0} fill="rgba(0,0,0,0.3)" />
-      {on && <filter id={`glow-${label}`}><feGaussianBlur stdDeviation="3" result="blur" />
-        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>}
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
-    </>
-  )
-}
-
-function ResistorBody({ w, h, label, props }: { w: number; h: number; label: string; color?: string; props: Record<string, string | number> }) {
-  const val = props.ohms ? `${props.ohms}Ω` : '1kΩ'
-  const bands = ['#f59e0b', '#555', '#a37a2c', '#ffd700']
-  return (
-    <>
-      <line x1={0} y1={h / 2} x2={w * 0.2} y2={h / 2} stroke="#888" strokeWidth={1.5} />
-      <line x1={w * 0.8} y1={h / 2} x2={w} y2={h / 2} stroke="#888" strokeWidth={1.5} />
-      <rect x={w * 0.2} y={h * 0.15} width={w * 0.6} height={h * 0.7} rx={h * 0.35}
-        fill="#c4a265" stroke="#8a6620" strokeWidth={0.8} />
-      {bands.map((c, i) => (
-        <rect key={i} x={w * (0.28 + i * 0.12)} y={h * 0.12} width={w * 0.07} height={h * 0.76}
-          fill={c} opacity={0.85} />
-      ))}
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{val}</text>
-    </>
-  )
-}
-
-function ButtonBody({ w, h, label }: { w: number; h: number; label: string; color?: string }) {
-  return (
-    <>
-      <rect width={w} height={h} rx={3} fill="#333" stroke="#555" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.28} fill="#222" stroke="#666" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.16} fill="#888" />
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
-    </>
-  )
-}
-
-function PotBody({ w, h, label }: { w: number; h: number; label: string; color?: string }) {
-  return (
-    <>
-      <rect width={w} height={h} rx={3} fill="#333" stroke="#555" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.38} fill="#1a1a1a" stroke="#555" strokeWidth={1} />
-      <line x1={w / 2} y1={h / 2} x2={w / 2} y2={h * 0.2} stroke="#888" strokeWidth={2} strokeLinecap="round" />
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
-    </>
-  )
-}
-
-function BuzzerBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
-  return (
-    <>
-      <circle cx={w / 2} cy={h / 2} r={w / 2} fill={color} stroke="#555" strokeWidth={0.8} />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.3} fill="#111" />
-      <circle cx={w / 2} cy={h / 2} r={w * 0.12} fill="#333" />
-      <text x={w / 2} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
-        fontFamily="var(--font-sans)">{label}</text>
-    </>
-  )
-}
-
-function PowerRailBody({ w, h, label }: { w: number; h: number; label: string; color?: string }) {
-  return (
-    <>
-      <rect width={w} height={h} rx={2} fill="#111" stroke="#333" strokeWidth={0.8} />
-      <line x1={w / 2} y1={h * 0.05} x2={w / 2} y2={h * 0.45} stroke="#ef4444" strokeWidth={2} />
-      <line x1={w / 2} y1={h * 0.55} x2={w / 2} y2={h * 0.95} stroke="#222" strokeWidth={2} />
-    </>
-  )
-}
 
 // ── Main SandboxPanel component ────────────────────────────────────────────────
 
@@ -271,7 +71,7 @@ interface WireInProgress {
 }
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
-  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit, projectLanguage } = useStore()
+  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit, projectLanguage, sandboxCircuit, setSandboxCircuit } = useStore()
   const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
 
   // View state
@@ -283,8 +83,18 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedComp, setSelectedComp] = useState<string | null>(null)
 
-  // Circuit state
-  const [circuit, setCircuit] = useState<TsukiCircuit>({ ...DEFAULT_CIRCUIT, board: board || 'uno' })
+  // Circuit state — initialize from persisted store (survives Settings + project close)
+  const [circuit, setCircuit] = useState<TsukiCircuit>(() => {
+    if (sandboxCircuit && (sandboxCircuit as any).components) {
+      return { ...DEFAULT_CIRCUIT, ...(sandboxCircuit as any) }
+    }
+    return { ...DEFAULT_CIRCUIT, board: board || 'uno' }
+  })
+
+  // Persist circuit to store whenever it changes
+  useEffect(() => {
+    setSandboxCircuit(circuit as unknown as Record<string, unknown>)
+  }, [circuit]) // eslint-disable-line
 
   // ── Consume pendingCircuit from store (loaded via Examples panel) ──────────
   useEffect(() => {
@@ -684,6 +494,7 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                   <circle cx={0} cy={0} r={0.8} fill="var(--border)" opacity={0.5} />
                 </pattern>
               </defs>
+              <SvgGlobalDefs />
               <rect width="100%" height="100%" fill="url(#sbgrid)" />
 
               <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
@@ -727,9 +538,9 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                     <CompShape
                       key={comp.id}
                       comp={comp}
-                      def={def}
                       selected={selectedComp === comp.id}
                       simPinValues={simPinValues}
+                      wireMode={tool === 'wire'}
                       onPointerDown={e => onCompPointerDown(e, comp.id)}
                       onPinClick={pinId => onPinClick(comp.id, pinId)}
                     />
@@ -1090,8 +901,8 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                         const def = COMP_DEFS[comp.type]
                         if (!def) return null
                         return (
-                          <CompShape key={comp.id} comp={comp} def={def} selected={false}
-                            simPinValues={simPinValues}
+                          <CompShape key={comp.id} comp={comp} selected={false}
+                            simPinValues={simPinValues} wireMode={false}
                             onPointerDown={() => {}} onPinClick={() => {}}/>
                         )
                       })}

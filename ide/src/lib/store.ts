@@ -205,6 +205,9 @@ interface AppState {
   pendingCircuit: { data: Record<string, unknown>; id: number } | null
   loadCircuitInSandbox: (data: Record<string, unknown>) => void
   clearPendingCircuit: () => void
+  /** Persisted sandbox circuit — survives Settings navigation and project reloads */
+  sandboxCircuit: Record<string, unknown> | null
+  setSandboxCircuit: (c: Record<string, unknown>) => void
   settings: SettingsState
   updateSetting: <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => void
   packages: PackageEntry[]
@@ -212,6 +215,8 @@ interface AppState {
   setPackages: (packages: PackageEntry[]) => void
   togglePackage: (name: string) => void
   setPackageInstalling: (name: string, installing: boolean) => void
+  /** Read installed packages from a parsed tsuki_package.json and update the store. */
+  syncInstalledPackages: (manifestPkgs: Array<{ name: string; version?: string }>) => void
   recentProjects: RecentProject[]
   addRecentProject: (p: RecentProject) => void
   refreshTree: () => Promise<void>
@@ -347,6 +352,24 @@ function loadRecentProjects(): RecentProject[] {
 
 function saveRecentProjects(projects: RecentProject[]) {
   try { localStorage.setItem('tsuki-recent', JSON.stringify(projects.slice(0, 10))) } catch {}
+}
+
+// ── Sandbox circuit persistence ───────────────────────────────────────────────
+
+function sandboxKey(projectPath?: string): string {
+  return projectPath ? `tsuki-sandbox:${projectPath}` : 'tsuki-sandbox:global'
+}
+
+function loadSandboxCircuit(projectPath?: string): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem(sandboxKey(projectPath))
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch { return null }
+}
+
+function saveSandboxCircuit(circuit: Record<string, unknown>, projectPath?: string) {
+  try { localStorage.setItem(sandboxKey(projectPath), JSON.stringify(circuit)) } catch {}
 }
 
 // ── Recursive disk scanner ────────────────────────────────────────────────────
@@ -499,6 +522,10 @@ export const useStore = create<AppState>((set, get) => ({
         projectBoard   = mf.board   ?? projectBoard
         projectBackend = mf.backend ?? projectBackend
         if (mf.language === 'cpp' || mf.language === 'ino') projectLanguage = mf.language
+        // Sync installed packages from manifest into store
+        if (Array.isArray(mf.packages)) {
+          get().syncInstalledPackages(mf.packages)
+        }
       }
     } catch { /* no manifest */ }
 
@@ -509,6 +536,10 @@ export const useStore = create<AppState>((set, get) => ({
       const allNodes = [rootNode, ...nodes]
 
       set({ projectName, projectPath: folder, projectLanguage, board: projectBoard, backend: projectBackend, gitInit: false, tree: allNodes, gitChanges: [], commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
+
+      // Load sandbox circuit for this project (per-project persistence)
+      const savedCircuit = loadSandboxCircuit(folder)
+      if (savedCircuit) set({ sandboxCircuit: savedCircuit })
 
       // Find the main source file for any language
       const mainNode = allNodes.find(n =>
@@ -770,6 +801,13 @@ export const useStore = create<AppState>((set, get) => ({
   loadCircuitInSandbox: (data) => set({ pendingCircuit: { data, id: Date.now() } }),
   clearPendingCircuit: () => set({ pendingCircuit: null }),
 
+  sandboxCircuit: typeof window !== 'undefined' ? loadSandboxCircuit() : null,
+  setSandboxCircuit: (circuit) => {
+    set({ sandboxCircuit: circuit })
+    const { projectPath } = get()
+    saveSandboxCircuit(circuit, projectPath || undefined)
+  },
+
   settings: DEFAULT_SETTINGS,
 
   updateSetting: (key, value) => {
@@ -808,6 +846,20 @@ export const useStore = create<AppState>((set, get) => ({
   setPackages: (packages) => set({ packages, packagesLoaded: true }),
   togglePackage: (name) => set((s) => ({ packages: s.packages.map(p => p.name === name ? { ...p, installed: !p.installed } : p) })),
   setPackageInstalling: (name, installing) => set((s) => ({ packages: s.packages.map(p => p.name === name ? { ...p, installing } : p) })),
+
+  syncInstalledPackages: (manifestPkgs) => {
+    const installedNames = new Set(manifestPkgs.map(p => p.name))
+    set((s) => {
+      // Update installed flag on existing registry entries
+      const updated = s.packages.map(p => ({ ...p, installed: installedNames.has(p.name) }))
+      // Add stub entries for packages in the manifest that are not yet in the registry
+      const existingNames = new Set(updated.map(p => p.name))
+      const stubs = manifestPkgs
+        .filter(p => !existingNames.has(p.name))
+        .map(p => ({ name: p.name, desc: '', version: p.version ?? '', installed: true }))
+      return { packages: [...updated, ...stubs] }
+    })
+  },
 
   recentProjects: typeof window !== 'undefined' ? loadRecentProjects() : [],
   addRecentProject: (project) => {

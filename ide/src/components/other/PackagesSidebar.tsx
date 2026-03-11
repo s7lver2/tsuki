@@ -15,6 +15,7 @@ export default function PackagesSidebar() {
     addLog, settings, projectPath,
     dispatchCommand, setBottomTab,
     setPackages, packagesLoaded,
+    syncInstalledPackages, openTabs, activeTabIdx, tree,
   } = useStore()
   const [query, setQuery] = useState('')
 
@@ -24,6 +25,20 @@ export default function PackagesSidebar() {
   const [exeWarning, setExeWarning] = useState<{ command: string; action: () => void } | null>(null)
   const [loadError, setLoadError]   = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+
+  // ── Sync installed state from tsuki_package.json whenever the editor changes it ──
+  useEffect(() => {
+    // Find the manifest node in the tree and read its content
+    const manifestNode = tree.find(n => n.name === 'tsuki_package.json' || n.name === 'goduino.json')
+    if (!manifestNode) return
+    // Prefer the open tab content (live edits), fall back to tree node content
+    const tabContent = openTabs.find(t => t.fileId === manifestNode.id)?.content ?? manifestNode.content
+    if (!tabContent) return
+    try {
+      const mf = JSON.parse(tabContent)
+      if (Array.isArray(mf.packages)) syncInstalledPackages(mf.packages)
+    } catch { /* invalid JSON while typing */ }
+  }, [openTabs, tree, syncInstalledPackages])
 
   // Load package list from registry on first mount (or when URL changes)
   useEffect(() => {

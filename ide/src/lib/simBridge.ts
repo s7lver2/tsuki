@@ -126,6 +126,21 @@ export function applyStepResult(
     }
   }
 
+  // Map energy.current (A) → "compId:pinId:mA" so component shapes can vary
+  // brightness / intensity based on actual current draw.
+  if (result.energy?.current) {
+    for (const [pinStr, amps] of Object.entries(result.energy.current)) {
+      const pinNum = parseInt(pinStr)
+      if (isNaN(pinNum)) continue
+      const targets = pinMap.get(pinNum)
+      if (targets) {
+        for (const { compId, pinId } of targets) {
+          pinValues[`${compId}:${pinId}:mA`] = amps * 1000   // store as mA
+        }
+      }
+    }
+  }
+
   // Only produce log entries for Serial output — never for dw/aw/delay
   const log: LogEntry[] = (result.serial ?? []).map(msg => ({
     t:     Math.round(result.ms),

@@ -43,15 +43,18 @@ impl WinSpawn for Command {
     #[cfg(windows)]
     fn win_spawn(&mut self) -> io::Result<Child> {
         use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS  = 0x0000_0008
-        //   Detaches the new process from the calling process's console.
-        //   Unlike CREATE_NO_WINDOW, this flag does NOT prevent the process
-        //   from attaching to anonymous pipes — so Stdio::piped() works fine.
+        // CREATE_NO_WINDOW (0x0800_0000)
+        //   Prevents a console window from appearing for console-subsystem
+        //   processes. This flag IS INHERITED by all child processes spawned
+        //   by the child (e.g. avr-gcc, avrdude, go.exe called internally by
+        //   tsuki) so none of them open visible windows either.
         //
-        // Do NOT combine with CREATE_NEW_CONSOLE (0x0000_0010) or
-        // CREATE_NO_WINDOW (0x0800_0000) — both conflict with piped I/O.
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        self.creation_flags(DETACHED_PROCESS).spawn()
+        //   Contrary to old comments, CREATE_NO_WINDOW works fine with
+        //   Stdio::piped(). DETACHED_PROCESS was used before but only
+        //   detaches from the *parent* console; grandchildren spawned by
+        //   tsuki.exe could still pop up their own console windows.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        self.creation_flags(CREATE_NO_WINDOW).spawn()
     }
 
     #[cfg(not(windows))]

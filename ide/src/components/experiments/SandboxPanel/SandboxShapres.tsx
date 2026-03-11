@@ -1,6 +1,6 @@
 'use client'
 import { useState, useId } from 'react'
-import { PlacedComponent, CircuitPin, CircuitComponentDef, COMP_DEFS, pinColor, getPinAbsPos } from './SandboxDefs'
+import { PlacedComponent, CircuitPin, CircuitComponentDef, COMP_DEFS, pinColor } from './SandboxDefs'
 
 // ── Pin tooltip ────────────────────────────────────────────────────────────────
 function PinTooltip({ pin, ax, ay, compW }: { pin: CircuitPin; ax: number; ay: number; compW: number }) {
@@ -140,13 +140,22 @@ function ComponentBody({ comp, def, simPinValues }: {
     case 'arduino_nano':   return <ArduinoNanoBody  w={w} h={h} g={g} />
     case 'xiao_rp2040':    return <XiaoRp2040Body   w={w} h={h} g={g} />
     case 'led': {
-      const on = (simPinValues[`${id}:anode`] ?? 0) > 0
-      return <LedBody w={w} h={h} color={color} on={on} g={g} />
+      // Brightness driven by mA if available, else by binary pin value
+      const rawVal = simPinValues[`${id}:anode`] ?? 0
+      const mA     = simPinValues[`${id}:anode:mA`] ?? (rawVal > 0 ? 10 : 0)
+      const brightness = Math.min(1, Math.max(0, mA / 20))
+      return <LedBody w={w} h={h} color={color} brightness={brightness} g={g} />
     }
     case 'led_rgb': {
-      const r = (simPinValues[`${id}:red`]   ?? 0) * 255
-      const gr= (simPinValues[`${id}:green`] ?? 0) * 255
-      const b = (simPinValues[`${id}:blue`]  ?? 0) * 255
+      const rVal = simPinValues[`${id}:red`]   ?? 0
+      const gVal = simPinValues[`${id}:green`] ?? 0
+      const bVal = simPinValues[`${id}:blue`]  ?? 0
+      const rMa  = simPinValues[`${id}:red:mA`]   ?? (rVal / 255 * 20)
+      const gMa  = simPinValues[`${id}:green:mA`] ?? (gVal / 255 * 20)
+      const bMa  = simPinValues[`${id}:blue:mA`]  ?? (bVal / 255 * 20)
+      const r  = Math.round(Math.min(255, rMa * 255 / 20))
+      const gr = Math.round(Math.min(255, gMa * 255 / 20))
+      const b  = Math.round(Math.min(255, bMa * 255 / 20))
       return <RgbLedBody w={w} h={h} r={r} gr={gr} b={b} g={g} />
     }
     case 'buzzer':         return <BuzzerBody      w={w} h={h} active={(simPinValues[`${id}:pos`] ?? 0) > 0} />
@@ -167,11 +176,17 @@ function ComponentBody({ comp, def, simPinValues }: {
       ]
       return <LcdBody w={w} h={h} lines={lines} g={g} />
     }
-    case 'seven_seg':   return <SevenSegBody  w={w} h={h} simVals={simPinValues} id={id} />
-    case 'vcc_node':    return <VccNode       w={w} h={h} />
-    case 'gnd_node':    return <GndNode       w={w} h={h} />
-    case 'power_rail':  return <PowerRail     w={w} h={h} />
-    default:            return <DefaultBody   w={w} h={h} color={color} label={def.label} />
+    case 'seven_seg':      return <SevenSegBody    w={w} h={h} simVals={simPinValues} id={id} />
+    case 'vcc_node':       return <VccNode         w={w} h={h} />
+    case 'gnd_node':       return <GndNode         w={w} h={h} />
+    case 'power_rail':     return <PowerRail       w={w} h={h} />
+    case 'relay':          return <RelayBody       w={w} h={h} active={(simPinValues[`${id}:in`] ?? 0) > 0} g={g} />
+    case 'oled_128x64':    return <OledBody        w={w} h={h} g={g} />
+    case 'neopixel_ring':  return <NeopixelRingBody w={w} h={h} val={simPinValues[`${id}:din`] ?? 0} g={g} />
+    case 'mosfet_n':       return <MosfetBody      w={w} h={h} active={(simPinValues[`${id}:gate`] ?? 0) > 0} />
+    case 'diode':          return <DiodeBody       w={w} h={h} />
+    case 'l298n':          return <L298nBody       w={w} h={h} g={g} />
+    default:               return <DefaultBody     w={w} h={h} color={color} label={def.label} />
   }
 }
 
@@ -399,28 +414,30 @@ function XiaoRp2040Body({ w, h, g }: { w: number; h: number; g: string }) {
 }
 
 // ── LED ────────────────────────────────────────────────────────────────────────
-function LedBody({ w, h, color, on, g }: { w: number; h: number; color: string; on: boolean; g: string }) {
-  const opacity = on ? 1 : 0.35
-  const glowR   = on ? 22 : 0
+function LedBody({ w, h, color, brightness, g }: { w: number; h: number; color: string; brightness: number; g: string }) {
+  const on      = brightness > 0.02
+  const opacity = on ? 0.35 + brightness * 0.65 : 0.25
+  const glowR   = on ? 10 + brightness * 16 : 0
+  const glowOp  = brightness * 0.18
   return (
     <>
       <defs>
         <radialGradient id={`led_${g}`} cx="50%" cy="35%" r="60%">
-          <stop offset="0%"   stopColor="white"  stopOpacity={on ? 0.9 : 0.3} />
+          <stop offset="0%"   stopColor="white"  stopOpacity={on ? 0.6 + brightness * 0.3 : 0.15} />
           <stop offset="40%"  stopColor={color}  stopOpacity={0.8} />
           <stop offset="100%" stopColor={color}  stopOpacity={0.3} />
         </radialGradient>
         {on && (
           <filter id={`glow_${g}`} x="-100%" y="-100%" width="300%" height="300%">
-            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feGaussianBlur stdDeviation={2 + brightness * 3} result="blur" />
             <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         )}
       </defs>
 
-      {/* Glow halo when on */}
+      {/* Glow halo — radius and opacity scale with brightness */}
       {on && <ellipse cx={w/2} cy={h*0.4} rx={glowR} ry={glowR}
-        fill={color} opacity={0.15} />}
+        fill={color} opacity={glowOp} />}
 
       {/* Wire leads */}
       <line x1={w*0.38} y1={0}      x2={w*0.38} y2={h*0.24} stroke="#aaa" strokeWidth={1.5} />
@@ -438,9 +455,9 @@ function LedBody({ w, h, color, on, g }: { w: number; h: number; color: string; 
       {/* Flat cathode notch */}
       <rect x={w*0.35} y={h*0.44} width={w*0.14} height={h*0.06}
         fill="rgba(0,0,0,0.4)" rx={1} />
-      {/* Highlight glint */}
-      {on && <ellipse cx={w*0.43} cy={h*0.38} rx={w*0.08} ry={h*0.04}
-        fill="white" opacity={0.6} />}
+      {/* Highlight glint — only above ~30% brightness */}
+      {brightness > 0.3 && <ellipse cx={w*0.43} cy={h*0.38} rx={w*0.08} ry={h*0.04}
+        fill="white" opacity={brightness * 0.7} />}
 
       {/* Polarity markers */}
       <text x={w*0.28} y={h*0.18} fontSize={7} fill="rgba(255,255,255,0.5)" fontFamily="monospace">+</text>
@@ -894,6 +911,188 @@ function PowerRail({ w, h }: { w: number; h: number }) {
   )
 }
 
+// ── Relay ──────────────────────────────────────────────────────────────────────
+function RelayBody({ w, h, active, g }: { w: number; h: number; active: boolean; g: string }) {
+  return (
+    <>
+      <rect width={w} height={h} rx={3} fill="#1a2a1a" stroke="#2a4a2a" strokeWidth={0.8} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={2} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={0.5} />
+      {/* Coil block */}
+      <rect x={w*0.06} y={h*0.12} width={w*0.52} height={h*0.72} rx={2}
+        fill="#111" stroke="#333" strokeWidth={0.7} />
+      {[0,1,2,3,4].map(i => (
+        <line key={i} x1={w*0.1} y1={h*(0.2+i*0.13)} x2={w*0.54} y2={h*(0.2+i*0.13)}
+          stroke="#444" strokeWidth={0.6} />
+      ))}
+      <text x={w*0.30} y={h*0.56} textAnchor="middle" fontSize={5} fill="#888" fontFamily="monospace">COIL</text>
+      {/* Contact indicator */}
+      <rect x={w*0.65} y={h*0.2} width={w*0.26} height={h*0.6} rx={2}
+        fill={active ? '#22543d' : '#1a1a1a'} stroke={active ? '#22c55e' : '#333'} strokeWidth={0.8} />
+      <circle cx={w*0.78} cy={h*(active ? 0.38 : 0.62)} r={3}
+        fill={active ? '#4ade80' : '#555'}
+        style={{ transition: 'cy 0.08s' }} />
+      {/* Status LED */}
+      <circle cx={w*0.88} cy={h*0.12} r={2.5}
+        fill={active ? '#ef4444' : '#3a1a1a'}
+        opacity={active ? 1 : 0.5} />
+      {active && <circle cx={w*0.88} cy={h*0.12} r={2.5} fill="#ef4444" opacity={0.3}>
+        <animate attributeName="opacity" from="0.3" to="0.7" dur="0.5s" repeatCount="indefinite" values="0.3;0.7;0.3" />
+      </circle>}
+      <text x={w*0.5} y={h*0.92} textAnchor="middle" fontSize={4.5} fill="rgba(255,255,255,0.35)" fontFamily="monospace">RELAY</text>
+    </>
+  )
+}
+
+// ── OLED 128×64 ────────────────────────────────────────────────────────────────
+function OledBody({ w, h, g }: { w: number; h: number; g: string }) {
+  return (
+    <>
+      <defs>
+        <linearGradient id={`oled_${g}`} x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%"   stopColor="#1a1a1a" />
+          <stop offset="100%" stopColor="#0a0a0a" />
+        </linearGradient>
+      </defs>
+      <rect width={w} height={h} rx={3} fill={`url(#oled_${g})`} stroke="#2a2a2a" strokeWidth={0.8} />
+      {/* Screen area */}
+      <rect x={w*0.04} y={h*0.06} width={w*0.92} height={h*0.76} rx={2} fill="#000" stroke="#333" strokeWidth={0.5} />
+      {/* Pixel grid (simplified) */}
+      {Array.from({ length: 6 }, (_, row) =>
+        Array.from({ length: 10 }, (_, col) => {
+          const lit = (row + col) % 3 !== 2
+          return lit ? (
+            <rect key={`${row}-${col}`}
+              x={w*(0.07 + col*0.086)} y={h*(0.10 + row*0.10)}
+              width={w*0.05} height={h*0.06}
+              fill="rgba(100,180,255,0.55)" rx={0.5} />
+          ) : null
+        })
+      ).flat()}
+      {/* "OLED" label row */}
+      <text x={w*0.5} y={h*0.56} textAnchor="middle" fontSize={6} fill="rgba(100,180,255,0.7)" fontFamily="monospace" fontWeight="700">OLED</text>
+      <text x={w*0.5} y={h*0.65} textAnchor="middle" fontSize={4.5} fill="rgba(100,180,255,0.4)" fontFamily="monospace">128×64</text>
+      {/* PCB pin labels */}
+      <text x={w*0.5} y={h*0.90} textAnchor="middle" fontSize={4.5} fill="rgba(255,255,255,0.3)" fontFamily="monospace">SSD1306</text>
+    </>
+  )
+}
+
+// ── NeoPixel Ring ──────────────────────────────────────────────────────────────
+function NeopixelRingBody({ w, h, val, g }: { w: number; h: number; val: number; g: string }) {
+  const active = val > 0
+  const cx = w / 2, cy = h / 2
+  const r = Math.min(w, h) * 0.38
+  const count = 12
+  const colors = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7',
+                   '#ec4899','#06b6d4','#84cc16','#f59e0b','#8b5cf6','#10b981']
+  return (
+    <>
+      <circle cx={cx} cy={cy} r={Math.min(w,h)/2-1} fill="#111" stroke="#2a2a2a" strokeWidth={0.8} />
+      <circle cx={cx} cy={cy} r={r * 0.52} fill="#0a0a0a" stroke="#333" strokeWidth={0.5} />
+      {Array.from({ length: count }, (_, i) => {
+        const angle = (i / count) * Math.PI * 2 - Math.PI / 2
+        const px = cx + Math.cos(angle) * r
+        const py = cy + Math.sin(angle) * r
+        const c = active ? colors[i] : '#1a1a1a'
+        return (
+          <g key={i}>
+            {active && <circle cx={px} cy={py} r={5} fill={c} opacity={0.25} />}
+            <circle cx={px} cy={py} r={3.2} fill={c} stroke={active ? c : '#333'} strokeWidth={0.5} />
+          </g>
+        )
+      })}
+      <text x={cx} y={cy + 3.5} textAnchor="middle" fontSize={5} fill="rgba(255,255,255,0.35)" fontFamily="monospace">WS2812</text>
+    </>
+  )
+}
+
+// ── N-Channel MOSFET ───────────────────────────────────────────────────────────
+function MosfetBody({ w, h, active }: { w: number; h: number; active: boolean }) {
+  return (
+    <>
+      {/* TO-92 package */}
+      <path d={`M ${w*0.08} ${h*0.40} A ${w*0.48} ${h*0.55} 0 0 1 ${w*0.92} ${h*0.40} L ${w*0.92} ${h*0.92} L ${w*0.08} ${h*0.92} Z`}
+        fill="#1a1a1a" stroke="#444" strokeWidth={0.8} />
+      <line x1={w*0.08} y1={h*0.40} x2={w*0.92} y2={h*0.40} stroke="#555" strokeWidth={0.8} />
+      {/* Leads */}
+      <line x1={w*0.22} y1={h*0.92} x2={w*0.22} y2={h}     stroke="#b8b8b8" strokeWidth={1.5} />
+      <line x1={w*0.50} y1={h*0.92} x2={w*0.50} y2={h}     stroke="#b8b8b8" strokeWidth={1.5} />
+      <line x1={w*0.78} y1={h*0.92} x2={w*0.78} y2={h}     stroke="#b8b8b8" strokeWidth={1.5} />
+      {/* Drain lead at top */}
+      <line x1={w*0.50} y1={0}      x2={w*0.50} y2={h*0.25} stroke="#b8b8b8" strokeWidth={1.5} />
+      {/* Gate arrow */}
+      <line x1={w*0.08} y1={h*0.60} x2={w*0.30} y2={h*0.60} stroke={active ? '#3b82f6' : '#555'} strokeWidth={1.2} />
+      <polygon points={`${w*0.30},${h*0.54} ${w*0.30},${h*0.66} ${w*0.44},${h*0.60}`}
+        fill={active ? '#3b82f6' : '#555'} />
+      {/* Channel line */}
+      <line x1={w*0.50} y1={h*0.28} x2={w*0.50} y2={h*0.90}
+        stroke={active ? '#22c55e' : '#333'} strokeWidth={1.5} />
+      <text x={w*0.22} y={h*0.78} textAnchor="middle" fontSize={5} fill="#888" fontFamily="monospace">G</text>
+      <text x={w*0.50} y={h*0.78} textAnchor="middle" fontSize={5} fill="#888" fontFamily="monospace">D</text>
+      <text x={w*0.78} y={h*0.78} textAnchor="middle" fontSize={5} fill="#888" fontFamily="monospace">S</text>
+    </>
+  )
+}
+
+// ── Diode ─────────────────────────────────────────────────────────────────────
+function DiodeBody({ w, h }: { w: number; h: number }) {
+  const my = h / 2
+  return (
+    <>
+      {/* Leads */}
+      <line x1={0}      y1={my}     x2={w*0.25} y2={my} stroke="#b8b8b8" strokeWidth={1.8} />
+      <line x1={w*0.75} y1={my}     x2={w}      y2={my} stroke="#b8b8b8" strokeWidth={1.8} />
+      {/* Body */}
+      <rect x={w*0.22} y={h*0.14} width={w*0.56} height={h*0.72} rx={h*0.08}
+        fill="#111" stroke="#555" strokeWidth={0.8} />
+      {/* Cathode stripe */}
+      <rect x={w*0.66} y={h*0.10} width={w*0.10} height={h*0.80} rx={1}
+        fill="#e0e0e0" opacity={0.85} />
+      {/* Triangle symbol */}
+      <polygon points={`${w*0.30},${my-5} ${w*0.30},${my+5} ${w*0.60},${my}`}
+        fill="#555" />
+      <line x1={w*0.60} y1={my-5} x2={w*0.60} y2={my+5} stroke="#888" strokeWidth={1.2} />
+      <text x={w*0.5} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)" fontFamily="var(--font-mono)">1N4007</text>
+    </>
+  )
+}
+
+// ── L298N Motor Driver ─────────────────────────────────────────────────────────
+function L298nBody({ w, h, g }: { w: number; h: number; g: string }) {
+  return (
+    <>
+      <defs>
+        <linearGradient id={`l298_${g}`} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%"   stopColor="#2a2a2a" />
+          <stop offset="100%" stopColor="#111" />
+        </linearGradient>
+      </defs>
+      <rect width={w} height={h} rx={4} fill={`url(#l298_${g})`} stroke="#3a3a3a" strokeWidth={0.8} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={3} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={0.5} />
+      {/* Big heatsink */}
+      <rect x={w*0.08} y={h*0.08} width={w*0.84} height={h*0.52} rx={2} fill="#1a1a1a" stroke="#333" strokeWidth={0.7} />
+      {[0.18,0.30,0.42,0.54,0.66,0.78].map((x, i) => (
+        <line key={i} x1={w*x} y1={h*0.08} x2={w*x} y2={h*0.60} stroke="#222" strokeWidth={1} />
+      ))}
+      {/* L298N IC on top */}
+      <rect x={w*0.22} y={h*0.14} width={w*0.56} height={h*0.38} rx={1.5} fill="#111" stroke="#444" strokeWidth={0.5} />
+      <text x={w*0.5} y={h*0.32} textAnchor="middle" fontSize={6.5} fill="#777" fontFamily="monospace" fontWeight="700">L298N</text>
+      <text x={w*0.5} y={h*0.43} textAnchor="middle" fontSize={4.5} fill="#555" fontFamily="monospace">MOTOR DRIVER</text>
+      {/* Terminal blocks */}
+      {[0.68, 0.80, 0.92].map((ry, i) => (
+        <rect key={i} x={w*0.05} y={h*ry - 4} width={w*0.22} height={8} rx={1}
+          fill="#2a4a2a" stroke="#1a6a1a" strokeWidth={0.5} />
+      ))}
+      {[0.68, 0.80, 0.92].map((ry, i) => (
+        <rect key={i} x={w*0.73} y={h*ry - 4} width={w*0.22} height={8} rx={1}
+          fill="#2a4a2a" stroke="#1a6a1a" strokeWidth={0.5} />
+      ))}
+    </>
+  )
+}
+
+
+// ── Default fallback ──────────────────────────────────────────────────────────
 function DefaultBody({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
   return (
     <>

@@ -1,6 +1,6 @@
 'use client'
 import { useStore, BottomTab } from '@/lib/store'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, KeyboardEvent as RKE } from 'react'
 import { IconBtn } from '@/components/shared/primitives'
 import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -104,16 +104,16 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
           {!s.alive  && <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" title="ended" />}
           <button className={clsx('ml-0.5 rounded-sm hover:bg-red-500/30 hover:text-red-400 transition-colors px-0.5 border-0 bg-transparent cursor-pointer leading-none',
               i === activeIdx ? 'opacity-60 hover:opacity-100' : 'opacity-0 group-hover:opacity-60 hover:!opacity-100')}
-            onClick={e => { e.stopPropagation(); onClose(i) }} title={t('bottomPanel.closeSession')}>×</button>
+            onClick={e => { e.stopPropagation(); onClose(i) }} title={t('bottomPanel.closeSession')}>x</button>
         </div>
       ))}
       <div className="relative flex-shrink-0" ref={dropRef}>
         <button onClick={() => setOpen(o => !o)} disabled={loading || shells.length === 0}
           title={t('bottomPanel.newSession')}
           className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] border-0 bg-transparent cursor-pointer transition-colors text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed">
-          {loading ? <span className="animate-spin inline-block">⟳</span> : <span className="text-[11px] font-bold">+</span>}
+          {loading ? <span className="animate-spin inline-block">x</span> : <span className="text-[11px] font-bold">+</span>}
           {shells.length > 0 && <span>{shells[0]?.icon}</span>}
-          <span style={{ fontSize: '8px' }}>▾</span>
+          <span style={{ fontSize: '8px' }}>v</span>
         </button>
         {open && shells.length > 0 && (
           <div className="absolute left-0 top-full mt-0.5 z-50 min-w-[160px] rounded border border-[var(--border)] bg-[var(--surface-2)] shadow-lg py-1">
@@ -130,241 +130,271 @@ function ShellTabBar({ shells, sessions, activeIdx, onSelect, onNewSession, onCl
   )
 }
 
-// ── XtermView — xterm.js display + spawnShell backend ────────────────────────
+// ── ANSI parser ───────────────────────────────────────────────────────────────
+// Handles SGR sequences: colors (30-37,39,90-97), bold (1), dim (2), reset (0)
 
-interface XtermViewProps {
-  session: PtySession; projectPath: string | null
-  isActive: boolean
-  onAlive: (b: boolean) => void; onRunning: (b: boolean) => void
-  onReady: (sendFn: (cmd: string, args: string[]) => Promise<number>) => void
+interface AnsiSpan { text: string; color?: string; bold?: boolean; dim?: boolean }
+
+const ANSI_FG: Record<number, string> = {
+  30: '#606366', 31: '#e06c75', 32: '#98c379', 33: '#e5c07b',
+  34: '#61afef', 35: '#c678dd', 36: '#56b6c2', 37: '#abb2bf',
+  90: '#5c6370', 91: '#ff7b7b', 92: '#b5e890', 93: '#ffd080',
+  94: '#80c8ff', 95: '#e0a0ff', 96: '#80e0f0', 97: '#ffffff',
 }
 
-let _xtermLoading: Promise<void> | null = null
-function loadXterm(): Promise<void> {
-  if (_xtermLoading) return _xtermLoading
-  _xtermLoading = new Promise<void>((resolve, reject) => {
-    const fail = (e: Error) => { _xtermLoading = null; reject(e) }
-    if (typeof window === 'undefined') { reject(new Error('no window')); return }
-    if ((window as any).Terminal) { resolve(); return }
-    const CSS = `https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css`
-    const JS  = `https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js`
-    const FIT = `https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js`
-    if (!document.querySelector(`link[href="${CSS}"]`)) {
-      const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = CSS
-      document.head.appendChild(l)
-    }
-    const s1 = document.createElement('script'); s1.src = JS
-    s1.onerror = () => fail(new Error('Failed to load xterm from CDN'))
-    s1.onload  = () => {
-      const s2 = document.createElement('script'); s2.src = FIT
-      s2.onerror = () => fail(new Error('Failed to load addon-fit from CDN'))
-      s2.onload  = () => resolve()
-      document.head.appendChild(s2)
-    }
-    document.head.appendChild(s1)
-  })
-  return _xtermLoading
-}
-
-function XtermView({ session, projectPath, isActive, onAlive, onRunning, onReady }: XtermViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const termRef      = useRef<any>(null)
-  const fitRef       = useRef<any>(null)
-  const handleRef    = useRef<any>(null)
-  const resolveRef   = useRef<((code: number) => void) | null>(null)
-
-  // Re-fit whenever the tab becomes visible (xterm can't measure a display:none container)
-  useEffect(() => {
-    if (!isActive || !fitRef.current || !termRef.current) return
-    // rAF ensures the browser has painted and the container has real dimensions
-    const id = requestAnimationFrame(() => {
-      try { fitRef.current?.fit() } catch { /* ignore */ }
-    })
-    return () => cancelAnimationFrame(id)
-  }, [isActive])
-
-  useEffect(() => {
-    if (!containerRef.current) return
-    let cancelled = false
-
-    const init = async () => {
-      try {
-        await loadXterm()
-        if (cancelled || !containerRef.current) return
-
-        const w        = window as any
-        const Terminal = w.Terminal
-        const FitAddon = w.FitAddon?.FitAddon ?? w.FitAddon
-        if (typeof Terminal !== 'function') throw new Error(`Terminal not a function (got ${typeof Terminal})`)
-        if (typeof FitAddon  !== 'function') throw new Error(`FitAddon not a function (got ${typeof w.FitAddon})`)
-
-        const cs = getComputedStyle(document.documentElement)
-        const v  = (k: string) => cs.getPropertyValue(k).trim() || undefined
-
-        const term = new Terminal({
-          fontFamily:       'JetBrains Mono, Menlo, Consolas, "Courier New", monospace',
-          fontSize:         12, lineHeight: 1.4,
-          cursorBlink:      true, cursorStyle: 'bar',
-          scrollback:       5000,
-          convertEol:       true,
-          allowProposedApi: true,
-          theme: {
-            background:          v('--surface-1') ?? '#1a1a1a',
-            foreground:          v('--fg')        ?? '#d4d4d4',
-            cursor:              v('--fg')        ?? '#d4d4d4',
-            cursorAccent:        v('--surface-1') ?? '#1a1a1a',
-            selectionBackground: 'rgba(255,255,255,0.2)',
-            black:   '#1e1e1e', brightBlack:   '#666666',
-            red:     '#f44747', brightRed:     '#f44747',
-            green:   '#4ec94e', brightGreen:   '#4ec94e',
-            yellow:  '#dcdcaa', brightYellow:  '#dcdcaa',
-            blue:    '#569cd6', brightBlue:    '#569cd6',
-            magenta: '#c586c0', brightMagenta: '#c586c0',
-            cyan:    '#9cdcfe', brightCyan:    '#9cdcfe',
-            white:   '#d4d4d4', brightWhite:   '#ffffff',
-          },
-        })
-
-        const fitAddon = new FitAddon()
-        term.loadAddon(fitAddon)
-        term.open(containerRef.current!)
-        fitAddon.fit()
-        termRef.current = term
-        fitRef.current  = fitAddon
-
-        term.writeln(`\x1b[90mLaunching ${session.shell.name}…\x1b[0m`)
-
-        const handle = await spawnShell(session.shell, projectPath ?? undefined, (line, isErr) => {
-          term.writeln(isErr ? `\x1b[31m${line}\x1b[0m` : line)
-        })
-
-        if (cancelled) { handle.kill().catch(() => {}); handle.dispose(); return }
-        handleRef.current = handle
-
-        handle.done.then(code => {
-          term.writeln(`\r\n\x1b[90m[${session.shell.name} exited — code ${code}]\x1b[0m`)
-          onAlive(false); onRunning(false)
-          resolveRef.current?.(code)
-          resolveRef.current = null
-        })
-
-        let lineBuf = ''
-        term.onData((data: string) => {
-          const code = data.charCodeAt(0)
-          if (data === '\r' || data === '\n') {
-            term.write('\r\n')
-            if (lineBuf.trim()) handle.write(lineBuf + '\r\n').catch(() => {})
-            lineBuf = ''
-          } else if (code === 127 || code === 8) {
-            if (lineBuf.length > 0) { lineBuf = lineBuf.slice(0, -1); term.write('\b \b') }
-          } else if (code === 3) {
-            handle.write('\x03').catch(() => {}); lineBuf = ''; term.write('^C\r\n')
-          } else if (code === 12) {
-            term.clear(); lineBuf = ''
-          } else if (code >= 32) {
-            lineBuf += data; term.write(data)
-          }
-        })
-
-        onReady((cmd: string, args: string[]): Promise<number> => {
-          const p = new Promise<number>(r => { resolveRef.current = r })
-          onRunning(true)
-          const label = [cmd, ...args].join(' ')
-          term.writeln(`\x1b[90m❯ ${label}\x1b[0m`)
-
-          spawnProcess(cmd, args, projectPath ?? undefined, (line, isErr) => {
-            term.writeln(isErr ? `\x1b[31m${line}\x1b[0m` : line)
-          }).then(h => {
-            h.done.then(code => {
-              h.dispose()
-              resolveRef.current?.(code)
-              resolveRef.current = null
-              onRunning(false)
-              if (code !== 0) term.writeln(`\x1b[31m[exit ${code}]\x1b[0m`)
-              useStore.getState().refreshTree().catch(() => {})
-            })
-          }).catch(e => {
-            term.writeln(`\x1b[31m[error: ${e}]\x1b[0m`)
-            resolveRef.current?.(1)
-            resolveRef.current = null
-            onRunning(false)
-          })
-
-          return p
-        })
-
-      } catch (err) {
-        console.error('[XtermView] init failed:', err)
-        if (!cancelled && containerRef.current) {
-          containerRef.current.innerHTML = `
-            <div style="padding:16px;font-family:monospace;font-size:11px;color:var(--fg-muted);line-height:1.8">
-              <div style="color:#f44747;font-weight:600;margin-bottom:6px">Terminal init failed</div>
-              <div style="color:var(--fg-faint)">${String(err)}</div>
-            </div>`
-        }
+function parseAnsi(raw: string): AnsiSpan[] {
+  const spans: AnsiSpan[] = []
+  let color = ''; let bold = false; let dim = false
+  const parts = raw.split(/\x1b\[([0-9;]*)m/)
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      if (parts[i]) spans.push({ text: parts[i], color: color || undefined, bold: bold || undefined, dim: dim || undefined })
+    } else {
+      const codes = parts[i] === '' ? [0] : parts[i].split(';').map(Number)
+      for (const c of codes) {
+        if      (c === 0)              { color = ''; bold = false; dim = false }
+        else if (c === 1)              bold = true
+        else if (c === 2)              dim  = true
+        else if (c === 22)             { bold = false; dim = false }
+        else if (c === 39)             color = ''
+        else if (c in ANSI_FG)        color = ANSI_FG[c]
       }
     }
+  }
+  return spans.length ? spans : [{ text: raw }]
+}
 
-    init()
+// Strip non-SGR escape sequences (cursor movement, etc.) then parse ANSI colors
+function cleanAndParse(raw: string): AnsiSpan[] {
+  const stripped = raw
+    .replace(/\x1b\[[^A-Za-z]*[A-BCDEGHJKST]/g, '')  // cursor movement etc.
+    .replace(/\x1b[^[]/g, '')                          // ESC + single char
+  return parseAnsi(stripped)
+}
+
+// ── TermLine ──────────────────────────────────────────────────────────────────
+
+type LineKind = 'output' | 'error' | 'prompt' | 'info' | 'system'
+
+interface TermLine {
+  id:    number
+  spans: AnsiSpan[]
+  kind:  LineKind
+  raw:   string
+}
+
+let _lid = 0
+function makeLine(raw: string, kind: LineKind): TermLine {
+  return { id: _lid++, raw, spans: cleanAndParse(raw), kind }
+}
+
+// ── TermView — custom React terminal ─────────────────────────────────────────
+
+interface TermViewProps {
+  session:     PtySession
+  projectPath: string | null
+  onAlive:     (b: boolean) => void
+  onRunning:   (b: boolean) => void
+}
+
+function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
+  const [lines,   setLines  ] = useState<TermLine[]>([makeLine(`Launching ${session.shell.name}…`, 'system')])
+  const [input,   setInput  ] = useState('')
+  const [ready,   setReady  ] = useState(false)
+  const [history, setHistory] = useState<string[]>([])
+  const [histIdx, setHistIdx] = useState(-1)
+
+  const scrollRef  = useRef<HTMLDivElement>(null)
+  const inputRef   = useRef<HTMLInputElement>(null)
+  const handleRef  = useRef<any>(null)
+  const resolveRef = useRef<((code: number) => void) | null>(null)
+
+  const push = useCallback((raw: string, kind: LineKind = 'output') => {
+    setLines(prev => [...prev, makeLine(raw, kind)])
+  }, [])
+
+  // Auto-scroll on new lines
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [lines])
+
+  // ── Spawn interactive shell ───────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    spawnShell(session.shell, projectPath ?? undefined, (line, isErr) => {
+      push(line, isErr ? 'error' : 'output')
+    }).then(handle => {
+      if (cancelled) { handle.kill().catch(() => {}); handle.dispose(); return }
+      handleRef.current = handle
+      setReady(true)
+      setTimeout(() => inputRef.current?.focus(), 50)
+
+      handle.done.then(code => {
+        push(`[${session.shell.name} exited — code ${code}]`, 'system')
+        onAlive(false)
+        onRunning(false)
+        resolveRef.current?.(code)
+        resolveRef.current = null
+        setReady(false)
+      })
+    }).catch(e => {
+      if (!cancelled) push(`Failed to start shell: ${e}`, 'error')
+    })
 
     return () => {
       cancelled = true
       handleRef.current?.kill().catch(() => {})
       handleRef.current?.dispose()
       handleRef.current = null
-      termRef.current?.dispose()
-      termRef.current = null
-      fitRef.current  = null
     }
   }, []) // eslint-disable-line
 
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const ro = new ResizeObserver(() => {
-      if (!fitRef.current || !termRef.current) return
-      try { fitRef.current.fit() } catch { /* ignore */ }
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [session.id])
+  const submitLine = useCallback((line: string) => {
+    if (!handleRef.current) return
+    push(`> ${line}`, 'prompt')
+    if (line.trim()) setHistory(h => [line, ...h.slice(0, 199)])
+    handleRef.current.write(line + '\r\n').catch(() => {})
+    setInput('')
+    setHistIdx(-1)
+  }, [push])
+
+  const onKeyDown = useCallback((e: RKE<HTMLInputElement>) => {
+    if (!ready || !handleRef.current) return
+
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      submitLine(input)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHistory(h => {
+        const next = Math.min(histIdx + 1, h.length - 1)
+        setHistIdx(next)
+        if (h[next] !== undefined) setInput(h[next])
+        return h
+      })
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      const next = histIdx - 1
+      setHistIdx(next)
+      setInput(next < 0 ? '' : history[next] ?? '')
+    } else if (e.key === 'c' && e.ctrlKey) {
+      e.preventDefault()
+      handleRef.current.write('\x03').catch(() => {})
+      push('^C', 'system')
+      setInput('')
+      setHistIdx(-1)
+    } else if (e.key === 'l' && e.ctrlKey) {
+      e.preventDefault()
+      setLines([])
+    } else if (e.key === 'Tab') {
+      e.preventDefault()
+      handleRef.current.write('\t').catch(() => {})
+    }
+  }, [ready, input, history, histIdx, push, submitLine])
 
   return (
     <div
-      ref={containerRef}
-      className="flex-1 overflow-hidden"
-      style={{ background: 'var(--surface-1)', padding: '4px 2px 2px' }}
-      onClick={() => termRef.current?.focus()}
-    />
+      className="flex-1 flex flex-col overflow-hidden"
+      style={{ background: 'var(--surface-1)', fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace' }}
+      onClick={() => inputRef.current?.focus()}
+    >
+      {/* ── Scrollback ── */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-3 pt-2 pb-1 select-text"
+        style={{ fontSize: 12, lineHeight: 1.65, scrollbarWidth: 'thin' }}
+      >
+        {lines.map(l => (
+          <div
+            key={l.id}
+            className="whitespace-pre-wrap break-all"
+            style={{
+              color: l.kind === 'error'  ? '#e06c75'
+                   : l.kind === 'prompt' ? 'var(--fg)'
+                   : l.kind === 'system' ? 'var(--fg-faint)'
+                   : l.kind === 'info'   ? '#61afef'
+                   : 'var(--fg-muted)',
+              fontWeight: l.kind === 'prompt' ? 600 : undefined,
+              fontStyle:  l.kind === 'system' ? 'italic' : undefined,
+              opacity:    l.kind === 'system' ? 0.7 : 1,
+            }}
+          >
+            {/* Use ANSI spans only for output/error lines; others render raw */}
+            {(l.kind === 'output' || l.kind === 'error')
+              ? l.spans.map((s, i) => (
+                  <span key={i} style={{
+                    color:      s.color  || undefined,
+                    fontWeight: s.bold   ? 700 : undefined,
+                    opacity:    s.dim    ? 0.5 : undefined,
+                  }}>{s.text}</span>
+                ))
+              : l.raw
+            }
+          </div>
+        ))}
+      </div>
+
+      {/* ── Input row ── */}
+      <div
+        className="flex items-center gap-2 px-3 border-t flex-shrink-0"
+        style={{
+          borderColor: 'var(--border)',
+          paddingTop: 5, paddingBottom: 5,
+          opacity: ready ? 1 : 0.45,
+          pointerEvents: ready ? 'auto' : 'none',
+        }}
+      >
+        <span style={{ color: '#98c379', fontSize: 11, flexShrink: 0, userSelect: 'none' }}>❯</span>
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={!ready}
+          spellCheck={false}
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          className="flex-1 border-0 outline-none bg-transparent min-w-0"
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 12,
+            color: 'var(--fg)',
+            caretColor: '#98c379',
+          }}
+          placeholder={ready ? '' : 'Waiting for shell…'}
+        />
+      </div>
+    </div>
   )
 }
 
-// ── Fallback line type (Path B direct-spawn output) ───────────────────────────
-
-interface FbLine { id: number; text: string; type: 'out'|'err'|'info'|'prompt' }
-let _lid = 0
-
-// ── Terminal: session manager ─────────────────────────────────────────────────
+// ── Terminal: session manager + direct command output ────────────────────────
 
 function Terminal() {
-  const { projectPath, pendingCommand, clearPendingCommand, settings, bottomTab } = useStore()
+  const { projectPath, pendingCommand, clearPendingCommand } = useStore()
   const t = useT()
   const [shells,        setShells       ] = useState<ShellInfo[]>([])
   const [sessions,      setSessions     ] = useState<PtySession[]>([])
   const [activeIdx,     setActiveIdx    ] = useState(0)
   const [loadingShells, setLoadingShells] = useState(true)
-  const [fbLines,       setFbLines      ] = useState<FbLine[]>([])
-  const fbEndRef     = useRef<HTMLDivElement>(null)
-  const settingsRef  = useRef(settings)
-  const activeIdxRef = useRef(activeIdx)
-  const sendFnsRef   = useRef<Record<string, (cmd: string, args: string[]) => Promise<number>>>({})
 
-  useEffect(() => { settingsRef.current = settings   }, [settings])
-  useEffect(() => { activeIdxRef.current = activeIdx }, [activeIdx])
-  useEffect(() => { fbEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [fbLines])
+  // ── Dedicated output lines for toolbar commands (spawnProcess) ───────────
+  // These are rendered above the interactive shell and persist independently
+  // of session lifecycle. No race condition — no session needed.
+  const [cmdLines,    setCmdLines   ] = useState<TermLine[]>([])
+  const [cmdRunning,  setCmdRunning ] = useState(false)
+  const cmdScrollRef  = useRef<HTMLDivElement>(null)
+  const projectPathRef = useRef(projectPath)
 
-  const addFb = useCallback((text: string, type: FbLine['type'] = 'out') => {
-    setFbLines(prev => [...prev, { id: _lid++, text, type }])
+  useEffect(() => { projectPathRef.current = projectPath }, [projectPath])
+  useEffect(() => {
+    if (cmdScrollRef.current) cmdScrollRef.current.scrollTop = cmdScrollRef.current.scrollHeight
+  }, [cmdLines])
+
+  const pushCmd = useCallback((raw: string, kind: LineKind = 'output') => {
+    setCmdLines(prev => [...prev, makeLine(raw, kind)])
   }, [])
 
   useEffect(() => {
@@ -384,85 +414,61 @@ function Terminal() {
 
   function newSession(shell: ShellInfo) {
     const id = makePtyId()
-    setSessions(prev => { const n = [...prev, { id, numId: _sessionCounter - 1, shell, alive: true, running: false }]; setActiveIdx(n.length - 1); return n })
+    setSessions(prev => {
+      const n = [...prev, { id, numId: _sessionCounter - 1, shell, alive: true, running: false }]
+      setActiveIdx(n.length - 1)
+      return n
+    })
   }
 
   function closeSession(idx: number) {
     setSessions(prev => {
       const s = prev[idx]
-      if (s) { delete sendFnsRef.current[s.id] }
       const n = prev.filter((_, i) => i !== idx)
       setActiveIdx(i => Math.min(i, Math.max(0, n.length - 1)))
       return n
     })
   }
 
+  // ── pendingCommand: runs directly via spawnProcess, no session needed ─────
   useEffect(() => {
     if (!pendingCommand) return
     const { cmd, args, cwd, chainArgs } = pendingCommand
     clearPendingCommand()
-    const method = settingsRef.current.winSpawnMethod ?? 'shell'
 
-    const run = async (cmdStr: string, argsArr: string[], cwdStr?: string): Promise<number> => {
-      if (method === 'shell') {
-        const sess   = sessions[activeIdxRef.current]
-        const sendFn = sess ? sendFnsRef.current[sess.id] : null
-
-        if (!sendFn) {
-          await new Promise<void>(res => {
-            const t0 = Date.now()
-            const iv = setInterval(() => {
-              const s = sessions[activeIdxRef.current]
-              if ((s && sendFnsRef.current[s.id]) || Date.now() - t0 > 4000) { clearInterval(iv); res() }
-            }, 100)
-          })
-        }
-
-        const fn = sessions[activeIdxRef.current]
-          ? sendFnsRef.current[sessions[activeIdxRef.current].id] : null
-
-        if (fn) {
-          try {
-            const code = await fn(cmdStr, argsArr)
+    const run = (cmdStr: string, argsArr: string[]): Promise<number> => {
+      pushCmd(`> ${[cmdStr, ...argsArr].join(' ')}`, 'prompt')
+      setCmdRunning(true)
+      return new Promise<number>(resolve => {
+        spawnProcess(cmdStr, argsArr, cwd ?? projectPathRef.current ?? undefined, (line, isErr) => {
+          pushCmd(line, isErr ? 'error' : 'output')
+        }).then(handle => {
+          handle.done.then(code => {
+            handle.dispose()
+            setCmdRunning(false)
+            if (code !== 0) pushCmd(`[exit ${code}]`, 'error')
+            else pushCmd('[done]', 'system')
             useStore.getState().refreshTree().catch(() => {})
-            return code
-          } catch (e) { addFb(`[dispatch error: ${e}]`, 'err') }
-        }
-      }
-
-      const label = [cmdStr, ...argsArr].join(' ')
-      addFb(`❯ ${label}`, 'prompt')
-      updateSession(activeIdxRef.current, { running: true })
-      try {
-        const handle = await spawnProcess(cmdStr, argsArr, cwdStr, (line, isErr) => {
-          addFb(line, isErr ? 'err' : 'out')
-          useStore.getState().addLog(isErr ? 'err' : 'ok', line)
+            resolve(code)
+          })
+        }).catch(e => {
+          pushCmd(`[error: ${e}]`, 'error')
+          setCmdRunning(false)
+          resolve(1)
         })
-        const code = await handle.done
-        handle.dispose()
-        updateSession(activeIdxRef.current, { running: false })
-        useStore.getState().refreshTree().catch(() => {})
-        if (code !== 0) addFb(`[exit ${code}]`, 'err')
-        return code
-      } catch (e) {
-        addFb(`[error: ${e}]`, 'err')
-        addFb(`Spawn method: ${method} — change in Settings → Developer`, 'info')
-        useStore.getState().addLog('err', String(e))
-        updateSession(activeIdxRef.current, { running: false })
-        return 1
-      }
+      })
     }
 
     if (chainArgs) {
-      run(cmd, args, cwd).then(code => { if (code === 0) run(cmd, chainArgs, cwd) })
+      run(cmd, args).then(code => { if (code === 0) run(cmd, chainArgs) })
     } else {
-      run(cmd, args, cwd)
+      run(cmd, args)
     }
-  }, [pendingCommand, clearPendingCommand, addFb, sessions])
+  }, [pendingCommand, clearPendingCommand, pushCmd]) // eslint-disable-line
 
   if (loadingShells) return (
     <div className="flex-1 flex items-center justify-center text-xs text-[var(--fg-faint)]">
-      <span className="animate-spin mr-2">⟳</span>Detecting shells…
+      <span className="animate-spin mr-2">x</span>Detecting shells…
     </div>
   )
 
@@ -489,33 +495,60 @@ function Terminal() {
   )
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden relative">
+    <div className="flex-1 flex flex-col overflow-hidden">
+
+      {/* ── Toolbar command output (always visible, no session dependency) ── */}
+      {cmdLines.length > 0 && (
+        <div className="flex flex-col border-b border-[var(--border)]" style={{ maxHeight: '45%', minHeight: 60 }}>
+          <div className="flex items-center justify-between px-3 py-0.5 border-b border-[var(--border)] flex-shrink-0"
+            style={{ background: 'var(--surface-2)' }}>
+            <span className="text-[10px] text-[var(--fg-faint)] font-mono select-none flex items-center gap-1.5">
+              {cmdRunning && <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse inline-block" />}
+              output
+            </span>
+            <button onClick={() => setCmdLines([])}
+              className="text-[10px] text-[var(--fg-faint)] hover:text-[var(--fg)] bg-transparent border-0 cursor-pointer px-1 leading-none">
+              ✕
+            </button>
+          </div>
+          <div ref={cmdScrollRef} className="overflow-y-auto px-3 py-1.5 flex-1"
+            style={{ fontFamily: '"JetBrains Mono", Consolas, monospace', fontSize: 11, lineHeight: 1.6, scrollbarWidth: 'thin' as const }}>
+            {cmdLines.map(l => (
+              <div key={l.id} className="whitespace-pre-wrap break-all" style={{
+                color: l.kind === 'error'  ? '#e06c75'
+                     : l.kind === 'prompt' ? 'var(--fg)'
+                     : l.kind === 'system' ? 'var(--fg-faint)'
+                     : 'var(--fg-muted)',
+                fontWeight: l.kind === 'prompt' ? 600 : undefined,
+                fontStyle: l.kind === 'system' ? 'italic' : undefined,
+                opacity: l.kind === 'system' ? 0.7 : 1,
+              }}>
+                {(l.kind === 'output' || l.kind === 'error')
+                  ? l.spans.map((s, i) => (
+                      <span key={i} style={{ color: s.color || undefined, fontWeight: s.bold ? 700 : undefined, opacity: s.dim ? 0.5 : undefined }}>{s.text}</span>
+                    ))
+                  : l.raw
+                }
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Interactive shell sessions ── */}
       <ShellTabBar shells={shells} sessions={sessions} activeIdx={activeIdx}
         onSelect={setActiveIdx} onNewSession={newSession} onClose={closeSession} loading={loadingShells} />
 
       {sessions.map((s, i) => (
         <div key={s.id} className={clsx('flex-1 flex flex-col overflow-hidden', i !== activeIdx && 'hidden')}>
-          <XtermView
-            session={s} projectPath={projectPath}
-            isActive={i === activeIdx && bottomTab === 'terminal'}
+          <TermView
+            session={s}
+            projectPath={projectPath}
             onAlive={b  => updateSession(i, { alive: b })}
             onRunning={b => updateSession(i, { running: b })}
-            onReady={fn  => { sendFnsRef.current[s.id] = fn }}
           />
         </div>
       ))}
-
-      {fbLines.length > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 max-h-40 overflow-y-auto bg-[var(--surface-1)]/95 border-t border-[var(--border)] px-3 py-2 font-mono text-[11px] z-20">
-          {fbLines.map(l => (
-            <div key={l.id} className={clsx('leading-[18px] whitespace-pre-wrap break-all', {
-              'text-[var(--fg-muted)]': l.type === 'out', 'text-red-400': l.type === 'err',
-              'text-blue-400': l.type === 'info', 'text-[var(--fg)] font-semibold': l.type === 'prompt',
-            })}>{l.text}</div>
-          ))}
-          <div ref={fbEndRef} />
-        </div>
-      )}
     </div>
   )
 }

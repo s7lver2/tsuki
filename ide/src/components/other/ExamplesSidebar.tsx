@@ -308,13 +308,46 @@ async function expandPath(p: string): Promise<string> {
   return home + p.slice(1)
 }
 
+// ── Strip semver range operators from a version string ────────────────────────
+// e.g. "^1.0.0" → "1.0.0",  ">=2.1.0" → "2.1.0",  "v1.0.0" → "1.0.0"
+function cleanVersion(v: string): string {
+  return v.replace(/^[\^~>=<]+v?/, '').trim()
+}
+
+// ── Scan libsDir to discover all installed packages ───────────────────────────
+// Returns an array of { name, versions[] } found directly on disk.
+// This is the source-of-truth for what's actually installed.
+export async function scanLibsDir(libsDir: string): Promise<Array<{ name: string; versions: string[] }>> {
+  try {
+    const { readDirEntries } = await import('@/lib/tauri')
+    const base = await expandPath(libsDir)
+    console.log('[examples] scanLibsDir → resolved base:', base)
+    const pkgDirs = await readDirEntries(base).catch((e: unknown) => {
+      console.warn('[examples] scanLibsDir: readDirEntries failed for', base, e)
+      return []
+    })
+    console.log('[examples] scanLibsDir → pkgDirs:', pkgDirs.map((d: {name:string}) => d.name))
+    const result: Array<{ name: string; versions: string[] }> = []
+    for (const d of pkgDirs) {
+      if (!d.is_dir) continue
+      // Each subdir might contain version dirs or examples directly
+      const children = await readDirEntries(`${base}/${d.name}`).catch(() => [])
+      const versionDirs = children.filter(c => c.is_dir && (c.name.match(/^v?\d/) || c.name === 'examples'))
+      if (versionDirs.some(v => v.name === 'examples')) {
+        // Flat layout: libsDir/pkg/examples
+        result.push({ name: d.name, versions: [''] })
+      } else {
+        result.push({ name: d.name, versions: versionDirs.map(v => v.name) })
+      }
+    }
+    return result
+  } catch {
+    return []
+  }
+}
+
 // ── Load examples from a package on disk ─────────────────────────────────────
-// Tries several path layouts that tsuki may use:
-//   {libsDir}/{pkgName}/{version}/examples     ← original
-//   {libsDir}/{pkgName}/examples               ← no version sub-dir
-//   {libsDir}/{pkgName.lower}/{version}/examples
-//   {libsDir}/{pkgName.lower}/examples
-// version is tried both as-is ("v1.0.0") and without the leading "v" ("1.0.0").
+// Tries many path layouts and version variants (with/without v prefix, semver ranges).
 
 async function loadPkgExamples(
   libsDir: string,
@@ -326,28 +359,38 @@ async function loadPkgExamples(
   // Resolve the base dir (expand "~" to the real home directory)
   const base = await expandPath(libsDir)
 
-  // Build a list of candidate "examples" directory paths to try
-  const vNoV = version.replace(/^v/, '')         // "1.0.0" from "v1.0.0"
-  const lower = pkgName.toLowerCase()
-  const candidates: string[] = [
-    `${base}/${pkgName}/${version}/examples`,
-    `${base}/${pkgName}/${vNoV}/examples`,
-    `${base}/${pkgName}/examples`,
-    `${base}/${lower}/${version}/examples`,
-    `${base}/${lower}/${vNoV}/examples`,
-    `${base}/${lower}/examples`,
-  ]
+  // Build full set of version variants to try
+  const vRaw   = version                        // as-is: "^1.0.0", "v1.0.0"
+  const vClean = cleanVersion(version)          // "1.0.0"
+  const vV     = vClean ? `v${vClean}` : ''     // "v1.0.0"
+  const lower  = pkgName.toLowerCase()
+  const names  = Array.from(new Set([pkgName, lower]))
+  const vers   = Array.from(new Set([vRaw, vClean, vV, ''].filter(Boolean)))
+
+  // Generate all candidate paths: name × version × [with examples subdir, without]
+  const candidates: string[] = []
+  for (const n of names) {
+    for (const v of vers) {
+      candidates.push(`${base}/${n}/${v}/examples`)
+    }
+    candidates.push(`${base}/${n}/examples`)
+  }
 
   // Find the first candidate that actually exists
+  console.log('[examples] loadPkgExamples', pkgName, '→ trying', candidates.length, 'candidates:', candidates)
   let examplesPath: string | null = null
   for (const candidate of candidates) {
     try {
-      await readDirEntries(candidate)   // throws if path doesn't exist
+      await readDirEntries(candidate)
       examplesPath = candidate
+      console.log('[examples] found examples at:', examplesPath)
       break
     } catch { /* try next */ }
   }
-  if (!examplesPath) return []
+  if (!examplesPath) {
+    console.warn('[examples] no examples dir found for', pkgName, 'after trying', candidates.length, 'paths')
+    return []
+  }
 
   let exDirs: { name: string; is_dir: boolean }[] = []
   try {
@@ -642,15 +685,17 @@ export default function ExamplesSidebar() {
   const { openExample, packages, settings, loadCircuitInSandbox } = useStore()
   const [query, setQuery]               = useState('')
   const [importTarget, setImportTarget] = useState<ExampleDef | null>(null)
-  // null  = loading in progress
-  // []    = loaded but empty  (still retryable via button)
-  // [...] = loaded with results
-  // key absent = never attempted
   const [pkgExamples, setPkgExamples]   = useState<Record<string, ExampleDef[] | null>>({})
+  const [diskPkgs,    setDiskPkgs    ]  = useState<Array<{ name: string; versions: string[] }>>([])
   const prevInstalled                   = useRef<Set<string>>(new Set())
 
   const libsDir       = settings.libsDir || '~/.tsuki/libs'
   const installedPkgs = packages.filter(p => p.installed)
+
+  // Scan libsDir on mount + when libsDir changes to discover what's actually installed
+  useEffect(() => {
+    scanLibsDir(libsDir).then(setDiskPkgs)
+  }, [libsDir])
 
   // ── Load examples for one package ────────────────────────────────────────
   const loadForPkg = useCallback(async (name: string, version: string) => {
@@ -682,32 +727,40 @@ export default function ExamplesSidebar() {
     }
   }, [libsDir])
 
-  // ── Trigger loads when installed list changes ─────────────────────────────
+  // ── Load examples whenever installed list or disk packages change ───────────
   useEffect(() => {
-    const currentNames = new Set(installedPkgs.map(p => p.name))
+    // Merge store-installed packages + disk-discovered packages into one set
+    const allPkgs: Array<{ name: string; version: string }> = []
+    const seen = new Set<string>()
+    for (const p of installedPkgs) {
+      seen.add(p.name)
+      allPkgs.push({ name: p.name, version: p.version })
+    }
+    for (const d of diskPkgs) {
+      if (!seen.has(d.name)) {
+        allPkgs.push({ name: d.name, version: d.versions[0] ?? '' })
+      }
+    }
 
-    for (const pkg of installedPkgs) {
+    const currentNames = new Set(allPkgs.map(p => p.name))
+
+    for (const pkg of allPkgs) {
       const isNewlyInstalled = !prevInstalled.current.has(pkg.name)
-      // Check current pkgExamples through a functional updater trick is hard —
-      // instead, always reload freshly installed packages; rely on cache key presence.
       setPkgExamples(prev => {
         const neverAttempted = !(pkg.name in prev)
         if (neverAttempted || isNewlyInstalled) {
-          // kick off load asynchronously; don't block the state update
           if (isNewlyInstalled) {
-            // Likely still downloading — use retry backoff
             retryLoad(pkg.name, pkg.version)
           } else {
             loadForPkg(pkg.name, pkg.version)
           }
         }
-        // mark as loading immediately so the spinner shows
         if (neverAttempted) return { ...prev, [pkg.name]: null }
         return prev
       })
     }
 
-    // Prune packages that are no longer installed
+    // Prune packages no longer present
     setPkgExamples(prev => {
       const next: typeof prev = {}
       for (const k of Object.keys(prev)) {
@@ -717,7 +770,7 @@ export default function ExamplesSidebar() {
     })
 
     prevInstalled.current = currentNames
-  }, [installedPkgs.map(p => p.name + ':' + p.installed).join(','), libsDir]) // eslint-disable-line
+  }, [installedPkgs.map(p => p.name + ':' + p.installed).join(','), diskPkgs, libsDir]) // eslint-disable-line
 
   const q = query.trim().toLowerCase()
   function filterExamples(exs: ExampleDef[]) {
@@ -777,31 +830,38 @@ export default function ExamplesSidebar() {
           <Section label="Built-in" icon={<Cpu size={10} />} examples={filteredBuiltin} onOpen={handleOpen} />
         )}
 
-        {installedPkgs.map(pkg => {
-          const loaded    = pkgExamples[pkg.name]
-          const isLoading = loaded === null || !(pkg.name in pkgExamples)
+        {/* Packages from store (marked installed) + disk-discovered packages */}
+        {Array.from(new Set([
+          ...installedPkgs.map(p => p.name),
+          ...diskPkgs.map(d => d.name),
+        ])).map(pkgName => {
+          const storePkg  = installedPkgs.find(p => p.name === pkgName)
+          const diskPkg   = diskPkgs.find(d => d.name === pkgName)
+          const version   = storePkg?.version ?? diskPkg?.versions[0] ?? ''
+          const loaded    = pkgExamples[pkgName]
+          const isLoading = loaded === null || !(pkgName in pkgExamples)
           const examples  = filterExamples(loaded ?? [])
           if (!isLoading && q && examples.length === 0) return null
           return (
             <Section
-              key={pkg.name}
-              label={pkg.name}
+              key={pkgName}
+              label={pkgName}
               icon={<Package size={10} />}
               examples={examples}
               loading={isLoading}
               onOpen={handleOpen}
-              onRefresh={() => loadForPkg(pkg.name, pkg.version)}
+              onRefresh={() => loadForPkg(pkgName, version)}
             />
           )
         })}
 
-        {installedPkgs.length === 0 && filteredBuiltin.length === 0 && (
+        {installedPkgs.length === 0 && diskPkgs.length === 0 && filteredBuiltin.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 py-8 text-[var(--fg-faint)]">
             <BookOpen size={20} /><span className="text-xs">No examples found</span>
           </div>
         )}
 
-        {installedPkgs.length === 0 && !q && (
+        {installedPkgs.length === 0 && diskPkgs.length === 0 && !q && (
           <div className="px-3 py-3 mt-1 mx-2 rounded border border-dashed border-[var(--border)] text-[10px] text-[var(--fg-faint)] text-center leading-relaxed">
             Install packages from the{' '}
             <span className="text-[var(--fg-muted)] font-medium">Packages</span>
@@ -813,7 +873,7 @@ export default function ExamplesSidebar() {
       {/* Footer legend */}
       <div className="px-3 py-2 border-t border-[var(--border)] flex-shrink-0 flex items-center gap-3 text-[9px] text-[var(--fg-faint)]">
         <span className="flex items-center gap-1"><CircuitBoard size={9} /> has circuit</span>
-        <span className="ml-auto">{BUILTIN_EXAMPLES.length} built-in · {totalPkgExamples} from pkgs</span>
+        <span className="ml-auto">{BUILTIN_EXAMPLES.length} built-in · {totalPkgExamples} from pkgs · {diskPkgs.length} on disk</span>
       </div>
 
       {importTarget && (

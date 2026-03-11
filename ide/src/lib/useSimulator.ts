@@ -33,13 +33,21 @@ export interface SimEvent {
   msg?:  string
 }
 
+export interface EnergyInfo {
+  voltage:  Record<string, number>   // pin → volts
+  current:  Record<string, number>   // pin → amperes
+  power_mw: Record<string, number>   // pin → mW
+  total_mw: number
+}
+
 export interface StepResult {
-  ok:     boolean
-  error?: string
-  events: SimEvent[]
-  pins:   Record<string, number>
-  serial: string[]
-  ms:     number
+  ok:      boolean
+  error?:  string
+  events:  SimEvent[]
+  pins:    Record<string, number>
+  serial:  string[]
+  ms:      number
+  energy?: EnergyInfo
 }
 
 export type SimStatus =

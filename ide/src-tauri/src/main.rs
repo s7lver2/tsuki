@@ -37,21 +37,18 @@ fn dbg(msg: &str) {
     eprintln!("{}", line);
 }
 
-// On Windows, .no_window() uses DETACHED_PROCESS instead of CREATE_NO_WINDOW.
-// DETACHED_PROCESS allows Stdio::piped() to work correctly (no console flash,
-// no broken pipe issues). win_proc::WinSpawn is used for the main spawn calls;
-// this trait remains for simple fire-and-forget commands (git, taskkill, etc.)
+// CREATE_NO_WINDOW suppresses console windows for the process AND its children.
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
-const DETACHED_PROCESS: u32 = 0x0000_0008;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 trait NoWindow {
     fn no_window(self) -> Self;
 }
 impl NoWindow for Command {
     #[cfg(windows)]
-    fn no_window(mut self) -> Self { self.creation_flags(DETACHED_PROCESS); self }
+    fn no_window(mut self) -> Self { self.creation_flags(CREATE_NO_WINDOW); self }
     #[cfg(not(windows))]
     fn no_window(self) -> Self { self }
 }

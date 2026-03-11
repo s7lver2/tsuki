@@ -408,6 +408,90 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'gnd_3', label: 'GND rail 3',type: 'gnd',   rx: 0.5, ry: 0.92, direction: 'inout' },
     ],
   },
+
+  // ── NEW: Relay ────────────────────────────────────────────────────────────
+  relay: {
+    type: 'relay', label: 'Relay 5V', w: 60, h: 44,
+    color: '#1a2a1a', borderColor: '#0d1a0d', category: 'actuator',
+    description: '5V single-channel relay · NO/NC · up to 10A 250V AC',
+    pins: [
+      { id: 'vcc',  label: 'VCC 5V',  type: 'power',   rx: 0,   ry: 0.18, direction: 'in'  },
+      { id: 'gnd',  label: 'GND',     type: 'gnd',     rx: 0,   ry: 0.50, direction: 'in'  },
+      { id: 'in',   label: 'IN',      type: 'digital', rx: 0,   ry: 0.82, direction: 'in'  },
+      { id: 'com',  label: 'COM',     type: 'generic', rx: 1,   ry: 0.25, direction: 'inout'},
+      { id: 'no',   label: 'NO',      type: 'generic', rx: 1,   ry: 0.55, direction: 'out' },
+      { id: 'nc',   label: 'NC',      type: 'generic', rx: 1,   ry: 0.82, direction: 'out' },
+    ],
+  },
+
+  // ── NEW: OLED 128×64 ──────────────────────────────────────────────────────
+  oled_128x64: {
+    type: 'oled_128x64', label: 'OLED 128×64', w: 72, h: 54,
+    color: '#0a0a0a', borderColor: '#222', category: 'display',
+    description: 'SSD1306 0.96" OLED · 128×64 · I²C · 3.3V–5V',
+    pins: [
+      { id: 'gnd',  label: 'GND',  type: 'gnd',   rx: 0.10, ry: 1, direction: 'in'    },
+      { id: 'vcc',  label: 'VCC',  type: 'power', rx: 0.30, ry: 1, direction: 'in'    },
+      { id: 'scl',  label: 'SCL',  type: 'i2c',   rx: 0.58, ry: 1, direction: 'in'    },
+      { id: 'sda',  label: 'SDA',  type: 'i2c',   rx: 0.80, ry: 1, direction: 'inout' },
+    ],
+  },
+
+  // ── NEW: NeoPixel Ring ────────────────────────────────────────────────────
+  neopixel_ring: {
+    type: 'neopixel_ring', label: 'NeoPixel Ring', w: 60, h: 60,
+    color: '#111', borderColor: '#333', category: 'output',
+    description: 'WS2812B 12-pixel RGB ring · addressable · 5V',
+    pins: [
+      { id: 'pwr',  label: 'PWR 5V',   type: 'power',   rx: 0.12, ry: 0.88, direction: 'in'  },
+      { id: 'gnd',  label: 'GND',      type: 'gnd',     rx: 0.30, ry: 0.96, direction: 'in'  },
+      { id: 'din',  label: 'Data IN',  type: 'digital', rx: 0.70, ry: 0.96, direction: 'in'  },
+      { id: 'dout', label: 'Data OUT', type: 'digital', rx: 0.88, ry: 0.88, direction: 'out' },
+    ],
+  },
+
+  // ── NEW: N-Channel MOSFET ─────────────────────────────────────────────────
+  mosfet_n: {
+    type: 'mosfet_n', label: 'MOSFET N', w: 30, h: 52,
+    color: '#111', borderColor: '#333', category: 'passive',
+    description: 'N-channel MOSFET (TO-92) · Gate / Drain / Source',
+    pins: [
+      { id: 'gate',   label: 'Gate (G)',   type: 'digital', rx: 0,   ry: 0.40, direction: 'in'  },
+      { id: 'drain',  label: 'Drain (D)',  type: 'generic', rx: 0.5, ry: 0,    direction: 'inout'},
+      { id: 'source', label: 'Source (S)', type: 'gnd',     rx: 0.5, ry: 1,    direction: 'out' },
+    ],
+  },
+
+  // ── NEW: Diode ────────────────────────────────────────────────────────────
+  diode: {
+    type: 'diode', label: 'Diode', w: 44, h: 22,
+    color: '#1a1a1a', borderColor: '#333', category: 'passive',
+    description: 'Rectifier diode 1N4007 · Anode → Cathode',
+    pins: [
+      { id: 'anode',   label: 'Anode (+)',   type: 'power',   rx: 0, ry: 0.5, direction: 'in'  },
+      { id: 'cathode', label: 'Cathode (−)', type: 'generic', rx: 1, ry: 0.5, direction: 'out' },
+    ],
+  },
+
+  // ── NEW: L298N Motor Driver ───────────────────────────────────────────────
+  l298n: {
+    type: 'l298n', label: 'L298N Driver', w: 72, h: 66,
+    color: '#1c1c1c', borderColor: '#2a2a2a', category: 'actuator',
+    description: 'L298N dual H-bridge motor driver · 2A per channel · 5–35V',
+    pins: [
+      { id: 'ena',  label: 'ENA',    type: 'pwm',     rx: 0,   ry: 0.10, direction: 'in'  },
+      { id: 'in1',  label: 'IN1',    type: 'digital', rx: 0,   ry: 0.26, direction: 'in'  },
+      { id: 'in2',  label: 'IN2',    type: 'digital', rx: 0,   ry: 0.40, direction: 'in'  },
+      { id: 'in3',  label: 'IN3',    type: 'digital', rx: 0,   ry: 0.54, direction: 'in'  },
+      { id: 'in4',  label: 'IN4',    type: 'digital', rx: 0,   ry: 0.68, direction: 'in'  },
+      { id: 'enb',  label: 'ENB',    type: 'pwm',     rx: 0,   ry: 0.84, direction: 'in'  },
+      { id: 'vcc',  label: 'VCC',    type: 'power',   rx: 1,   ry: 0.10, direction: 'in'  },
+      { id: 'gnd',  label: 'GND',    type: 'gnd',     rx: 1,   ry: 0.28, direction: 'in'  },
+      { id: '5v',   label: '5V Out', type: 'power',   rx: 1,   ry: 0.46, direction: 'out' },
+      { id: 'outa1',label: 'OUT1',   type: 'generic', rx: 1,   ry: 0.62, direction: 'out' },
+      { id: 'outa2',label: 'OUT2',   type: 'generic', rx: 1,   ry: 0.76, direction: 'out' },
+    ],
+  },
 }
 
 // ── Wire palette ──────────────────────────────────────────────────────────────
