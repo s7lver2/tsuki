@@ -1,0 +1,4 @@
+{
+  "name": "Basic Stepper Movement",
+  "description": "Drive a NEMA17 stepper with an A4988 driver. Rotates one full revolution forward and back using AccelStepper with acceleration."
+}

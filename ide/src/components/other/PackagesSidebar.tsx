@@ -6,6 +6,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import ExeWarningModal from '@/components/other/ExeWarningModal'
 
 export default function PackagesSidebar() {
   const {
@@ -18,6 +19,13 @@ export default function PackagesSidebar() {
   const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^"|"$/g, '')
   const cwd   = projectPath || undefined
 
+  const [exeWarning, setExeWarning] = useState<{ command: string; action: () => void } | null>(null)
+
+  function guardExe(command: string, action: () => void) {
+    if (tsuki.toLowerCase().endsWith('.exe')) setExeWarning({ command, action })
+    else action()
+  }
+
   const filtered = packages.filter(p =>
     p.name.toLowerCase().includes(query.toLowerCase()) ||
     p.desc.toLowerCase().includes(query.toLowerCase())
@@ -27,37 +35,47 @@ export default function PackagesSidebar() {
   const available = filtered.filter(p => !p.installed)
 
   async function handleToggle(name: string, currentlyInstalled: boolean) {
-    setPackageInstalling(name, true)
-    setBottomTab('terminal')
-
-    const args = currentlyInstalled
-      ? ['deps', 'remove', name]
-      : ['deps', 'add', name]
-
-    addLog('info', `> ${tsuki} ${args.join(' ')}`)
-    dispatchCommand(tsuki, args, cwd)
-
-    await new Promise(r => setTimeout(r, 800))
-    setPackageInstalling(name, false)
-    togglePackage(name)
+    const args = currentlyInstalled ? ['deps', 'remove', name] : ['deps', 'add', name]
+    const cmd = `${tsuki} ${args.join(' ')}`
+    guardExe(cmd, async () => {
+      setPackageInstalling(name, true)
+      setBottomTab('terminal')
+      addLog('info', `> ${cmd}`)
+      dispatchCommand(tsuki, args, cwd)
+      await new Promise(r => setTimeout(r, 800))
+      setPackageInstalling(name, false)
+      togglePackage(name)
+    })
   }
 
   async function handleInstallDef(name: string) {
-    setBottomTab('terminal')
-    addLog('info', `> ${tsuki} pkg install ${name}`)
-    dispatchCommand(tsuki, ['pkg', 'install', name], cwd)
+    const args = ['pkg', 'install', name]
+    const cmd = `${tsuki} ${args.join(' ')}`
+    guardExe(cmd, () => {
+      setBottomTab('terminal')
+      addLog('info', `> ${cmd}`)
+      dispatchCommand(tsuki, args, cwd)
+    })
   }
 
   async function handleRefresh() {
-    setBottomTab('terminal')
-    addLog('info', `> ${tsuki} pkg list`)
-    dispatchCommand(tsuki, ['pkg', 'list'], cwd)
+    const args = ['pkg', 'list']
+    const cmd = `${tsuki} ${args.join(' ')}`
+    guardExe(cmd, () => {
+      setBottomTab('terminal')
+      addLog('info', `> ${cmd}`)
+      dispatchCommand(tsuki, args, cwd)
+    })
   }
 
   async function handleSearch() {
-    setBottomTab('terminal')
-    addLog('info', `> ${tsuki} pkg search`)
-    dispatchCommand(tsuki, ['pkg', 'search'], cwd)
+    const args = ['pkg', 'search']
+    const cmd = `${tsuki} ${args.join(' ')}`
+    guardExe(cmd, () => {
+      setBottomTab('terminal')
+      addLog('info', `> ${cmd}`)
+      dispatchCommand(tsuki, args, cwd)
+    })
   }
 
   return (
@@ -128,6 +146,14 @@ export default function PackagesSidebar() {
           {tsuki} pkg install &lt;name&gt;
         </span>
       </div>
+
+      {exeWarning && (
+        <ExeWarningModal
+          command={exeWarning.command}
+          onCancel={() => setExeWarning(null)}
+          onTryAnyway={() => { const a = exeWarning.action; setExeWarning(null); a() }}
+        />
+      )}
     </div>
   )
 }

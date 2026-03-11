@@ -105,6 +105,7 @@ export interface SettingsState {
   ideTheme: string      // id from IDE_THEMES
   syntaxTheme: string   // id from SYNTAX_THEMES
   uiScale: number       // 0.80 – 1.25, default 1
+  iconPack: string      // id from ICON_PACKS
   showCurrentFlow: boolean  // show current-flow animation on active wires
   // ── Experiments ──────────────────────────────────────────────────────────
   experimentsEnabled: boolean
@@ -128,6 +129,20 @@ export interface SettingsState {
   saveOnFocusLoss: boolean
   compileOnSave: boolean
   lspEnabled: boolean
+  // ── LSP fine-grained settings ────────────────────────────────────────────
+  lspPath: string               // path to tsuki-lsp binary
+  lspDiagnosticsEnabled: boolean
+  lspCompletionsEnabled: boolean
+  lspHoverEnabled: boolean
+  lspSignatureHelp: boolean
+  lspInlayHints: boolean
+  lspDiagnosticDelay: number   // ms before diagnostics run (300–2000)
+  lspGoEnabled: boolean
+  lspCppEnabled: boolean
+  lspInoEnabled: boolean
+  lspAutoDownloadLibs: boolean  // silently download missing libs without prompting
+  lspShowLibPrompt: boolean     // show popup when a missing lib import is detected
+  lspIgnoredLibs: string[]      // libs the user has clicked "don't ask again" for
 }
 
 interface AppState {
@@ -137,6 +152,7 @@ interface AppState {
   setScreen: (s: Screen) => void
   projectName: string
   projectPath: string
+  projectLanguage: 'go' | 'cpp' | 'ino'
   board: string
   backend: string
   gitInit: boolean
@@ -279,6 +295,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   ideTheme: 'dark',
   syntaxTheme: 'material',
   uiScale: 1,
+  iconPack: 'minimal',
   showCurrentFlow: false,
   // experiments
   experimentsEnabled: false,
@@ -295,6 +312,19 @@ const DEFAULT_SETTINGS: SettingsState = {
   saveOnFocusLoss: false,
   compileOnSave: false,
   lspEnabled: false,
+  lspPath: '',
+  lspDiagnosticsEnabled: true,
+  lspCompletionsEnabled: true,
+  lspHoverEnabled: true,
+  lspSignatureHelp: true,
+  lspInlayHints: false,
+  lspDiagnosticDelay: 600,
+  lspGoEnabled: true,
+  lspCppEnabled: true,
+  lspInoEnabled: true,
+  lspAutoDownloadLibs: false,
+  lspShowLibPrompt: true,
+  lspIgnoredLibs: [],
   language: 'en',
   docsLang: 'en',
   fontRendering: 'auto',
@@ -384,6 +414,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   projectName: '',
   projectPath: '',
+  projectLanguage: 'go' as const,
   board: 'uno',
   backend: 'tsuki-flash',
   gitInit: true,
@@ -423,7 +454,7 @@ export const useStore = create<AppState>((set, get) => ({
       { letter: 'A', name: '.gitignore',          path: '.gitignore' },
     ]
 
-    set({ projectName: name, projectPath: path, board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
+    set({ projectName: name, projectPath: path, projectLanguage: (language as 'go' | 'cpp' | 'ino') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
 
     if (path) {
       try {
@@ -459,14 +490,21 @@ export const useStore = create<AppState>((set, get) => ({
     let projectName = folder.split(/[/\\]/).pop() ?? 'project'
     let projectBoard = 'uno'
     let projectBackend = 'tsuki-flash'
+    let projectLanguage: 'go' | 'cpp' | 'ino' = 'go'
 
     try {
       const { readFile } = await import('./tauri')
-      const raw = await readFile(pathJoin(folder, 'goduino.json'))
-      const mf = JSON.parse(raw)
-      projectName = mf.name ?? projectName
-      projectBoard = mf.board ?? projectBoard
-      projectBackend = mf.backend ?? projectBackend
+      // Try tsuki_package.json first, fall back to goduino.json for legacy projects
+      let raw: string | null = null
+      try { raw = await readFile(pathJoin(folder, 'tsuki_package.json')) } catch {}
+      if (!raw) { try { raw = await readFile(pathJoin(folder, 'goduino.json')) } catch {} }
+      if (raw) {
+        const mf = JSON.parse(raw)
+        projectName    = mf.name    ?? projectName
+        projectBoard   = mf.board   ?? projectBoard
+        projectBackend = mf.backend ?? projectBackend
+        if (mf.language === 'cpp' || mf.language === 'ino') projectLanguage = mf.language
+      }
     } catch { /* no manifest */ }
 
     try {
@@ -475,9 +513,19 @@ export const useStore = create<AppState>((set, get) => ({
       rootNode.id = 'root'
       const allNodes = [rootNode, ...nodes]
 
-      set({ projectName, projectPath: folder, board: projectBoard, backend: projectBackend, gitInit: false, tree: allNodes, gitChanges: [], commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
+      set({ projectName, projectPath: folder, projectLanguage, board: projectBoard, backend: projectBackend, gitInit: false, tree: allNodes, gitChanges: [], commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
 
-      const mainNode = allNodes.find(n => n.type === 'file' && n.name === 'main.go')
+      // Find the main source file for any language
+      const mainNode = allNodes.find(n =>
+        n.type === 'file' && (
+          n.name === 'main.go' ||
+          n.name === 'main.cpp' ||
+          n.name?.endsWith('.ino') ||
+          (projectLanguage === 'go' && n.name?.endsWith('.go')) ||
+          (projectLanguage === 'cpp' && n.name?.endsWith('.cpp')) ||
+          (projectLanguage === 'ino' && n.name?.endsWith('.ino'))
+        )
+      )
       if (mainNode) setTimeout(() => get().openFile(mainNode.id), 50)
 
       get().addLog('info', `Opened "${projectName}" from ${folder}`)

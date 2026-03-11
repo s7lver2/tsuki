@@ -7,7 +7,7 @@ const STEPS = [
     label: "tsuki build",
     tag: "CLI · Go",
     color: "#e879f9",
-    desc: "Entry point. Reads tsuki_package.json, resolves flags, orchestrates the pipeline.",
+    desc: "Entry point. Reads tsuki_package.json, resolves flags, coordinates the build pipeline.",
     log: "$ tsuki build --board uno --compile",
   },
   {

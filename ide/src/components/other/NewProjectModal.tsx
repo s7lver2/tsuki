@@ -160,7 +160,7 @@ function StepName({
           <Input
             value={location}
             onChange={e => setLocation(e.target.value)}
-            placeholder={isTauri() ? 'Click Browse to choose a folder\u2026' : '/home/user/projects'}
+            placeholder={isTauri() ? 'Click Browse to choose a folder…' : '/home/user/projects'}
             className="font-mono text-xs flex-1"
           />
           <button
@@ -423,11 +423,11 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
       onMouseDown={e => { if (e.target === e.currentTarget && !creating) onClose() }}
     >
       <div
-        className="relative flex w-[700px] max-w-[96vw] max-h-[90vh] rounded-xl border border-[var(--border)] bg-[var(--surface-1)] shadow-2xl overflow-hidden"
-        style={{ boxShadow: '0 24px 64px rgba(0,0,0,0.5)' }}
+        className="relative flex w-[700px] max-w-[96vw] rounded-xl border border-[var(--border)] bg-[var(--surface-1)] shadow-2xl overflow-hidden"
+        style={{ maxHeight: 'min(90vh, 680px)', boxShadow: '0 24px 64px rgba(0,0,0,0.5)' }}
       >
         {/* ── Left sidebar ── */}
-        <div className="w-44 flex-shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col py-6 px-3">
+        <div className="w-44 flex-shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col py-6 px-3 min-h-0 overflow-y-auto">
           <div className="flex items-center gap-2 px-2 mb-6">
             <TsukiLogo size="xs" />
             <span className="text-sm font-semibold">New project</span>
@@ -511,7 +511,7 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
             ) : (
               <div className="flex-1">
                 {isLastStep && (
-                  <div className="text-xs text-[var(--fg-faint)] font-mono truncate">\u2192 {fullPath}</div>
+                  <div className="text-xs text-[var(--fg-faint)] font-mono truncate">{'→'} {fullPath}</div>
                 )}
               </div>
             )}
@@ -535,7 +535,7 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
                 )}
               >
                 {creating ? (
-                  <><span className="animate-spin inline-block">\u27f3</span> Creating\u2026</>
+                  <><span className="animate-spin inline-block">{'⟳'}</span> {'Creating…'}</>
                 ) : isLastStep ? (
                   <><Check size={13} /> Create Project</>
                 ) : (

@@ -83,6 +83,7 @@ function CompShape({
       {/* Body */}
       {type === 'arduino_uno' && <ArduinoUnoBody w={def.w} h={def.h} color={color} label={label} />}
       {type === 'arduino_nano' && <ArduinoNanoBody w={def.w} h={def.h} color={color} label={label} />}
+      {type === 'xiao_rp2040' && <XiaoRP2040Body w={def.w} h={def.h} color={color} label={label} />}
       {type === 'led' && <LedBody w={def.w} h={def.h} color={color} on={ledOn} label={label} />}
       {type === 'resistor' && <ResistorBody w={def.w} h={def.h} color={color} label={label} props={comp.props} />}
       {type === 'button' && <ButtonBody w={def.w} h={def.h} label={label} />}
@@ -137,6 +138,32 @@ function ArduinoNanoBody({ w, h, color, label }: { w: number; h: number; color: 
       <rect x={w * 0.2} y={h * 0.3} width={w * 0.6} height={h * 0.32} rx={2} fill="#111" />
       <text x={w * 0.5} y={h * 0.1} textAnchor="middle" fontSize={6} fill="rgba(255,255,255,0.6)"
         fontFamily="var(--font-sans)" fontWeight="600">{label}</text>
+    </>
+  )
+}
+
+function XiaoRP2040Body({ w, h, color, label }: { w: number; h: number; color: string; label: string }) {
+  const c = color || '#1c3a5e'
+  return (
+    <>
+      {/* Board */}
+      <rect width={w} height={h} rx={4} fill={c} />
+      {/* USB-C connector on top */}
+      <rect x={w * 0.3} y={-4} width={w * 0.4} height={6} rx={2} fill="#555" />
+      <rect x={w * 0.33} y={-3} width={w * 0.34} height={3} rx={1} fill="#888" />
+      {/* RP2040 chip */}
+      <rect x={w * 0.18} y={h * 0.28} width={w * 0.64} height={h * 0.36} rx={2} fill="#111" stroke="#333" strokeWidth={0.5} />
+      <text x={w * 0.5} y={h * 0.44} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.5)"
+        fontFamily="var(--font-sans)" fontWeight="600">RP2040</text>
+      <text x={w * 0.5} y={h * 0.53} textAnchor="middle" fontSize={4.5} fill="rgba(255,255,255,0.35)"
+        fontFamily="var(--font-sans)">133 MHz</text>
+      {/* NeoPixel LED indicator */}
+      <circle cx={w * 0.5} cy={h * 0.76} r={3} fill="#222" stroke="#444" strokeWidth={0.5} />
+      {/* Label */}
+      <text x={w * 0.5} y={h * 0.14} textAnchor="middle" fontSize={5.5} fill="rgba(255,255,255,0.7)"
+        fontFamily="var(--font-sans)" fontWeight="700">XIAO</text>
+      <text x={w * 0.5} y={h + 10} textAnchor="middle" fontSize={7} fill="var(--fg-muted)"
+        fontFamily="var(--font-sans)">{label}</text>
     </>
   )
 }
@@ -244,7 +271,7 @@ interface WireInProgress {
 }
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
-  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit } = useStore()
+  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit, projectLanguage } = useStore()
   const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
 
   // View state
@@ -834,7 +861,8 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
           if (simRunning) { handleStop(); return }
           const code = activeTab?.content ?? ''
           if (!code.trim()) {
-            setSimLog([{ t: 0, level: 'err', msg: '⚠ No file open — open a .go file first' }])
+            const hint = projectLanguage === 'cpp' ? 'a .cpp file' : projectLanguage === 'ino' ? 'a .ino file' : 'a .go file'
+            setSimLog([{ t: 0, level: 'err', msg: `⚠ No file open — open ${hint} first` }])
             return
           }
           setSimStatus('loading')
@@ -853,11 +881,15 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
               const hasMcu = cur.components.some(c => COMP_DEFS[c.type]?.category === 'mcu')
               if (hasMcu) return cur
               const usedPins = new Set<number>()
-              const re = /digitalWrite\s*\(\s*(\w+)\s*,/g
-              let m: RegExpExecArray | null
-              while ((m = re.exec(code)) !== null) {
-                const n = parseInt(m[1])
-                if (!isNaN(n)) usedPins.add(n)
+              // Detect pins from both C++ (digitalWrite) and Go (arduino.DigitalWrite)
+              const reC  = /digitalWrite\s*\(\s*(\w+)\s*,/g
+              const reGo = /arduino\.DigitalWrite\s*\(\s*(\w+)\s*,/g
+              for (const re of [reC, reGo]) {
+                let m: RegExpExecArray | null
+                while ((m = re.exec(code)) !== null) {
+                  const n = parseInt(m[1])
+                  if (!isNaN(n)) usedPins.add(n)
+                }
               }
               if (/LED_BUILTIN/.test(code)) usedPins.add(13)
               const pinList = usedPins.size > 0 ? Array.from(usedPins) : [13]
@@ -982,7 +1014,8 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
                 </span>
               ) : (
                 <span className="text-[10px] text-[var(--fg-faint)] flex items-center gap-1">
-                  <AlertCircle size={9}/> Open a .go file
+                  <AlertCircle size={9}/>
+                  {projectLanguage === 'cpp' ? 'Open a .cpp file' : projectLanguage === 'ino' ? 'Open a .ino file' : 'Open a .go file'}
                 </span>
               )}
 

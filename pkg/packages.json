@@ -3,7 +3,7 @@
   "packages": {
     "ws2812": {
       "description": "WS2812 / NeoPixel LED driver (Adafruit NeoPixel)",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
         "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/ws2812/v1.0.0/godotinolib.toml"
@@ -11,7 +11,7 @@
     },
     "dht": {
       "description": "DHT11 / DHT22 temperature & humidity sensor",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
         "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/dht/v1.0.0/godotinolib.toml"
@@ -19,7 +19,7 @@
     },
     "hcsr04": {
       "description": "HC-SR04 ultrasonic distance sensor",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
         "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/hcsr04/v1.0.0/godotinolib.toml"
@@ -27,10 +27,42 @@
     },
     "u8g2": {
       "description": "U8g2 monochrome display library (SSD1306 OLED, SH1106, LCD)",
-      "author": "godotino-team",
+      "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
         "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/u8g2/v1.0.0/godotinolib.toml"
+      }
+    },
+    "bmp280": {
+      "description": "BMP280/BME280 barometric pressure and temperature sensor (Adafruit BMP280)",
+      "author": "tsuki-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/bmp280/v1.0.0/godotinolib.toml"
+      }
+    },
+    "mpu6050": {
+      "description": "MPU-6050 6-axis accelerometer and gyroscope (Adafruit MPU6050)",
+      "author": "tsuki-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/mpu6050/v1.0.0/godotinolib.toml"
+      }
+    },
+    "irremote": {
+      "description": "IR remote send and receive (IRremote library v4)",
+      "author": "tsuki-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/irremote/v1.0.0/godotinolib.toml"
+      }
+    },
+    "stepper": {
+      "description": "AccelStepper — stepper motor driver with acceleration and speed control",
+      "author": "tsuki-team",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/stepper/v1.0.0/godotinolib.toml"
       }
     }
   }

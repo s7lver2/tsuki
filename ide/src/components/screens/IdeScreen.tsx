@@ -18,6 +18,7 @@ import { clsx } from 'clsx'
 import TsukiLogo from '@/components/shared/TsukiLogo'
 import { showContextMenu } from '@/components/shared/ContextMenu'
 import { useT } from '@/lib/i18n'
+import ExeWarningModal from '@/components/other/ExeWarningModal'
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
@@ -26,7 +27,7 @@ const BOARDS = [
 
 export default function IdeScreen() {
   const {
-    projectName, projectPath, board, backend, setBoard, setScreen,
+    projectName, projectPath, projectLanguage, board, backend, setBoard, setScreen,
     sidebarOpen, sidebarTab, toggleSidebar,
     openTabs, activeTabIdx, closeTab, openFile,
     tree, toggleTheme, theme,
@@ -36,6 +37,7 @@ export default function IdeScreen() {
   const t = useT()
   const [showNewProjectModal, setShowNewProjectModal] = useState(false)
   const [sandboxOpen, setSandboxOpen] = useState(false)
+  const [exeWarning, setExeWarning] = useState<{ command: string; action: () => void } | null>(null)
   const [sandboxWidth, setSandboxWidth] = useState(480)
   const [resizing, setResizing] = useState(false)
 
@@ -56,49 +58,54 @@ export default function IdeScreen() {
   const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^\"|\"$/g, '')
   const cwd   = projectPath || undefined
 
+  /** Build a tsuki args array, appending --board and --verbose as configured. */
+  function makeArgs(verb: string, ...extra: string[]): string[] {
+    const args = [verb, ...extra]
+    if (board)            args.push('--board', board)
+    if (settings.verbose) args.push('--verbose')
+    return args
+  }
+
+  /** If the tsuki path is a .exe, intercept and show the warning modal instead of dispatching directly. */
+  function guardExe(commandStr: string, action: () => void) {
+    if (tsuki.toLowerCase().endsWith('.exe')) setExeWarning({ command: commandStr, action })
+    else action()
+  }
+
   function dispatch(args: string[]) {
     setBottomTab('terminal')
     dispatchCommand(tsuki, args, cwd)
   }
 
   function handleCheck() {
-    const args = ['check']
-    if (board) args.push('--board', board)
-    if (settings.verbose) args.push('--verbose')
-    dispatch(args)
+    const args = makeArgs('check')
+    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
   }
 
   function handleBuild() {
-    const args = ['build', '--compile']
-    if (board)            args.push('--board', board)
-    if (settings.verbose) args.push('--verbose')
-    dispatch(args)
+    const args = makeArgs('build', '--compile')
+    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
   }
 
   function handleFlash() {
-    const args = ['upload']
-    if (board)            args.push('--board', board)
-    if (settings.verbose) args.push('--verbose')
-    dispatch(args)
+    const args = makeArgs('upload')
+    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
   }
 
   function handleRun() {
-    setBottomTab('terminal')
-    const buildArgs = ['build', '--compile']
-    if (board)            buildArgs.push('--board', board)
-    if (settings.verbose) buildArgs.push('--verbose')
-    const flashArgs = ['upload']
-    if (board)            flashArgs.push('--board', board)
-    if (settings.verbose) flashArgs.push('--verbose')
-    // Chain: build first, flash only on success — BottomPanel handles the await
-    dispatchCommand(tsuki, buildArgs, cwd, flashArgs)
+    const buildArgs = makeArgs('build', '--compile')
+    const flashArgs = makeArgs('upload')
+    const cmd = [tsuki, ...buildArgs].join(' ') + ' && ' + [tsuki, ...flashArgs].join(' ')
+    guardExe(cmd, () => {
+      setBottomTab('terminal')
+      dispatchCommand(tsuki, buildArgs, cwd, flashArgs)
+    })
   }
 
   function handleMonitor() {
-    const args = ['monitor']
+    const args = makeArgs('monitor')
     if (settings.defaultBaud && settings.defaultBaud !== '9600') args.push('--baud', settings.defaultBaud)
-    if (settings.verbose) args.push('--verbose')
-    dispatch(args)
+    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
   }
 
   useEffect(() => {
@@ -176,10 +183,13 @@ export default function IdeScreen() {
 
         <Divider vertical />
 
-        <Btn variant="ghost" size="xs" onClick={handleCheck}
-          title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
-          <Check size={12} /> {t('topbar.check')}
-        </Btn>
+        {/* Check: only relevant for Go projects (tsuki check transpiles & validates Go) */}
+        {projectLanguage === 'go' && (
+          <Btn variant="ghost" size="xs" onClick={handleCheck}
+            title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
+            <Check size={12} /> {t('topbar.check')}
+          </Btn>
+        )}
 
         <Btn variant="ghost" size="xs" onClick={handleBuild}
           title={`${tsuki} build --compile${board ? ' --board ' + board : ''}`}>
@@ -388,6 +398,18 @@ export default function IdeScreen() {
 
       {showNewProjectModal && (
         <NewProjectModal onClose={() => setShowNewProjectModal(false)} />
+      )}
+
+      {exeWarning && (
+        <ExeWarningModal
+          command={exeWarning.command}
+          onCancel={() => setExeWarning(null)}
+          onTryAnyway={() => {
+            const action = exeWarning.action
+            setExeWarning(null)
+            action()
+          }}
+        />
       )}
     </div>
   )

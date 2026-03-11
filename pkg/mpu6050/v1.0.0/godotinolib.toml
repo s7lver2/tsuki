@@ -1,0 +1,135 @@
+[package]
+name        = "mpu6050"
+version     = "1.0.0"
+description = "MPU-6050 6-axis accelerometer and gyroscope (Adafruit MPU6050)"
+author      = "tsuki-team"
+cpp_header  = "Adafruit_MPU6050.h"
+arduino_lib = "Adafruit MPU6050"
+cpp_class   = "Adafruit_MPU6050"
+
+aliases = ["MPU6050", "imu"]
+
+# ── Constructor ───────────────────────────────────────────────────────────────
+[[function]]
+go  = "New"
+cpp = "Adafruit_MPU6050()"
+
+# ── Init ──────────────────────────────────────────────────────────────────────
+[[function]]
+go  = "Begin"
+cpp = "{0}.begin()"
+
+# ── Read sensor event (fills three sensors: accel, gyro, temp) ────────────────
+[[function]]
+go  = "GetEvent"
+cpp = "{0}.getEvent(&{1}, &{2}, &{3})"
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+[[function]]
+go  = "SetAccelerometerRange"
+cpp = "{0}.setAccelerometerRange({1})"
+
+[[function]]
+go  = "SetGyroRange"
+cpp = "{0}.setGyroRange({1})"
+
+[[function]]
+go  = "SetFilterBandwidth"
+cpp = "{0}.setFilterBandwidth({1})"
+
+# ── Raw data helpers (using sensors_event_t fields) ───────────────────────────
+[[function]]
+go  = "AccelX"
+cpp = "{0}.acceleration.x"
+
+[[function]]
+go  = "AccelY"
+cpp = "{0}.acceleration.y"
+
+[[function]]
+go  = "AccelZ"
+cpp = "{0}.acceleration.z"
+
+[[function]]
+go  = "GyroX"
+cpp = "{0}.gyro.x"
+
+[[function]]
+go  = "GyroY"
+cpp = "{0}.gyro.y"
+
+[[function]]
+go  = "GyroZ"
+cpp = "{0}.gyro.z"
+
+[[function]]
+go  = "Temp"
+cpp = "{0}.temperature"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+[[constant]]
+go  = "RANGE_2_G"
+cpp = "MPU6050_RANGE_2_G"
+
+[[constant]]
+go  = "RANGE_4_G"
+cpp = "MPU6050_RANGE_4_G"
+
+[[constant]]
+go  = "RANGE_8_G"
+cpp = "MPU6050_RANGE_8_G"
+
+[[constant]]
+go  = "RANGE_16_G"
+cpp = "MPU6050_RANGE_16_G"
+
+[[constant]]
+go  = "RANGE_250_DEG"
+cpp = "MPU6050_RANGE_250_DEG"
+
+[[constant]]
+go  = "RANGE_500_DEG"
+cpp = "MPU6050_RANGE_500_DEG"
+
+[[constant]]
+go  = "RANGE_1000_DEG"
+cpp = "MPU6050_RANGE_1000_DEG"
+
+[[constant]]
+go  = "RANGE_2000_DEG"
+cpp = "MPU6050_RANGE_2000_DEG"
+
+[[constant]]
+go  = "BAND_5_HZ"
+cpp = "MPU6050_BAND_5_HZ"
+
+[[constant]]
+go  = "BAND_10_HZ"
+cpp = "MPU6050_BAND_10_HZ"
+
+[[constant]]
+go  = "BAND_21_HZ"
+cpp = "MPU6050_BAND_21_HZ"
+
+[[constant]]
+go  = "BAND_44_HZ"
+cpp = "MPU6050_BAND_44_HZ"
+
+[[constant]]
+go  = "BAND_94_HZ"
+cpp = "MPU6050_BAND_94_HZ"
+
+[[constant]]
+go  = "BAND_184_HZ"
+cpp = "MPU6050_BAND_184_HZ"
+
+[[constant]]
+go  = "BAND_260_HZ"
+cpp = "MPU6050_BAND_260_HZ"
+
+# ── Examples ──────────────────────────────────────────────────────────────────
+[[example]]
+dir = "examples/basic"
+
+[[example]]
+dir = "examples/tilt_servo"

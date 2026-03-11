@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  tsuki-flash :: flash  —  flash pipeline orchestrator
+//  tsuki-flash :: flash  —  flash pipeline dispatcher
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod avrdude;

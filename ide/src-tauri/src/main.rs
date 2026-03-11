@@ -903,6 +903,14 @@ async fn emit_sim_bundle(source: String, board: String, bundle_path: String) -> 
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
+
+/// Returns the current user's home directory as an absolute path string.
+/// Used by the frontend to expand "~" in paths like "~/.tsuki/libs".
+#[tauri::command]
+async fn get_home_dir() -> Option<String> {
+    tauri::api::path::home_dir().map(|p| p.to_string_lossy().into_owned())
+}
+
 fn main() {
     dbg("=== tsuki-ide started ===");
     #[cfg(windows)]
@@ -938,6 +946,7 @@ fn main() {
             emit_sim_bundle,
             run_simulator,
             stop_simulator,
+            get_home_dir,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

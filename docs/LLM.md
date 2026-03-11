@@ -221,7 +221,7 @@ ide/
 | `ide/src/components/ide/FilesSidebar.tsx` | Árbol de archivos del proyecto. Operaciones: abrir, crear, renombrar, borrar. Lee el filesystem via tauri.ts. |
 | `ide/src/components/ide/GitSidebar.tsx` | Panel de Git. Muestra cambios staged/unstaged, historial de commits con grafo, operaciones básicas (stage, commit, push). |
 | `ide/src/components/ide/PackagesSidebar.tsx` | Gestión de paquetes tsukilib. Lista paquetes disponibles e instalados. Permite instalar/desinstalar via tsuki pkg. |
-| `ide/src/components/ide/BottomPanel.tsx` | Panel inferior con tabs: output del proceso de build, lista de problemas/errores, terminal interactivo. |
+| `ide/src/components/ide/BottomPanel.tsx` | Panel inferior con tabs: output del proceso de build, lista de problemas/errores, terminal interactivo. El **terminal** tiene estética integrada con el sistema de temas del IDE (usa variables CSS `--surface`, `--ok`, `--err`, etc.), **syntax highlighting con soporte ANSI** (parseAnsi() convierte escape codes a spans con colores del tema), y una **barra de info de sesión** (shell activo + directorio del proyecto). Intercepta cualquier `pendingCommand` cuyo `cmd` termine en `.exe` y muestra un `ExeWarningModal` en lugar de ejecutarlo directamente, con opción de copiar el comando o intentar ejecutar de todos modos. |
 | `ide/src/components/ide/SandboxPanel.tsx` | Panel del simulador visual. Muestra el estado del simulador (pines, LEDs, etc.). |
 | `ide/src/components/ide/WelcomeScreen.tsx` | Pantalla de bienvenida. Lista proyectos recientes, botones para crear/abrir proyecto. |
 | `ide/src/components/ide/NewProjectModal.tsx` | Modal para crear un proyecto nuevo. Selección de nombre, board, y lenguaje. |
@@ -385,7 +385,7 @@ pkg/ (datos en GitHub)
 - **Rust**: `snake_case` para módulos y funciones, `PascalCase` para structs y enums. Errores siempre con `tsukiError`. Los módulos de runtime se inicializan via métodos `init_*()`.
 - **Go**: `PascalCase` para exports. Paquetes internos bajo `internal/`. Cada subcomando Cobra en su propio archivo bajo `cli/internal/cli/`.
 - **TypeScript**: Componentes en `PascalCase`, hooks y stores en `camelCase`. El store Zustand es la única fuente de verdad del estado del IDE.
-- **tsukilib.toml**: `{0}`, `{1}` son posicionales. `{self}` es el receiver de instancia. `{args}` es join de todos los args (para variadic).
+- **Terminología**: El término "orchestrator" ha sido eliminado del proyecto. En su lugar se usa "coordination layer" (CLI) o "dispatcher" (módulos `flash/compile/mod.rs`, `flash/flash/mod.rs`). Mantener esta convención en comentarios nuevos.
 ---
 
 ## Componente 6: `sim/` — tsuki-sim (Rust)

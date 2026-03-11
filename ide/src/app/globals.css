@@ -115,10 +115,19 @@ body {
   line-height: 21px;
   padding: 12px 0 12px 16px;
   white-space: pre;
-  overflow: hidden;
+  overflow: auto;
+  overflow-x: auto;
   tab-size: 4;
   z-index: 2;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.editor-textarea::-webkit-scrollbar { width: 6px; height: 6px; }
+.editor-textarea::-webkit-scrollbar-track { background: transparent; }
+.editor-textarea::-webkit-scrollbar-thumb { background: var(--surface-4); border-radius: 3px; }
+.editor-textarea::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
+.editor-textarea::-webkit-scrollbar-corner { background: transparent; }
+
 .editor-highlight {
   padding: 12px 0 12px 16px;
   font-family: var(--font-mono);
@@ -130,8 +139,49 @@ body {
   word-break: normal;
   overflow-wrap: normal;
   padding-bottom: 200px;
+  padding-right: 80px;
 }
-.editor-textarea { padding-bottom: 200px; }
+.editor-textarea { padding-bottom: 200px; padding-right: 80px; }
+
+/* ── Current line highlight ── */
+.editor-curline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: rgba(255,255,255,0.03);
+  border-left: 2px solid rgba(255,255,255,0.08);
+}
+html.light .editor-curline {
+  background: rgba(0,0,0,0.03);
+  border-left: 2px solid rgba(0,0,0,0.08);
+}
+
+/* ── Search match highlight ── */
+.editor-search-match {
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
+  background: rgba(251,191,36,0.25);
+  border: 1px solid rgba(251,191,36,0.5);
+  border-radius: 2px;
+}
+.editor-search-match.active {
+  background: rgba(251,191,36,0.45);
+  border-color: rgba(251,191,36,0.9);
+}
+
+/* ── Indent guides ── */
+.editor-indent-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+  z-index: 0;
+}
 
 /* Syntax token colours */
 .syn-kw  { color: var(--syn-kw);  font-weight: 500; }

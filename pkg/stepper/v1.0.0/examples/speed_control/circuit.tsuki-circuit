@@ -1,0 +1,105 @@
+{
+  "version": "1",
+  "name": "Stepper Speed Control",
+  "board": "uno",
+  "description": "A4988 stepper driver + 10kΩ potentiometer on A0 for speed control.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "a4988",
+      "type": "a4988",
+      "label": "A4988 Driver",
+      "x": 300,
+      "y": 80,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "nema17",
+      "type": "stepper_motor",
+      "label": "NEMA17",
+      "x": 460,
+      "y": 120,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "pot",
+      "type": "potentiometer",
+      "label": "10kΩ",
+      "x": 180,
+      "y": 180,
+      "rotation": 0,
+      "color": "",
+      "props": { "ohms": 10000 }
+    },
+    {
+      "id": "cap1",
+      "type": "capacitor",
+      "label": "100µF",
+      "x": 250,
+      "y": 30,
+      "rotation": 0,
+      "color": "",
+      "props": { "farads": 1e-4 }
+    },
+    {
+      "id": "vmot",
+      "type": "vcc_node",
+      "label": "12V",
+      "x": 220,
+      "y": 10,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "5V",
+      "x": 140,
+      "y": 160,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 400,
+      "y": 280,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    { "id": "w1", "fromComp": "uno", "fromPin": "D2", "toComp": "a4988", "toPin": "step", "color": "#3b82f6", "waypoints": [] },
+    { "id": "w2", "fromComp": "uno", "fromPin": "D3", "toComp": "a4988", "toPin": "dir", "color": "#a855f7", "waypoints": [] },
+    { "id": "w3", "fromComp": "vcc1", "fromPin": "5v", "toComp": "a4988", "toPin": "vdd", "color": "#ef4444", "waypoints": [] },
+    { "id": "w4", "fromComp": "vmot", "fromPin": "12v", "toComp": "cap1", "toPin": "pin1", "color": "#ef4444", "waypoints": [] },
+    { "id": "w5", "fromComp": "cap1", "fromPin": "pin1", "toComp": "a4988", "toPin": "vmot", "color": "#ef4444", "waypoints": [] },
+    { "id": "w6", "fromComp": "cap1", "fromPin": "pin2", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w7", "fromComp": "a4988", "fromPin": "gnd", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w8", "fromComp": "a4988", "fromPin": "1a", "toComp": "nema17", "toPin": "a1", "color": "#f97316", "waypoints": [] },
+    { "id": "w9", "fromComp": "a4988", "fromPin": "1b", "toComp": "nema17", "toPin": "a2", "color": "#fb923c", "waypoints": [] },
+    { "id": "w10", "fromComp": "a4988", "fromPin": "2a", "toComp": "nema17", "toPin": "b1", "color": "#22c55e", "waypoints": [] },
+    { "id": "w11", "fromComp": "a4988", "fromPin": "2b", "toComp": "nema17", "toPin": "b2", "color": "#4ade80", "waypoints": [] },
+    { "id": "w12", "fromComp": "vcc1", "fromPin": "5v", "toComp": "pot", "toPin": "vcc", "color": "#ef4444", "waypoints": [] },
+    { "id": "w13", "fromComp": "pot", "fromPin": "gnd", "toComp": "gnd1", "toPin": "gnd", "color": "#6b7280", "waypoints": [] },
+    { "id": "w14", "fromComp": "pot", "fromPin": "wiper", "toComp": "uno", "toPin": "A0", "color": "#f59e0b", "waypoints": [] }
+  ],
+  "notes": []
+}

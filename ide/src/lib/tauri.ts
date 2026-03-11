@@ -408,6 +408,13 @@ export async function getDefaultBoard(): Promise<string> {
   return invoke<string>('get_default_board').catch(() => 'uno')
 }
 
+/** Returns the OS home directory (e.g. /home/user or C:\Users\user).
+ *  Used to expand "~" in paths like "~/.tsuki/libs". */
+export async function getHomeDir(): Promise<string | null> {
+  if (!isTauri()) return null
+  return invoke<string | null>('get_home_dir').catch(() => null)
+}
+
 // ── In-process transpilation ──────────────────────────────────────────────────
 // These call the tsuki_core library DIRECTLY inside the Tauri process —
 // no tsuki-core.exe subprocess is spawned, so they work on every OS regardless

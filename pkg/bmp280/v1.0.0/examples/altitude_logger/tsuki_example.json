@@ -1,0 +1,4 @@
+{
+  "name": "Altitude Logger",
+  "description": "Log relative altitude changes at 2 Hz using high-resolution oversampling and IIR filter. Useful for rocketry, balloons or elevator detection."
+}

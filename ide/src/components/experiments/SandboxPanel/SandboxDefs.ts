@@ -164,6 +164,33 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     ],
   },
 
+  xiao_rp2040: {
+    type: 'xiao_rp2040', label: 'Xiao RP2040', w: 68, h: 140,
+    color: '#1c3a5e', borderColor: '#0f2236', category: 'mcu',
+    description: 'Seeed Xiao RP2040 · RP2040 dual-core · 133 MHz · 14 GPIO · USB-C · tiny form factor',
+    pins: [
+      // Left column (top → bottom)
+      { id: 'D0',  label: 'D0',        type: 'digital', rx: 0, ry: 0.07,  direction: 'inout', arduino: 0  },
+      { id: 'D1',  label: 'D1',        type: 'digital', rx: 0, ry: 0.15,  direction: 'inout', arduino: 1  },
+      { id: 'D2',  label: 'D2',        type: 'digital', rx: 0, ry: 0.23,  direction: 'inout', arduino: 2  },
+      { id: 'D3',  label: 'D3',        type: 'pwm',     rx: 0, ry: 0.31,  direction: 'inout', arduino: 3  },
+      { id: 'D4',  label: 'D4 / SDA',  type: 'i2c',     rx: 0, ry: 0.39,  direction: 'inout', arduino: 4  },
+      { id: 'D5',  label: 'D5 / SCL',  type: 'i2c',     rx: 0, ry: 0.47,  direction: 'inout', arduino: 5  },
+      { id: 'D6',  label: 'D6 / TX',   type: 'digital', rx: 0, ry: 0.55,  direction: 'inout', arduino: 6  },
+      { id: 'D7',  label: 'D7 / RX',   type: 'digital', rx: 0, ry: 0.63,  direction: 'inout', arduino: 7  },
+      // Right column (top → bottom)
+      { id: 'D8',  label: 'D8 / SCK',  type: 'spi',     rx: 1, ry: 0.07,  direction: 'inout', arduino: 8  },
+      { id: 'D9',  label: 'D9 / MISO', type: 'spi',     rx: 1, ry: 0.15,  direction: 'inout', arduino: 9  },
+      { id: 'D10', label: 'D10 / MOSI',type: 'spi',     rx: 1, ry: 0.23,  direction: 'inout', arduino: 10 },
+      { id: 'A0',  label: 'A0',        type: 'analog',  rx: 1, ry: 0.39,  direction: 'in',    arduino: 26 },
+      { id: 'A1',  label: 'A1',        type: 'analog',  rx: 1, ry: 0.47,  direction: 'in',    arduino: 27 },
+      { id: 'A2',  label: 'A2',        type: 'analog',  rx: 1, ry: 0.55,  direction: 'in',    arduino: 28 },
+      { id: '3V3', label: '3.3V',      type: 'power',   rx: 1, ry: 0.71,  direction: 'out'   },
+      { id: 'GND', label: 'GND',       type: 'gnd',     rx: 1, ry: 0.79,  direction: 'inout' },
+      { id: '5V',  label: '5V',        type: 'power',   rx: 1, ry: 0.87,  direction: 'in'    },
+    ],
+  },
+
   // ── Output ────────────────────────────────────────────────────────────────
   led: {
     type: 'led', label: 'LED', w: 34, h: 56,

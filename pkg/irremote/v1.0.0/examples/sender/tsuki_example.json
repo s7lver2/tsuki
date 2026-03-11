@@ -1,0 +1,4 @@
+{
+  "name": "IR Sender",
+  "description": "Transmit NEC and Sony IR codes using an IR LED on D3. Cycles through example commands every second."
+}

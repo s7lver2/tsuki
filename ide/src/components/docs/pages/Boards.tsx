@@ -220,6 +220,151 @@ const WEMOS_SPECS: SpecRow[] = [
   ['Supply',       '3.3 V pin or 5 V USB'],
 ]
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Seeed Xiao RP2040
+// ─────────────────────────────────────────────────────────────────────────────
+
+const XIAO_PINS: PinInfo[] = [
+  { id:'D0',  x:68,  y:78,  label:'D0',       info:{ mode:'GPIO0 / Digital I/O',           voltage:'3.3V' }},
+  { id:'D1',  x:68,  y:98,  label:'D1',       info:{ mode:'GPIO1 / Digital I/O',           voltage:'3.3V' }},
+  { id:'D2',  x:68,  y:118, label:'D2',       info:{ mode:'GPIO2 / Digital I/O',           voltage:'3.3V' }},
+  { id:'D3',  x:68,  y:138, label:'D3 ~',     info:{ mode:'GPIO3 / PWM',                   voltage:'3.3V', special:'PWM' }},
+  { id:'D4',  x:68,  y:158, label:'D4 SDA',   info:{ mode:'GPIO4 / I2C SDA / PWM',         voltage:'3.3V', special:'I2C' }},
+  { id:'D5',  x:68,  y:178, label:'D5 SCL',   info:{ mode:'GPIO5 / I2C SCL / PWM',         voltage:'3.3V', special:'I2C' }},
+  { id:'D6',  x:68,  y:198, label:'D6 TX',    info:{ mode:'GPIO6 / UART TX',               voltage:'3.3V', special:'UART' }},
+  { id:'D7',  x:68,  y:218, label:'D7 RX',    info:{ mode:'GPIO7 / UART RX',               voltage:'3.3V', special:'UART' }},
+  { id:'D8',  x:232, y:78,  label:'D8 SCK',   info:{ mode:'GPIO8 / SPI SCK',               voltage:'3.3V', special:'SPI' }},
+  { id:'D9',  x:232, y:98,  label:'D9 MISO',  info:{ mode:'GPIO9 / SPI MISO',              voltage:'3.3V', special:'SPI' }},
+  { id:'D10', x:232, y:118, label:'D10 MOSI', info:{ mode:'GPIO10 / SPI MOSI',             voltage:'3.3V', special:'SPI' }},
+  { id:'A0',  x:232, y:158, label:'A0',       info:{ mode:'GPIO26 / Analog in 12-bit',     voltage:'3.3V ref', special:'ADC' }},
+  { id:'A1',  x:232, y:178, label:'A1',       info:{ mode:'GPIO27 / Analog in 12-bit',     voltage:'3.3V ref', special:'ADC' }},
+  { id:'A2',  x:232, y:198, label:'A2',       info:{ mode:'GPIO28 / Analog in 12-bit',     voltage:'3.3V ref', special:'ADC' }},
+  { id:'3V3', x:232, y:218, label:'3.3V',     info:{ mode:'Power output (600 mA via pin)', voltage:'3.3V', special:'Power' }},
+  { id:'GND', x:232, y:238, label:'GND',      info:{ mode:'Ground',                        voltage:'0V',   special:'Power' }},
+  { id:'5V',  x:232, y:258, label:'5V',       info:{ mode:'5V input (USB power)',          voltage:'5V',   special:'Power' }},
+]
+
+const XIAO_COLORS: Record<string, string> = {
+  'PWM':   '#a0a0a0', 'ADC':   '#b8b8b8', 'I2C':   '#909090',
+  'UART':  '#c0c0c0', 'SPI':   '#d0d0d0', 'Power': '#888888', 'default': '#484848',
+}
+
+const XIAO_SPECS: SpecRow[] = [
+  ['MCU',         'RP2040 (dual Cortex-M0+)'],
+  ['Clock',       '133 MHz'],
+  ['Flash',       '2 MB (QSPI)'],
+  ['SRAM',        '264 KB'],
+  ['I/O voltage', '3.3 V'],
+  ['Analog in',   '3 × 12-bit (A0–A2 / GPIO26–28)'],
+  ['PWM',         'All digital pins'],
+  ['UART',        '1 (D6 TX / D7 RX)'],
+  ['I2C',         '1 (D4 SDA / D5 SCL)'],
+  ['SPI',         '1 (D8 SCK / D9 MISO / D10 MOSI)'],
+  ['USB',         'USB-C · USB 1.1 device + host'],
+  ['Size',        '21 × 17.5 mm'],
+]
+
+function XiaoRP2040Pinout() {
+  const [hovered, setHovered] = useState<string | null>(null)
+  const hovPin = XIAO_PINS.find(p => p.id === hovered)
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)', borderRadius: 6,
+      overflow: 'hidden', marginBottom: 14, background: 'var(--surface-1)',
+    }}>
+      <div style={{
+        padding: '6px 12px', background: 'var(--surface-2)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--fg-faint)', letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>
+          Seeed Xiao RP2040 — Pinout
+        </span>
+        <div style={{ display: 'flex', gap: 10, fontSize: 9, fontFamily: 'var(--font-mono)' }}>
+          {[['PWM~','PWM'],['ADC','ADC'],['I2C','I2C'],['UART','UART'],['SPI','SPI'],['PWR','Power']].map(([label, key]) => (
+            <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 3, color: 'var(--fg-faint)' }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: XIAO_COLORS[key], display: 'inline-block' }} />
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex' }}>
+        <div style={{ flex: 1, padding: '8px 0' }}>
+          <svg viewBox="0 0 300 310" style={{ width: '100%', maxWidth: 380, display: 'block', margin: '0 auto' }}>
+            <rect x="78" y="54" width="144" height="224" rx="6" fill="var(--surface-3)" stroke="var(--border)" strokeWidth="1" />
+            <rect x="122" y="38" width="56" height="20" rx="4" fill="var(--surface-4)" stroke="var(--border)" strokeWidth="1" />
+            <rect x="128" y="32" width="44" height="10" rx="3" fill="var(--surface-3)" stroke="var(--border)" strokeWidth="0.8" />
+            <text x="150" y="49" textAnchor="middle" fontSize="5" fill="var(--fg-faint)" fontFamily="monospace">USB-C</text>
+            <rect x="104" y="130" width="92" height="80" rx="3" fill="var(--surface-2)" stroke="var(--border)" strokeWidth="0.8" />
+            <text x="150" y="166" textAnchor="middle" fontSize="7.5" fill="var(--fg-faint)" fontFamily="monospace">RP2040</text>
+            <text x="150" y="178" textAnchor="middle" fontSize="6" fill="var(--fg-faint)" fontFamily="monospace">133 MHz · dual-core</text>
+            <rect x="90" y="230" width="34" height="22" rx="2" fill="var(--surface-2)" stroke="var(--border)" strokeWidth="0.5" />
+            <text x="107" y="243" textAnchor="middle" fontSize="5" fill="var(--fg-faint)" fontFamily="monospace">2MB Flash</text>
+            <circle cx="176" cy="242" r="6" fill="var(--surface-2)" stroke="var(--border)" strokeWidth="0.8" />
+            <text x="176" y="256" textAnchor="middle" fontSize="5" fill="var(--fg-faint)" fontFamily="monospace">NEO</text>
+            <rect x="90" y="66" width="16" height="10" rx="2" fill="var(--surface-4)" stroke="var(--border)" strokeWidth="0.8" />
+            <text x="98" y="86" textAnchor="middle" fontSize="5" fill="var(--fg-faint)" fontFamily="monospace">BOOT</text>
+            <rect x="152" y="66" width="16" height="10" rx="2" fill="var(--surface-4)" stroke="var(--border)" strokeWidth="0.8" />
+            <text x="160" y="86" textAnchor="middle" fontSize="5" fill="var(--fg-faint)" fontFamily="monospace">RST</text>
+
+            {XIAO_PINS.map(pin => {
+              const isHov = pin.id === hovered
+              const color = XIAO_COLORS[pin.info.special ?? 'default'] ?? XIAO_COLORS.default
+              return (
+                <g key={pin.id}>
+                  <circle
+                    cx={pin.x} cy={pin.y} r={isHov ? 7 : 5}
+                    fill={isHov ? color : 'var(--surface-4)'}
+                    stroke={color} strokeWidth={isHov ? 1.5 : 0.8}
+                    style={{ cursor: 'pointer', transition: 'all 0.1s' }}
+                    onMouseEnter={() => setHovered(pin.id)}
+                    onMouseLeave={() => setHovered(null)}
+                  />
+                  {isHov && <circle cx={pin.x} cy={pin.y} r={10} fill="none" stroke={color} strokeWidth={0.8} opacity={0.4} />}
+                  <text
+                    x={pin.x < 150 ? pin.x - 10 : pin.x + 10}
+                    y={pin.y + 3}
+                    textAnchor={pin.x < 150 ? 'end' : 'start'}
+                    fontSize={7} fill={isHov ? color : 'var(--fg-faint)'}
+                    fontFamily="monospace"
+                    style={{ pointerEvents: 'none', transition: 'fill 0.1s' }}
+                  >{pin.label}</text>
+                </g>
+              )
+            })}
+            <text x="150" y="296" textAnchor="middle" fontSize="8" fill="var(--fg-faint)" fontFamily="monospace">Seeed Xiao RP2040</text>
+          </svg>
+        </div>
+        <div style={{ width: 170, borderLeft: '1px solid var(--border)', padding: 12, flexShrink: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          {hovPin ? (
+            <div>
+              <div style={{ display: 'inline-block', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 7px', marginBottom: 7, fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>
+                {hovPin.label}
+              </div>
+              {hovPin.info.special && (
+                <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)', background: 'var(--surface-3)', display: 'inline-block', padding: '1px 6px', borderRadius: 3, marginBottom: 8, marginLeft: 4 }}>
+                  {hovPin.info.special}
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.65, fontFamily: 'var(--font-sans)' }}>
+                <div><span style={{ color: 'var(--fg-faint)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>mode: </span>{hovPin.info.mode}</div>
+                <div style={{ marginTop: 3 }}><span style={{ color: 'var(--fg-faint)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>voltage: </span>{hovPin.info.voltage}</div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ color: 'var(--fg-faint)', fontSize: 10, fontFamily: 'var(--font-mono)', textAlign: 'center' }}>
+              hover a pin for details
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function WemosD1Pinout() {
   const [hovered, setHovered] = useState<string | null>(null)
   const hovPin = WEMOS_PINS.find(p => p.id === hovered)
@@ -350,7 +495,7 @@ function WemosD1Pinout() {
 //  Board selector + page
 // ─────────────────────────────────────────────────────────────────────────────
 
-type BoardId = 'uno' | 'wemos-d1'
+type BoardId = 'uno' | 'wemos-d1' | 'xiao-rp2040'
 
 interface BoardMeta {
   id: BoardId
@@ -383,6 +528,16 @@ const BOARDS: BoardMeta[] = [
     desc: 'Compact Wi-Fi board. 3.3 V I/O, 80 KB SRAM, 4 MB flash. Use it for IoT projects — HTTP, MQTT, and WebSocket work out of the box.',
     diagram: <WemosD1Pinout />,
     specs: WEMOS_SPECS,
+  },
+  {
+    id: 'xiao-rp2040',
+    name: 'Seeed Xiao RP2040',
+    tsukiId: 'pico',
+    chip: 'RP2040',
+    badge: 'RP2',
+    desc: 'Tiny 21×17.5 mm board with dual-core RP2040. 3.3 V I/O, 264 KB SRAM, 2 MB flash, USB-C. Great for space-constrained builds — same pinout as the Seeed Xiao family.',
+    diagram: <XiaoRP2040Pinout />,
+    specs: XIAO_SPECS,
   },
 ]
 
@@ -488,6 +643,30 @@ export default function BoardsPage() {
           <Note kind="tip">
             Pin D13 has a built-in resistor and LED — useful for blink tests without extra hardware.
             This is the tsuki default <InlineCode>ledPin</InlineCode> in all examples.
+          </Note>
+        </>
+      )}
+
+      {activeId === 'xiao-rp2040' && (
+        <>
+          <Divider />
+          <H2>Xiao RP2040 notes</H2>
+          <P>
+            The RP2040 is a 3.3 V device — never apply 5 V to any I/O pin directly.
+            The 5V pin is an input from USB; it is not regulated for general output use.
+            Analog inputs A0–A2 use GPIO26–28 with a 12-bit ADC (0–4095 range).
+          </P>
+          <Note kind="info">
+            Use <InlineCode>--board pico</InlineCode> in tsuki when targeting the Xiao RP2040.
+            The RP2040 core is shared with the Raspberry Pi Pico.
+          </Note>
+          <Note kind="tip">
+            The on-board NeoPixel RGB LED is connected to GPIO11 (data), GPIO12 (power).
+            Use the <InlineCode>NeoPixel</InlineCode> package to drive it from tsuki.
+          </Note>
+          <Note kind="warn">
+            Hold the <strong>BOOT</strong> button while connecting USB to enter UF2 bootloader mode
+            for flashing. The reset button alone will not enter bootloader mode.
           </Note>
         </>
       )}

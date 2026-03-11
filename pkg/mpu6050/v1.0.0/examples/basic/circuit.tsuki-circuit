@@ -1,0 +1,87 @@
+{
+  "version": "1",
+  "name": "MPU6050 Basic",
+  "board": "uno",
+  "description": "MPU-6050 via I2C (SDA→A4, SCL→A5). AD0 tied to GND for default address 0x68.",
+  "components": [
+    {
+      "id": "uno",
+      "type": "arduino_uno",
+      "label": "Arduino Uno",
+      "x": 40,
+      "y": 20,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "mpu",
+      "type": "mpu6050",
+      "label": "MPU-6050",
+      "x": 320,
+      "y": 90,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "vcc1",
+      "type": "vcc_node",
+      "label": "3.3V",
+      "x": 290,
+      "y": 30,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    },
+    {
+      "id": "gnd1",
+      "type": "gnd_node",
+      "label": "GND",
+      "x": 390,
+      "y": 220,
+      "rotation": 0,
+      "color": "",
+      "props": {}
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "fromComp": "vcc1",
+      "fromPin": "3v3",
+      "toComp": "mpu",
+      "toPin": "vcc",
+      "color": "#ef4444",
+      "waypoints": []
+    },
+    {
+      "id": "w2",
+      "fromComp": "mpu",
+      "fromPin": "gnd",
+      "toComp": "gnd1",
+      "toPin": "gnd",
+      "color": "#6b7280",
+      "waypoints": []
+    },
+    {
+      "id": "w3",
+      "fromComp": "uno",
+      "fromPin": "A4",
+      "toComp": "mpu",
+      "toPin": "sda",
+      "color": "#3b82f6",
+      "waypoints": []
+    },
+    {
+      "id": "w4",
+      "fromComp": "uno",
+      "fromPin": "A5",
+      "toComp": "mpu",
+      "toPin": "scl",
+      "color": "#f59e0b",
+      "waypoints": []
+    }
+  ],
+  "notes": []
+}
