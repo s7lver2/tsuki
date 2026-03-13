@@ -1,344 +1,49 @@
 'use client'
-import { useState, useRef, useCallback, useEffect } from 'react'
-import {
-  Cpu, Zap, Plus, Trash2, RotateCcw, Play, Square,
-  FileText, Download, Upload, X, Pencil,
-  ZoomIn, ZoomOut, MousePointer, Move, Layers,
-  ChevronDown, ChevronRight, AlertCircle, CheckCircle2,
-  Lightbulb, Activity, ToggleLeft
-} from 'lucide-react'
+import { useState } from 'react'
+import { Trash2, Upload, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '@/lib/store'
-import { getTmpSimBundlePath, writeFile, emitSimBundle, runSimulator, type ProcessHandle } from '@/lib/tauri'
-import {
-  buildPinMap, applyStepResult,
-  getAnalogInputPins, getDigitalInputPins,
-  type BridgeResult, type LogEntry,
-} from '@/lib/simBridge'
-import type { StepResult } from '@/lib/useSimulator'
-import {
-  type CircuitPin, type PlacedComponent,
-  type CircuitWire, type CircuitNote, type TsukiCircuit,
-  COMP_DEFS, getPinAbsPos, pinColor,
-} from './SandboxDefs'
-import { CompShape, SvgGlobalDefs } from './SandboxShapres'
+import { DEFAULT_CIRCUIT, circuitToText, textToCircuit, type WireProbe } from './SandboxDefs'
+import { useCircuit }    from './hooks/useCircuit'
+import { useSimRunner }  from './hooks/useSimRunner'
+import CanvasView        from './views/CanvasView'
+import TextView          from './views/TextView'
+import SimView           from './views/SimView'
 
-
-const WIRE_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899','#e2e2e2','#1a1a1a']
-const DEFAULT_CIRCUIT: TsukiCircuit = {
-  version: '1', name: 'New Circuit', board: 'uno', description: '',
-  components: [], wires: [], notes: [],
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-function makeBezierPath(ax: number, ay: number, bx: number, by: number) {
-  const dx = Math.abs(bx - ax)
-  const cp = Math.max(40, dx * 0.5)
-  return `M ${ax} ${ay} C ${ax + cp} ${ay}, ${bx - cp} ${by}, ${bx} ${by}`
-}
-
-function circuitToText(c: TsukiCircuit): string {
-  return JSON.stringify(c, null, 2)
-}
-
-function textToCircuit(raw: string): TsukiCircuit | null {
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed.components || !parsed.wires) return null
-    return { ...DEFAULT_CIRCUIT, ...parsed }
-  } catch { return null }
-}
-
-// ── Simulation engine is now powered by tsuki-sim WASM ───────────────────────
-// (see src/lib/useSimulator.ts + src/lib/simBridge.ts)
-
-
-
-// ── Main SandboxPanel component ────────────────────────────────────────────────
-
-type Tool = 'select' | 'wire' | 'delete'
-
-interface WireInProgress {
-  fromComp: string
-  fromPin: string
-  fromX: number
-  fromY: number
-  mouseX: number
-  mouseY: number
-  color: string
-}
+type View = 'canvas' | 'text' | 'sim'
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
-  const { openTabs, activeTabIdx, board, settings, projectPath, pendingCircuit, clearPendingCircuit, projectLanguage, sandboxCircuit, setSandboxCircuit } = useStore()
-  const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
+  const { board } = useStore()
 
-  // View state
-  const [view, setView] = useState<'canvas' | 'text' | 'sim'>('canvas')
-  const [tool, setTool] = useState<Tool>('select')
-  const [wireColor, setWireColor] = useState(WIRE_COLORS[4])
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 40, y: 40 })
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selectedComp, setSelectedComp] = useState<string | null>(null)
+  // ── Shared state (passed to both Canvas and Sim views) ─────────────────────
+  const [probes, setProbes] = useState<WireProbe[]>([])
+  const [view, setView]     = useState<View>('canvas')
 
-  // Circuit state — initialize from persisted store (survives Settings + project close)
-  const [circuit, setCircuit] = useState<TsukiCircuit>(() => {
-    if (sandboxCircuit && (sandboxCircuit as any).components) {
-      return { ...DEFAULT_CIRCUIT, ...(sandboxCircuit as any) }
-    }
-    return { ...DEFAULT_CIRCUIT, board: board || 'uno' }
-  })
+  // ── Hooks ──────────────────────────────────────────────────────────────────
+  const { circuit, setCircuit } = useCircuit(board || 'uno')
 
-  // Persist circuit to store whenever it changes
-  useEffect(() => {
-    setSandboxCircuit(circuit as unknown as Record<string, unknown>)
-  }, [circuit]) // eslint-disable-line
+  const sim = useSimRunner(circuit, setCircuit)
 
-  // ── Consume pendingCircuit from store (loaded via Examples panel) ──────────
-  useEffect(() => {
-    if (!pendingCircuit) return
-    const parsed = textToCircuit(JSON.stringify(pendingCircuit.data))
-    if (parsed) {
-      setCircuit(parsed)
-      setView('canvas')
-    }
-    clearPendingCircuit()
-  }, [pendingCircuit?.id]) // eslint-disable-line
-  const [textDraft, setTextDraft] = useState('')
-  const [textError, setTextError] = useState('')
-
-  // Wire-in-progress
-  const [wip, setWip] = useState<WireInProgress | null>(null)
-
-  // ── Simulator state (via __terminalSpawn, same mechanism as Flash) ──
-  type SimStatus = 'idle' | 'loading' | 'running' | 'error'
-  const [simStatus, setSimStatus] = useState<SimStatus>('idle')
-  const simRunning = simStatus === 'running'
-  const [simPinValues, setSimPinValues] = useState<Record<string, number>>({})
-  const simPinValuesRef = useRef<Record<string, number>>({})
-  const [simLog, setSimLog] = useState<LogEntry[]>([])
-  const [simMs, setSimMs] = useState(0)
-  const [simLoadError, setSimLoadError] = useState('')
-  const [analogInputs, setAnalogInputs] = useState<Record<number, number>>({})
-  const [digitalInputs, setDigitalInputs] = useState<Record<number, boolean>>({})
-  const showCurrentFlow = settings.showCurrentFlow
-
-  // Accumulator for throttled UI updates (same logic as useSimulator)
-  const accumRef = useRef<{
-    latestPins: Record<string, number>
-    peakPins:   Record<string, number>
-    serial:     string[]
-    ms:         number
-    dirty:      boolean
-  }>({ latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false })
-  const tickRef     = useRef<ReturnType<typeof setInterval> | null>(null)
-  const simHandleRef = useRef<any>(null)
-
-  // Flush accumulator to React state every 150ms
-  const flushAccum = useCallback(() => {
-    const acc = accumRef.current
-    if (!acc.dirty) return
-    acc.dirty = false
-    const pinMap = buildPinMap(circuit)
-    const merged: StepResult = {
-      ok: true, events: [],
-      pins:   { ...acc.latestPins, ...acc.peakPins },
-      serial: acc.serial.splice(0),
-      ms:     acc.ms,
-    }
-    const bridged = applyStepResult(merged, simPinValuesRef.current, pinMap, [])
-    const prev = simPinValuesRef.current
-    const next = bridged.pinValues
-    const changed = Object.keys(next).some(k => next[k] !== prev[k]) ||
-                    Object.keys(prev).some(k => !(k in next))
-    simPinValuesRef.current = next
-    if (changed) setSimPinValues(next)
-    setSimMs(merged.ms)
-    if (bridged.log.length > 0)
-      setSimLog(p => [...p, ...bridged.log].slice(-200))
-    acc.peakPins = { ...acc.latestPins }
-  }, [circuit]) // eslint-disable-line
-
-  // Cleanup on unmount
-  useEffect(() => () => {
-    ;(window as any).__sandboxJsonHandler = null
-    if (tickRef.current) clearInterval(tickRef.current)
-    simHandleRef.current?.kill?.().catch(() => {})
-  }, [])
-
-  // ── Sync text ↔ circuit ──
-  useEffect(() => {
-    if (view === 'text') setTextDraft(circuitToText(circuit))
-  }, [view])
-
-  // Dragging
-  const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null)
-  const [panning, setPanning] = useState<{ sx: number; sy: number; px: number; py: number } | null>(null)
-  const svgRef = useRef<SVGSVGElement>(null)
-
-  // Category palette
-  const [paletteOpen, setPaletteOpen] = useState(true)
-
-  // ── Canvas helpers ──
-  function svgPoint(e: React.PointerEvent | React.MouseEvent) {
-    const rect = svgRef.current!.getBoundingClientRect()
-    return {
-      x: (e.clientX - rect.left - pan.x) / zoom,
-      y: (e.clientY - rect.top - pan.y) / zoom,
-    }
-  }
-
-  function addComponent(type: string) {
-    const def = COMP_DEFS[type]
-    if (!def) return
-    const id = `${type}_${Date.now()}`
-    // Place in center-ish of current view
-    const canvasW = svgRef.current?.clientWidth ?? 600
-    const canvasH = svgRef.current?.clientHeight ?? 400
-    const cx = (canvasW / 2 - pan.x) / zoom - def.w / 2
-    const cy = (canvasH / 2 - pan.y) / zoom - def.h / 2
-    const comp: PlacedComponent = {
-      id, type,
-      label: def.label + (circuit.components.filter(c => c.type === type).length + 1),
-      x: cx, y: cy, rotation: 0,
-      color: def.color,
-      props: {},
-    }
-    setCircuit(c => ({ ...c, components: [...c.components, comp] }))
-    setSelectedComp(id)
-  }
-
-  function deleteSelected() {
-    if (!selectedComp) return
-    setCircuit(c => ({
-      ...c,
-      components: c.components.filter(co => co.id !== selectedComp),
-      wires: c.wires.filter(w => w.fromComp !== selectedComp && w.toComp !== selectedComp),
-    }))
-    setSelectedComp(null)
-  }
-
-  // ── Pointer handlers ──
-  function onSvgPointerDown(e: React.PointerEvent) {
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
-      e.currentTarget.setPointerCapture(e.pointerId)
-      return
-    }
-    // Left-click on background (not on a component) → start pan
-    if (e.button === 0 && (e.target as SVGElement).tagName === 'rect' && (e.target as SVGElement).getAttribute('fill') === 'url(#sbgrid)') {
-      setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
-      e.currentTarget.setPointerCapture(e.pointerId)
-      return
-    }
-    if (tool === 'select') {
-      setSelectedComp(null)
-      setWip(null)
-    }
-  }
-
-  function onSvgPointerMove(e: React.PointerEvent) {
-    if (panning) {
-      setPan({ x: panning.px + e.clientX - panning.sx, y: panning.py + e.clientY - panning.sy })
-      return
-    }
-    if (dragging) {
-      const { x, y } = svgPoint(e)
-      setCircuit(c => ({
-        ...c,
-        components: c.components.map(co =>
-          co.id === dragging.id
-            ? { ...co, x: x - dragging.ox, y: y - dragging.oy }
-            : co
-        ),
-      }))
-    }
-    if (wip) {
-      const { x, y } = svgPoint(e)
-      setWip(w => w ? { ...w, mouseX: x, mouseY: y } : null)
-    }
-  }
-
-  function onSvgPointerUp(e: React.PointerEvent) {
-    setPanning(null)
-    setDragging(null)
-  }
-
-  function onCompPointerDown(e: React.PointerEvent, compId: string) {
-    if (tool === 'delete') {
-      e.stopPropagation()
-      setCircuit(c => ({
-        ...c,
-        components: c.components.filter(co => co.id !== compId),
-        wires: c.wires.filter(w => w.fromComp !== compId && w.toComp !== compId),
-      }))
-      return
-    }
-    if (tool === 'select') {
-      e.stopPropagation()
-      setSelectedComp(compId)
-      const comp = circuit.components.find(c => c.id === compId)!
-      const pt = svgPoint(e)
-      setDragging({ id: compId, ox: pt.x - comp.x, oy: pt.y - comp.y })
-    }
-  }
-
-  function onPinClick(compId: string, pinId: string) {
-    if (tool !== 'wire') return
-    const comp = circuit.components.find(c => c.id === compId)!
-    const def = COMP_DEFS[comp.type]
-    const pin = def.pins.find(p => p.id === pinId)!
-    const pos = getPinAbsPos(comp, pin)
-
-    if (!wip) {
-      setWip({ fromComp: compId, fromPin: pinId, fromX: pos.x, fromY: pos.y, mouseX: pos.x, mouseY: pos.y, color: wireColor })
-    } else {
-      // Complete wire
-      if (wip.fromComp === compId && wip.fromPin === pinId) { setWip(null); return }
-      const wire: CircuitWire = {
-        id: `wire_${Date.now()}`,
-        fromComp: wip.fromComp, fromPin: wip.fromPin,
-        toComp: compId, toPin: pinId,
-        color: wip.color,
-        waypoints: [],
-      }
-      setCircuit(c => ({ ...c, wires: [...c.wires, wire] }))
-      setWip(null)
-    }
-  }
-
-  function onWireClick(wireId: string) {
-    if (tool === 'delete') {
-      setCircuit(c => ({ ...c, wires: c.wires.filter(w => w.id !== wireId) }))
-    } else {
-      setSelectedId(wireId)
-    }
-  }
-
-  function applyText() {
-    const parsed = textToCircuit(textDraft)
-    if (!parsed) { setTextError('Invalid .tsuki-circuit JSON'); return }
-    setTextError('')
-    setCircuit(parsed)
-    setView('canvas')
-  }
+  // ── Import / Export / Clear ────────────────────────────────────────────────
 
   function exportFile() {
     const json = circuitToText(circuit)
     const blob = new Blob([json], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `${circuit.name.replace(/\s+/g, '_')}.tsuki-circuit`
-    a.click(); URL.revokeObjectURL(url)
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `${circuit.name.replace(/\s+/g, '_')}.tsuki-circuit`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   function importFile() {
-    const input = document.createElement('input')
-    input.type = 'file'; input.accept = '.tsuki-circuit,.json'
+    const input   = document.createElement('input')
+    input.type    = 'file'
+    input.accept  = '.tsuki-circuit,.json'
     input.onchange = () => {
-      const file = input.files?.[0]; if (!file) return
+      const file = input.files?.[0]
+      if (!file) return
       file.text().then(raw => {
         const parsed = textToCircuit(raw)
         if (parsed) { setCircuit(parsed); setView('canvas') }
@@ -348,30 +53,23 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
   }
 
   function clearCanvas() {
-    if (confirm('Clear the circuit? This cannot be undone.')) {
-      setCircuit({ ...DEFAULT_CIRCUIT, name: circuit.name, board: circuit.board })
-      setSimPinValues({}); setSimLog([]); simPinValuesRef.current = {}; setSimStatus('idle')
-    }
+    if (!confirm('Clear the circuit? This cannot be undone.')) return
+    setCircuit({ ...DEFAULT_CIRCUIT, name: circuit.name, board: circuit.board })
+    sim.handleReset()
   }
 
-  const CATEGORIES = [
-    { id: 'mcu',     label: 'Microcontrollers' },
-    { id: 'output',  label: 'Output' },
-    { id: 'input',   label: 'Input' },
-    { id: 'passive', label: 'Passive' },
-    { id: 'power',   label: 'Power' },
-  ]
-
-  const selComp = selectedComp ? circuit.components.find(c => c.id === selectedComp) : null
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full bg-[var(--surface)] text-[var(--fg)] overflow-hidden">
 
       {/* ── Header ── */}
       <div className="h-8 flex items-center gap-1 px-2 border-b border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
+        {/* Title + circuit name */}
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--fg-faint)]">Sandbox</span>
-          <span className="text-[9px] text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded font-mono">experimental</span>
+          <span className="text-[9px] text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded font-mono">
+            experimental
+          </span>
           <input
             value={circuit.name}
             onChange={e => setCircuit(c => ({ ...c, name: e.target.value }))}
@@ -381,655 +79,109 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
 
         {/* View tabs */}
         <div className="flex items-center gap-0 border border-[var(--border)] rounded overflow-hidden flex-shrink-0">
-          {(['canvas','text','sim'] as const).map(v => (
-            <button key={v} onClick={() => setView(v)}
-              className={clsx('px-2 py-0.5 text-[10px] font-medium transition-colors border-0',
-                view === v ? 'bg-[var(--active)] text-[var(--fg)]' : 'bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)]'
-              )}>
+          {(['canvas', 'text', 'sim'] as const).map(v => (
+            <button
+              key={v} onClick={() => setView(v)}
+              className={clsx(
+                'px-2 py-0.5 text-[10px] font-medium transition-colors border-0',
+                view === v
+                  ? 'bg-[var(--active)] text-[var(--fg)]'
+                  : 'bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)]',
+              )}
+            >
               {v === 'canvas' ? 'Canvas' : v === 'text' ? 'Text' : 'Sim'}
             </button>
           ))}
         </div>
 
+        {/* Action buttons */}
         <div className="flex items-center gap-0.5 flex-shrink-0 ml-1">
-          <button onClick={importFile} title="Import .tsuki-circuit" className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent">
+          <button
+            onClick={importFile} title="Import .tsuki-circuit"
+            className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent"
+          >
             <Upload size={10} />
           </button>
-          <button onClick={exportFile} title="Export .tsuki-circuit" className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent">
+          <button
+            onClick={exportFile} title="Export .tsuki-circuit"
+            className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent"
+          >
             <Download size={10} />
           </button>
-          <button onClick={clearCanvas} title="Clear canvas" className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--err)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent">
+          <button
+            onClick={clearCanvas} title="Clear canvas"
+            className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--err)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent"
+          >
             <Trash2 size={10} />
           </button>
         </div>
       </div>
 
-      {/* ── Canvas View ── */}
+      {/* ── Views ── */}
+
       {view === 'canvas' && (
-        <div className="flex flex-1 overflow-hidden">
-
-          {/* Component palette */}
-          <div className="w-36 border-r border-[var(--border)] flex-shrink-0 overflow-y-auto bg-[var(--surface-1)]">
-            {/* Tools */}
-            <div className="px-2 py-1.5 border-b border-[var(--border)] flex flex-col gap-1">
-              <div className="flex gap-1">
-                {([
-                  { id: 'select', icon: <MousePointer size={11} />, title: 'Select / Move' },
-                  { id: 'wire',   icon: <Zap size={11} />,           title: 'Draw Wire' },
-                  { id: 'delete', icon: <Trash2 size={11} />,        title: 'Delete' },
-                ] as const).map(t => (
-                  <button key={t.id} title={t.title} onClick={() => setTool(t.id)}
-                    className={clsx('flex-1 h-6 flex items-center justify-center rounded border-0 cursor-pointer transition-colors',
-                      tool === t.id ? 'bg-[var(--active)] text-[var(--fg)]' : 'bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-                    )}>
-                    {t.icon}
-                  </button>
-                ))}
-              </div>
-              {/* Wire color */}
-              {tool === 'wire' && (
-                <div className="flex flex-wrap gap-0.5 px-0.5">
-                  {WIRE_COLORS.map(c => (
-                    <button key={c} onClick={() => setWireColor(c)}
-                      title={c}
-                      className="w-4 h-4 rounded-full border-0 cursor-pointer flex-shrink-0 transition-transform hover:scale-110"
-                      style={{ background: c, outline: c === wireColor ? '2px solid var(--fg)' : '1px solid transparent', outlineOffset: '1px' }}
-                    />
-                  ))}
-                </div>
-              )}
-              {/* Zoom */}
-              <div className="flex items-center gap-1">
-                <button onClick={() => setZoom(z => Math.max(0.3, z - 0.1))} className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer">
-                  <ZoomOut size={10} />
-                </button>
-                <span className="flex-1 text-center text-[10px] text-[var(--fg-faint)] font-mono">{Math.round(zoom * 100)}%</span>
-                <button onClick={() => setZoom(z => Math.min(2.5, z + 0.1))} className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer">
-                  <ZoomIn size={10} />
-                </button>
-              </div>
-            </div>
-
-            {/* Component library */}
-            <div className="py-1">
-              {CATEGORIES.map(cat => {
-                const items = Object.values(COMP_DEFS).filter(d => d.category === cat.id)
-                if (!items.length) return null
-                return (
-                  <div key={cat.id}>
-                    <div className="px-2 py-1 mt-1">
-                      <span className="text-[9px] font-semibold uppercase tracking-widest text-[var(--fg-faint)]">{cat.label}</span>
-                    </div>
-                    {items.map(def => (
-                      <button key={def.type} onClick={() => addComponent(def.type)}
-                        className="w-full flex items-center gap-2 px-2.5 py-1 text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors cursor-pointer border-0 bg-transparent text-left">
-                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: def.color }} />
-                        {def.label}
-                      </button>
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* SVG Canvas */}
-          <div className="flex-1 overflow-hidden relative bg-[var(--surface)]">
-            <svg
-              ref={svgRef}
-              className="w-full h-full"
-              style={{ background: 'var(--surface)', cursor: panning ? 'grabbing' : tool === 'wire' ? 'crosshair' : tool === 'delete' ? 'not-allowed' : 'grab' }}
-              onPointerDown={onSvgPointerDown}
-              onPointerMove={onSvgPointerMove}
-              onPointerUp={onSvgPointerUp}
-              onWheel={e => {
-                e.preventDefault()
-                setZoom(z => Math.max(0.3, Math.min(2.5, z - e.deltaY * 0.001)))
-              }}
-            >
-              {/* Dot grid */}
-              <defs>
-                <pattern id="sbgrid" x={pan.x % (20 * zoom)} y={pan.y % (20 * zoom)}
-                  width={20 * zoom} height={20 * zoom} patternUnits="userSpaceOnUse">
-                  <circle cx={0} cy={0} r={0.8} fill="var(--border)" opacity={0.5} />
-                </pattern>
-              </defs>
-              <SvgGlobalDefs />
-              <rect width="100%" height="100%" fill="url(#sbgrid)" />
-
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-
-                {/* Wires */}
-                {circuit.wires.map(wire => {
-                  const fc = circuit.components.find(c => c.id === wire.fromComp)
-                  const tc = circuit.components.find(c => c.id === wire.toComp)
-                  if (!fc || !tc) return null
-                  const fdef = COMP_DEFS[fc.type]; const tdef = COMP_DEFS[tc.type]
-                  if (!fdef || !tdef) return null
-                  const fp = fdef.pins.find(p => p.id === wire.fromPin)
-                  const tp = tdef.pins.find(p => p.id === wire.toPin)
-                  if (!fp || !tp) return null
-                  const fa = getPinAbsPos(fc, fp); const ta = getPinAbsPos(tc, tp)
-                  return (
-                    <g key={wire.id}>
-                      <path d={makeBezierPath(fa.x, fa.y, ta.x, ta.y)}
-                        stroke="transparent" strokeWidth={10} fill="none" style={{ cursor: 'pointer' }}
-                        onClick={() => onWireClick(wire.id)} />
-                      <path d={makeBezierPath(fa.x, fa.y, ta.x, ta.y)}
-                        stroke={wire.color} strokeWidth={selectedId === wire.id ? 2.5 : 1.8}
-                        fill="none" strokeLinecap="round"
-                        opacity={selectedId === wire.id ? 1 : 0.85} />
-                    </g>
-                  )
-                })}
-
-                {/* Wire in progress */}
-                {wip && (
-                  <path d={makeBezierPath(wip.fromX, wip.fromY, wip.mouseX, wip.mouseY)}
-                    stroke={wip.color} strokeWidth={1.8} fill="none"
-                    strokeDasharray="6 3" strokeLinecap="round" opacity={0.7} />
-                )}
-
-                {/* Components */}
-                {circuit.components.map(comp => {
-                  const def = COMP_DEFS[comp.type]
-                  if (!def) return null
-                  return (
-                    <CompShape
-                      key={comp.id}
-                      comp={comp}
-                      selected={selectedComp === comp.id}
-                      simPinValues={simPinValues}
-                      wireMode={tool === 'wire'}
-                      onPointerDown={e => onCompPointerDown(e, comp.id)}
-                      onPinClick={pinId => onPinClick(comp.id, pinId)}
-                    />
-                  )
-                })}
-              </g>
-            </svg>
-
-            {/* Empty state */}
-            {circuit.components.length === 0 && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
-                <Cpu size={28} className="text-[var(--fg-faint)]" />
-                <p className="text-xs text-[var(--fg-faint)]">Add components from the palette</p>
-                <p className="text-[10px] text-[var(--fg-faint)]">or import a .tsuki-circuit file</p>
-              </div>
-            )}
-
-            {/* Status bar */}
-            <div className="absolute bottom-0 left-0 right-0 h-5 flex items-center px-2 gap-3 bg-[var(--surface-1)] border-t border-[var(--border)] text-[10px] text-[var(--fg-faint)] font-mono">
-              <span>{circuit.components.length} comp</span>
-              <span>{circuit.wires.length} wires</span>
-              <span className="flex-1" />
-              <span>alt+drag: pan · scroll: zoom · ESC: cancel</span>
-            </div>
-          </div>
-
-          {/* Properties panel */}
-          {selComp && (
-            <div className="w-40 border-l border-[var(--border)] flex-shrink-0 bg-[var(--surface-1)] overflow-y-auto">
-              <div className="px-2 py-1.5 border-b border-[var(--border)] flex items-center justify-between">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--fg-faint)]">Properties</span>
-                <button onClick={() => setSelectedComp(null)} className="w-4 h-4 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer">
-                  <X size={9} />
-                </button>
-              </div>
-              <div className="p-2 flex flex-col gap-2">
-                <div>
-                  <div className="text-[9px] text-[var(--fg-faint)] uppercase tracking-widest mb-0.5">Label</div>
-                  <input value={selComp.label}
-                    onChange={e => setCircuit(c => ({ ...c, components: c.components.map(co => co.id === selComp.id ? { ...co, label: e.target.value } : co) }))}
-                    className="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-1.5 py-0.5 text-xs text-[var(--fg)] outline-none" />
-                </div>
-                <div>
-                  <div className="text-[9px] text-[var(--fg-faint)] uppercase tracking-widest mb-0.5">Color</div>
-                  <div className="flex items-center gap-1.5">
-                    <input type="color" value={selComp.color}
-                      onChange={e => setCircuit(c => ({ ...c, components: c.components.map(co => co.id === selComp.id ? { ...co, color: e.target.value } : co) }))}
-                      className="w-8 h-6 rounded border border-[var(--border)] cursor-pointer bg-transparent" />
-                    <span className="text-[10px] font-mono text-[var(--fg-faint)]">{selComp.color}</span>
-                  </div>
-                </div>
-                {selComp.type === 'resistor' && (
-                  <div>
-                    <div className="text-[9px] text-[var(--fg-faint)] uppercase tracking-widest mb-0.5">Ohms</div>
-                    <input value={selComp.props.ohms ?? 1000}
-                      onChange={e => setCircuit(c => ({ ...c, components: c.components.map(co => co.id === selComp.id ? { ...co, props: { ...co.props, ohms: Number(e.target.value) } } : co) }))}
-                      type="number" className="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-1.5 py-0.5 text-xs text-[var(--fg)] outline-none" />
-                  </div>
-                )}
-                <div>
-                  <div className="text-[9px] text-[var(--fg-faint)] uppercase tracking-widest mb-0.5">Type</div>
-                  <span className="text-[10px] font-mono text-[var(--fg-muted)]">{selComp.type}</span>
-                </div>
-                <div>
-                  <div className="text-[9px] text-[var(--fg-faint)] uppercase tracking-widest mb-0.5">Position</div>
-                  <span className="text-[10px] font-mono text-[var(--fg-muted)]">{Math.round(selComp.x)}, {Math.round(selComp.y)}</span>
-                </div>
-                <button onClick={deleteSelected}
-                  className="mt-1 flex items-center justify-center gap-1 w-full py-1 rounded text-[10px] text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_8%,transparent)] border border-[color-mix(in_srgb,var(--err)_20%,transparent)] cursor-pointer bg-transparent transition-colors">
-                  <Trash2 size={9} /> Delete
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <CanvasView
+          circuit={circuit}
+          setCircuit={setCircuit}
+          simPinValues={sim.simPinValues}
+          simStatus={sim.simStatus}
+          pressedComps={sim.pressedComps}
+          toggledComps={sim.toggledComps}
+          probes={probes}
+          setProbes={setProbes}
+          onButtonPress={sim.onButtonPress}
+          onButtonRelease={sim.onButtonRelease}
+          onSwitchToggle={sim.onSwitchToggle}
+        />
       )}
 
-      {/* ── Text View ── */}
       {view === 'text' && (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="px-3 py-2 border-b border-[var(--border)] bg-[var(--surface-1)] flex items-center gap-2 flex-shrink-0">
-            <FileText size={11} className="text-[var(--fg-faint)]" />
-            <span className="text-xs text-[var(--fg-muted)] flex-1">Edit circuit as <span className="font-mono text-[var(--fg)]">.tsuki-circuit</span> — JSON with components, wires, colors</span>
-            {textError && <span className="text-[10px] text-[var(--err)] flex items-center gap-1"><AlertCircle size={9}/>{textError}</span>}
-            <button onClick={applyText}
-              className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-[var(--fg)] text-[var(--accent-inv)] cursor-pointer border-0 hover:opacity-80">
-              <CheckCircle2 size={10} /> Apply
-            </button>
-          </div>
-          <div className="flex-1 relative overflow-hidden">
-            <textarea
-              value={textDraft}
-              onChange={e => { setTextDraft(e.target.value); setTextError('') }}
-              spellCheck={false}
-              className="w-full h-full resize-none outline-none border-0 bg-[var(--surface)] text-[var(--fg)] font-mono text-xs leading-5 p-4"
-              style={{ fontFamily: 'var(--font-mono)' }}
-            />
-          </div>
-          <div className="px-3 py-1.5 border-t border-[var(--border)] bg-[var(--surface-1)] text-[10px] text-[var(--fg-faint)] font-mono flex-shrink-0">
-            .tsuki-circuit v1 · {circuit.components.length} components · {circuit.wires.length} wires
-          </div>
-        </div>
+        <TextView
+          circuit={circuit}
+          setCircuit={setCircuit}
+          onApplied={() => setView('canvas')}
+        />
       )}
 
-      {/* ── Simulation View ── */}
-      {view === 'sim' && (() => {
-        const analogPins  = getAnalogInputPins(circuit)
-        const digitalPins = getDigitalInputPins(circuit)
-
-        const handleStop = () => {
-          ;(window as any).__sandboxJsonHandler = null
-          simHandleRef.current?.kill?.().catch(() => {})
-          simHandleRef.current = null
-          if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
-          simPinValuesRef.current = {}
-          setSimPinValues({})
-          setSimStatus('idle')
-        }
-
-        const handleReset = () => {
-          handleStop()
-          accumRef.current = { latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false }
-          setSimLog([])
-          setSimMs(0)
-          setSimLoadError('')
-        }
-
-        const handleRun = async () => {
-          if (simRunning) { handleStop(); return }
-          const code = activeTab?.content ?? ''
-          if (!code.trim()) {
-            const hint = projectLanguage === 'cpp' ? 'a .cpp file' : projectLanguage === 'ino' ? 'a .ino file' : 'a .go file'
-            setSimLog([{ t: 0, level: 'err', msg: `⚠ No file open — open ${hint} first` }])
-            return
-          }
-          setSimStatus('loading')
-          setSimLoadError('')
-          setSimLog([])
-          setSimPinValues({})
-          simPinValuesRef.current = {}
-          accumRef.current = { latestPins: {}, peakPins: {}, serial: [], ms: 0, dirty: false }
-          setSimMs(0)
-          try {
-            const bundlePath = await getTmpSimBundlePath()
-            const boardName  = board || 'uno'
-
-            // ── Auto-bootstrap circuit if empty ───────────────────────────────
-            setCircuit(cur => {
-              const hasMcu = cur.components.some(c => COMP_DEFS[c.type]?.category === 'mcu')
-              if (hasMcu) return cur
-              const usedPins = new Set<number>()
-              // Detect pins from both C++ (digitalWrite) and Go (arduino.DigitalWrite)
-              const reC  = /digitalWrite\s*\(\s*(\w+)\s*,/g
-              const reGo = /arduino\.DigitalWrite\s*\(\s*(\w+)\s*,/g
-              for (const re of [reC, reGo]) {
-                let m: RegExpExecArray | null
-                while ((m = re.exec(code)) !== null) {
-                  const n = parseInt(m[1])
-                  if (!isNaN(n)) usedPins.add(n)
-                }
-              }
-              if (/LED_BUILTIN/.test(code)) usedPins.add(13)
-              const pinList = usedPins.size > 0 ? Array.from(usedPins) : [13]
-
-              const mcuId = 'auto-uno'
-              const newComps: typeof cur.components = [
-                { id: mcuId, type: 'arduino_uno', x: 120, y: 80, label: 'UNO', props: {}, rotation: 0, color: '' },
-              ]
-              const newWires: typeof cur.wires = []
-              let ledY = 80
-              for (const pin of pinList) {
-                const ledId = `auto-led-${pin}`
-                newComps.push({ id: ledId, type: 'led', x: 320, y: ledY, label: `LED D${pin}`, props: {}, rotation: 0, color: '' })
-                newWires.push({
-                  id: `auto-wire-${pin}`,
-                  fromComp: mcuId, fromPin: `D${pin}`,
-                  toComp: ledId, toPin: 'anode',
-                  color: '', waypoints: [],
-                })
-                ledY += 80
-              }
-              return { ...cur, components: newComps, wires: newWires }
-            })
-
-            // ── Step 1: transpile in-process (no tsuki-core.exe subprocess) ──
-            try {
-              await emitSimBundle(code, boardName, bundlePath)
-            } catch (e) {
-              setSimLoadError(e instanceof Error ? e.message : String(e))
-              setSimStatus('error')
-              return
-            }
-
-            // ── Step 2: run simulator in-process (no tsuki-sim.exe subprocess) ─
-            const simEventId = `sim-${Date.now()}`
-            ;(window as any).__sandboxJsonHandler = (result: StepResult & { energy?: unknown }) => {
-              const acc = accumRef.current
-              // Apply pin snapshot from this segment (emitted at each delay boundary by Rust)
-              for (const [p, v] of Object.entries(result.pins)) {
-                acc.latestPins[p] = v as number
-                acc.peakPins[p]   = v as number  // peakPins = latestPins (Rust handles timing)
-              }
-              if (result.serial?.length) acc.serial.push(...result.serial)
-              acc.ms    = result.ms
-              acc.dirty = true
-              if (!result.ok) {
-                ;(window as any).__sandboxJsonHandler = null
-                if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
-                setSimLoadError(result.error ?? 'Simulation error')
-                setSimStatus('error')
-              }
-            }
-
-            if (tickRef.current) clearInterval(tickRef.current)
-            tickRef.current = setInterval(flushAccum, 150)
-            setSimStatus('running')
-            setSimLog([{ t: 0, level: 'info', msg: `▶ simulator · board=${boardName}` }])
-
-            const handle = await runSimulator(
-              simEventId,
-              code,
-              boardName,
-              undefined,
-              (line) => {
-                if (!line.trim().startsWith('{')) return
-                try {
-                  const result = JSON.parse(line)
-                  ;(window as any).__sandboxJsonHandler?.(result)
-                } catch { /* ignore non-JSON */ }
-              }
-            )
-            simHandleRef.current = handle
-
-            handle.done.then(() => {
-              ;(window as any).__sandboxJsonHandler = null
-              simHandleRef.current = null
-              if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
-              flushAccum()
-              setSimStatus(s => s === 'running' ? 'idle' : s)
-            })
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e)
-            setSimLoadError(msg)
-            setSimStatus('error')
-            ;(window as any).__sandboxJsonHandler = null
-            if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
-          }
-        }
-
-        return (
-          <div className="flex-1 flex flex-col overflow-hidden">
-
-            {/* Controls bar */}
-            <div className="px-3 py-2 border-b border-[var(--border)] bg-[var(--surface-1)] flex items-center gap-2 flex-shrink-0">
-              <button
-                onClick={simRunning ? handleStop : handleRun}
-                disabled={simStatus === 'loading'}
-                className={clsx(
-                  'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer border-0 transition-colors',
-                  simRunning
-                    ? 'bg-[color-mix(in_srgb,var(--err)_12%,transparent)] text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_20%,transparent)]'
-                    : 'bg-[var(--fg)] text-[var(--accent-inv)] hover:opacity-80 disabled:opacity-40',
-                )}>
-                {simStatus === 'loading'
-                  ? <><span className="animate-spin inline-block w-3 h-3 border border-current border-t-transparent rounded-full"/>Starting…</>
-                  : simRunning
-                    ? <><Square size={10}/> Stop</>
-                    : <><Play  size={10}/> Run</>
-                }
-              </button>
-
-              <button onClick={handleReset}
-                className="w-6 h-6 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer">
-                <RotateCcw size={11}/>
-              </button>
-
-              <div className="flex-1"/>
-
-              {activeTab ? (
-                <span className="text-[10px] text-[var(--ok)] flex items-center gap-1">
-                  <CheckCircle2 size={9}/> {activeTab.name}
-                </span>
-              ) : (
-                <span className="text-[10px] text-[var(--fg-faint)] flex items-center gap-1">
-                  <AlertCircle size={9}/>
-                  {projectLanguage === 'cpp' ? 'Open a .cpp file' : projectLanguage === 'ino' ? 'Open a .ino file' : 'Open a .go file'}
-                </span>
-              )}
-
-              {simRunning && (
-                <span className="text-[10px] text-[var(--fg-faint)] font-mono">
-                  {simMs.toFixed(0)}ms
-                </span>
-              )}
-            </div>
-
-            {/* Main area */}
-            <div className="flex-1 flex overflow-hidden">
-
-              {/* Left: mini-canvas + external input controls */}
-              <div className="flex-1 flex flex-col overflow-hidden">
-
-                {/* Mini circuit canvas */}
-                <div className="flex-1 overflow-hidden relative bg-[var(--surface)]">
-                  <svg className="w-full h-full">
-                    <defs>
-                      <pattern id="simgrid" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
-                        <circle cx="0" cy="0" r="0.8" fill="var(--border)" opacity="0.4"/>
-                      </pattern>
-                    </defs>
-                    <style>{`
-                      @keyframes flowDash {
-                        from { stroke-dashoffset: 0 }
-                        to   { stroke-dashoffset: -20 }
-                      }
-                      .flow-active {
-                        animation: flowDash 0.45s linear infinite;
-                      }
-                    `}</style>
-                    <rect width="100%" height="100%" fill="url(#simgrid)"/>
-                    <g transform="translate(20,20) scale(0.75)">
-                      {circuit.wires.map(wire => {
-                        const fc = circuit.components.find(c => c.id === wire.fromComp)
-                        const tc = circuit.components.find(c => c.id === wire.toComp)
-                        if (!fc || !tc) return null
-                        const fdef = COMP_DEFS[fc.type]; const tdef = COMP_DEFS[tc.type]
-                        if (!fdef || !tdef) return null
-                        const fp = fdef.pins.find(p => p.id === wire.fromPin)
-                        const tp = tdef.pins.find(p => p.id === wire.toPin)
-                        if (!fp || !tp) return null
-                        const fa = getPinAbsPos(fc, fp); const ta = getPinAbsPos(tc, tp)
-                        const key = `${wire.toComp}:${wire.toPin}`
-                        const val = simPinValues[key] ?? 0
-                        const isActive = val > 0
-                        const d = makeBezierPath(fa.x, fa.y, ta.x, ta.y)
-                        return (
-                          <g key={wire.id}>
-                            {/* Base wire — bright when active, dimmed when idle */}
-                            <path d={d}
-                              stroke={isActive ? wire.color : wire.color + '44'}
-                              strokeWidth={isActive ? 2.5 : 1.5}
-                              fill="none" strokeLinecap="round"/>
-                            {/* Animated current-flow dots (only when setting is on and wire is active) */}
-                            {showCurrentFlow && isActive && (
-                              <path d={d}
-                                stroke="rgba(255,255,255,0.7)"
-                                strokeWidth={1.5}
-                                fill="none"
-                                strokeLinecap="round"
-                                strokeDasharray={`4 ${Math.max(8, 14 - Math.round(val * 6))}`}
-                                className="flow-active"
-                              />
-                            )}
-                          </g>
-                        )
-                      })}
-                      {circuit.components.map(comp => {
-                        const def = COMP_DEFS[comp.type]
-                        if (!def) return null
-                        return (
-                          <CompShape key={comp.id} comp={comp} selected={false}
-                            simPinValues={simPinValues} wireMode={false}
-                            onPointerDown={() => {}} onPinClick={() => {}}/>
-                        )
-                      })}
-                    </g>
-                  </svg>
-                  {circuit.components.length === 0 && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
-                      <Activity size={22} className="text-[var(--fg-faint)]"/>
-                      <p className="text-xs text-[var(--fg-faint)]">Build a circuit on the Canvas first</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* External inputs panel */}
-                {(analogPins.length > 0 || digitalPins.length > 0) && (
-                  <div className="border-t border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 flex-shrink-0">
-                    <div className="text-[9px] font-semibold uppercase tracking-widest text-[var(--fg-faint)] mb-2">External Inputs</div>
-
-                    {/* Analog sliders — changes sent to tsuki-sim via stdin */}
-                    {analogPins.map(pinIdx => (
-                      <div key={pinIdx} className="flex items-center gap-2 mb-1.5">
-                        <span className="text-[10px] font-mono text-[var(--fg-muted)] w-7">A{pinIdx}</span>
-                        <input type="range" min={0} max={1023}
-                          value={analogInputs[pinIdx] ?? 512}
-                          onChange={e => {
-                            const v = Number(e.target.value)
-                            setAnalogInputs(prev => ({ ...prev, [pinIdx]: v }))
-                            simHandleRef.current?.write?.(
-                              JSON.stringify({ type: 'analog', pin: pinIdx, val: v }) + '\n'
-                            )?.catch(() => {})
-                          }}
-                          className="flex-1 h-1.5 appearance-none rounded bg-[var(--border)] accent-[var(--active)] cursor-pointer"/>
-                        <span className="text-[10px] font-mono text-[var(--fg-faint)] w-8 text-right">
-                          {analogInputs[pinIdx] ?? 512}
-                        </span>
-                      </div>
-                    ))}
-
-                    {/* Digital toggles — sent to tsuki-sim via stdin */}
-                    {digitalPins.map(({ pin, label }) => (
-                      <div key={pin} className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-mono text-[var(--fg-muted)] flex-1 truncate">{label}</span>
-                        <button
-                          onPointerDown={() => {
-                            setDigitalInputs(prev => ({ ...prev, [pin]: true }))
-                            simHandleRef.current?.write?.(
-                              JSON.stringify({ type: 'digital', pin, val: 1 }) + '\n'
-                            )?.catch(() => {})
-                          }}
-                          onPointerUp={() => {
-                            setDigitalInputs(prev => ({ ...prev, [pin]: false }))
-                            simHandleRef.current?.write?.(
-                              JSON.stringify({ type: 'digital', pin, val: 0 }) + '\n'
-                            )?.catch(() => {})
-                          }}
-                          className={clsx(
-                            'px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors cursor-pointer select-none',
-                            digitalInputs[pin]
-                              ? 'bg-[var(--ok)] text-white border-[var(--ok)]'
-                              : 'bg-transparent text-[var(--fg-faint)] border-[var(--border)] hover:border-[var(--fg-muted)]'
-                          )}>
-                          {digitalInputs[pin] ? 'HIGH' : 'LOW'}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Right: serial + event log */}
-              <div className="w-52 border-l border-[var(--border)] flex flex-col overflow-hidden bg-[var(--surface-1)]">
-                <div className="px-2 py-1.5 border-b border-[var(--border)] flex-shrink-0 flex items-center justify-between">
-                  <span className="text-[9px] font-semibold uppercase tracking-widest text-[var(--fg-faint)]">
-                    Serial / Events
-                  </span>
-                  <button onClick={() => setSimLog([])}
-                    className="text-[9px] text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer">
-                    clear
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5 font-mono">
-                  {(simLoadError || simStatus === 'error') && (
-                    <div className="text-[10px] text-[var(--err)] px-1.5 py-2 rounded bg-[color-mix(in_srgb,var(--err)_8%,transparent)] border border-[color-mix(in_srgb,var(--err)_25%,transparent)] whitespace-pre-wrap leading-relaxed mb-1">
-                      {simLoadError}
-                    </div>
-                  )}
-                  {simLog.length === 0 && simStatus !== 'error' && !simLoadError && (
-                    <p className="text-[10px] text-[var(--fg-faint)] px-1 py-2">
-                      {simStatus === 'idle'    ? 'Press ▶ Run to start…' :
-                       simStatus === 'loading' ? 'Starting simulator…'   :
-                       'Running — waiting for output…'}
-                    </p>
-                  )}
-                  {simLog.map((entry, i) => (
-                    <div key={i} className={clsx(
-                      'text-[10px] px-1 py-0.5 rounded leading-relaxed',
-                      entry.level === 'ok'   ? 'text-[var(--ok)]' :
-                      entry.level === 'err'  ? 'text-[var(--err)]' :
-                      entry.level === 'warn' ? 'text-yellow-400' :
-                      'text-[var(--fg-muted)]'
-                    )}>
-                      <span className="text-[var(--fg-faint)] mr-1">{entry.t}ms</span>
-                      {entry.msg}
-                    </div>
-                  ))}
-                </div>
-                <div className="px-2 py-1 border-t border-[var(--border)] flex-shrink-0">
-                  <div className={clsx('text-[9px] flex items-center gap-1 font-sans',
-                    simStatus === 'running' ? 'text-[var(--ok)]' :
-                    simStatus === 'error'   ? 'text-[var(--err)]' :
-                    simStatus === 'loading' ? 'text-yellow-400' :
-                    'text-[var(--fg-faint)]'
-                  )}>
-                    <span className={clsx('w-1.5 h-1.5 rounded-full inline-block',
-                      simStatus === 'running' ? 'bg-[var(--ok)]' :
-                      simStatus === 'error'   ? 'bg-[var(--err)]' :
-                      simStatus === 'loading' ? 'bg-yellow-400' :
-                      'bg-[var(--fg-faint)]'
-                    )}/>
-                    tsuki-sim · {simStatus}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+      {view === 'sim' && (
+        <SimView
+          circuit={circuit}
+          setCircuit={setCircuit}
+          probes={probes}
+          simStatus={sim.simStatus}
+          simRunning={sim.simRunning}
+          simPinValues={sim.simPinValues}
+          simLog={sim.simLog}
+          simMs={sim.simMs}
+          simLoadError={sim.simLoadError}
+          analogInputs={sim.analogInputs}
+          setAnalogInputs={sim.setAnalogInputs}
+          digitalInputs={sim.digitalInputs}
+          setDigitalInputs={sim.setDigitalInputs}
+          pressedComps={sim.pressedComps}
+          toggledComps={sim.toggledComps}
+          sigGenPin={sim.sigGenPin}
+          setSigGenPin={sim.setSigGenPin}
+          sigGenFreq={sim.sigGenFreq}
+          setSigGenFreq={sim.setSigGenFreq}
+          sigGenRunning={sim.sigGenRunning}
+          waveformPins={sim.waveformPins}
+          setWaveformPins={sim.setWaveformPins}
+          pinHistoryRef={sim.pinHistoryRef}
+          waveformVersion={sim.waveformVersion}
+          serialSend={sim.serialSend}
+          setSerialSend={sim.setSerialSend}
+          simHandleRef={sim.simHandleRef}
+          handleRun={sim.handleRun}
+          handleStop={sim.handleStop}
+          handleReset={sim.handleReset}
+          onButtonPress={sim.onButtonPress}
+          onButtonRelease={sim.onButtonRelease}
+          onSwitchToggle={sim.onSwitchToggle}
+          startSigGen={sim.startSigGen}
+          stopSigGen={sim.stopSigGen}
+        />
+      )}
     </div>
   )
 }

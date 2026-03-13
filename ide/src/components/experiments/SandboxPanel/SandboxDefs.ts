@@ -61,6 +61,27 @@ export interface TsukiCircuit {
   notes: CircuitNote[]
 }
 
+// ── Interaction types ──────────────────────────────────────────────────────────
+
+export type Tool = 'select' | 'wire' | 'delete' | 'probe'
+
+export interface WireInProgress {
+  fromComp: string
+  fromPin: string
+  fromX: number
+  fromY: number
+  mouseX: number
+  mouseY: number
+  color: string
+  waypoints: { x: number; y: number }[]
+}
+
+export interface WireProbe {
+  id: string
+  wireId: string
+  label: string
+}
+
 // ── Pin color map ──────────────────────────────────────────────────────────────
 
 export function pinColor(type: CircuitPin['type']): string {
@@ -82,6 +103,27 @@ export function pinTypeBadge(type: CircuitPin['type']): string {
   }
   return map[type] ?? '·'
 }
+
+// ── Wire palettes ──────────────────────────────────────────────────────────────
+
+/** Full palette with labels (for docs / tooltips) */
+export const WIRE_COLORS = [
+  { color: '#ef4444', label: 'Red (Power)'    },
+  { color: '#1c1c1c', label: 'Black (GND)'    },
+  { color: '#f97316', label: 'Orange'         },
+  { color: '#eab308', label: 'Yellow'         },
+  { color: '#22c55e', label: 'Green'          },
+  { color: '#3b82f6', label: 'Blue (Signal)'  },
+  { color: '#a855f7', label: 'Purple (Analog)'},
+  { color: '#ec4899', label: 'Pink'           },
+  { color: '#e2e2e2', label: 'White'          },
+]
+
+/** Flat hex array for the color picker */
+export const WIRE_COLOR_HEX = [
+  '#ef4444','#f97316','#eab308','#22c55e',
+  '#3b82f6','#a855f7','#ec4899','#e2e2e2','#1a1a1a',
+]
 
 // ── Component definitions library ─────────────────────────────────────────────
 
@@ -127,7 +169,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
   },
 
   arduino_nano: {
-    type: 'arduino_nano', label: 'Arduino Nano', w: 72, h: 160,
+    type: 'arduino_nano', label: 'Arduino Nano', w: 90, h: 160,
     color: '#14448a', borderColor: '#0a2855', category: 'mcu',
     description: 'ATmega328P · compact · 30-pin DIP · USB Mini-B',
     pins: [
@@ -165,11 +207,10 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
   },
 
   xiao_rp2040: {
-    type: 'xiao_rp2040', label: 'Xiao RP2040', w: 68, h: 140,
+    type: 'xiao_rp2040', label: 'Xiao RP2040', w: 90, h: 140,
     color: '#1c3a5e', borderColor: '#0f2236', category: 'mcu',
     description: 'Seeed Xiao RP2040 · RP2040 dual-core · 133 MHz · 14 GPIO · USB-C · tiny form factor',
     pins: [
-      // Left column (top → bottom)
       { id: 'D0',  label: 'D0',        type: 'digital', rx: 0, ry: 0.07,  direction: 'inout', arduino: 0  },
       { id: 'D1',  label: 'D1',        type: 'digital', rx: 0, ry: 0.15,  direction: 'inout', arduino: 1  },
       { id: 'D2',  label: 'D2',        type: 'digital', rx: 0, ry: 0.23,  direction: 'inout', arduino: 2  },
@@ -178,7 +219,6 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'D5',  label: 'D5 / SCL',  type: 'i2c',     rx: 0, ry: 0.47,  direction: 'inout', arduino: 5  },
       { id: 'D6',  label: 'D6 / TX',   type: 'digital', rx: 0, ry: 0.55,  direction: 'inout', arduino: 6  },
       { id: 'D7',  label: 'D7 / RX',   type: 'digital', rx: 0, ry: 0.63,  direction: 'inout', arduino: 7  },
-      // Right column (top → bottom)
       { id: 'D8',  label: 'D8 / SCK',  type: 'spi',     rx: 1, ry: 0.07,  direction: 'inout', arduino: 8  },
       { id: 'D9',  label: 'D9 / MISO', type: 'spi',     rx: 1, ry: 0.15,  direction: 'inout', arduino: 9  },
       { id: 'D10', label: 'D10 / MOSI',type: 'spi',     rx: 1, ry: 0.23,  direction: 'inout', arduino: 10 },
@@ -201,7 +241,6 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'cathode', label: 'Cathode (–)', type: 'gnd',     rx: 0.5, ry: 1,   direction: 'in' },
     ],
   },
-
   led_rgb: {
     type: 'led_rgb', label: 'RGB LED', w: 38, h: 60,
     color: '#ffffff', borderColor: '#888', category: 'output',
@@ -213,7 +252,6 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'cathode', label: 'Cathode (–)', type: 'gnd',  rx: 0.5,  ry: 1,   direction: 'in' },
     ],
   },
-
   buzzer: {
     type: 'buzzer', label: 'Buzzer', w: 40, h: 40,
     color: '#1c1c1c', borderColor: '#404040', category: 'output',
@@ -223,15 +261,14 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'neg', label: 'GND (–)', type: 'gnd',     rx: 0.7, ry: 0, direction: 'in' },
     ],
   },
-
   servo: {
     type: 'servo', label: 'Servo', w: 70, h: 54,
     color: '#2a2a2a', borderColor: '#404040', category: 'actuator',
     description: 'SG90 micro servo · 0–180° · PWM control · 5V',
     pins: [
-      { id: 'gnd',    label: 'GND (Brown)',  type: 'gnd',   rx: 0.15, ry: 1, direction: 'in' },
-      { id: 'vcc',    label: 'VCC (Red)',    type: 'power', rx: 0.5,  ry: 1, direction: 'in' },
-      { id: 'signal', label: 'Signal (Orange)', type: 'pwm', rx: 0.85, ry: 1, direction: 'in' },
+      { id: 'gnd',    label: 'GND (Brown)',     type: 'gnd',   rx: 0.15, ry: 1, direction: 'in' },
+      { id: 'vcc',    label: 'VCC (Red)',        type: 'power', rx: 0.5,  ry: 1, direction: 'in' },
+      { id: 'signal', label: 'Signal (Orange)',  type: 'pwm',   rx: 0.85, ry: 1, direction: 'in' },
     ],
   },
 
@@ -247,7 +284,6 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'pin4', label: 'Pin 2B', type: 'digital', rx: 1,   ry: 0.72, direction: 'inout' },
     ],
   },
-
   potentiometer: {
     type: 'potentiometer', label: 'Potentiometer', w: 48, h: 48,
     color: '#3a3a3a', borderColor: '#555', category: 'input',
@@ -256,6 +292,28 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'vcc',   label: 'VCC',    type: 'power',  rx: 0,   ry: 0.2, direction: 'in'  },
       { id: 'gnd',   label: 'GND',    type: 'gnd',    rx: 0,   ry: 0.8, direction: 'in'  },
       { id: 'wiper', label: 'Output', type: 'analog', rx: 1,   ry: 0.5, direction: 'out' },
+    ],
+  },
+  slide_switch: {
+    type: 'slide_switch', label: 'Slide Switch', w: 44, h: 28,
+    color: '#2a2a2a', borderColor: '#444', category: 'input',
+    description: 'SPDT slide switch · 3 terminals · ON-ON',
+    pins: [
+      { id: 'common', label: 'Common (C)', type: 'digital', rx: 0.5, ry: 1,   direction: 'inout' },
+      { id: 'pos1',   label: 'Position 1', type: 'digital', rx: 0,   ry: 0.5, direction: 'out'   },
+      { id: 'pos2',   label: 'Position 2', type: 'digital', rx: 1,   ry: 0.5, direction: 'out'   },
+    ],
+  },
+  rotary_encoder: {
+    type: 'rotary_encoder', label: 'Rot. Encoder', w: 46, h: 52,
+    color: '#2a2a2a', borderColor: '#444', category: 'input',
+    description: 'KY-040 rotary encoder · CLK / DT / SW · incremental',
+    pins: [
+      { id: 'clk', label: 'CLK',  type: 'digital', rx: 0, ry: 0.14, direction: 'out' },
+      { id: 'dt',  label: 'DT',   type: 'digital', rx: 0, ry: 0.34, direction: 'out' },
+      { id: 'sw',  label: 'SW',   type: 'digital', rx: 0, ry: 0.54, direction: 'out' },
+      { id: 'vcc', label: 'VCC',  type: 'power',   rx: 0, ry: 0.74, direction: 'in'  },
+      { id: 'gnd', label: 'GND',  type: 'gnd',     rx: 0, ry: 0.94, direction: 'in'  },
     ],
   },
 
@@ -269,7 +327,6 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'pin2', label: 'Pin 2', type: 'generic', rx: 1,   ry: 0.5, direction: 'inout' },
     ],
   },
-
   capacitor: {
     type: 'capacitor', label: 'Capacitor', w: 28, h: 44,
     color: '#2a4a7a', borderColor: '#1a3060', category: 'passive',
@@ -279,17 +336,199 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'neg', label: 'Cathode (–)', type: 'gnd',    rx: 0.5, ry: 1, direction: 'in' },
     ],
   },
-
   transistor_npn: {
     type: 'transistor_npn', label: 'NPN BJT', w: 36, h: 48,
     color: '#2a2a2a', borderColor: '#444', category: 'passive',
     description: 'NPN BJT (2N2222) · collector / base / emitter',
     pins: [
-      { id: 'collector', label: 'Collector', type: 'digital', rx: 0.5, ry: 0,   direction: 'in'  },
-      { id: 'base',      label: 'Base',      type: 'digital', rx: 0,   ry: 0.55, direction: 'in' },
-      { id: 'emitter',   label: 'Emitter',   type: 'gnd',     rx: 0.5, ry: 1,   direction: 'out' },
+      { id: 'collector', label: 'Collector', type: 'digital', rx: 0.5, ry: 0,    direction: 'in'  },
+      { id: 'base',      label: 'Base',      type: 'digital', rx: 0,   ry: 0.55, direction: 'in'  },
+      { id: 'emitter',   label: 'Emitter',   type: 'gnd',     rx: 0.5, ry: 1,    direction: 'out' },
     ],
   },
+  mosfet_n: {
+    type: 'mosfet_n', label: 'MOSFET N', w: 30, h: 52,
+    color: '#111', borderColor: '#333', category: 'passive',
+    description: 'N-channel MOSFET (TO-92) · Gate / Drain / Source',
+    pins: [
+      { id: 'gate',   label: 'Gate (G)',   type: 'digital', rx: 0,   ry: 0.40, direction: 'in'   },
+      { id: 'drain',  label: 'Drain (D)',  type: 'generic', rx: 0.5, ry: 0,    direction: 'inout'},
+      { id: 'source', label: 'Source (S)', type: 'gnd',     rx: 0.5, ry: 1,    direction: 'out'  },
+    ],
+  },
+  diode: {
+    type: 'diode', label: 'Diode', w: 44, h: 22,
+    color: '#1a1a1a', borderColor: '#333', category: 'passive',
+    description: 'Rectifier diode 1N4007 · Anode → Cathode',
+    pins: [
+      { id: 'anode',   label: 'Anode (+)',   type: 'power',   rx: 0, ry: 0.5, direction: 'in'  },
+      { id: 'cathode', label: 'Cathode (−)', type: 'generic', rx: 1, ry: 0.5, direction: 'out' },
+    ],
+  },
+  breadboard: {
+    type: 'breadboard', label: 'Breadboard', w: 180, h: 130,
+    color: '#f0edd8', borderColor: '#c8c0a0', category: 'passive',
+    description: 'Half-size solderless breadboard · 100 tie-points',
+    pins: [
+      // Columns a-e = left side, f-j = right side
+      // Rows 1-5 = top half, 6-10 = bottom half
+      // rx/ry match the actual hole positions in BreadboardBody SVG
+      { id: 'a1',  label: 'a1',  type: 'generic', rx: 0.06,  ry: 0.09,   direction: 'inout' },
+      { id: 'b1',  label: 'b1',  type: 'generic', rx: 0.143, ry: 0.09,   direction: 'inout' },
+      { id: 'c1',  label: 'c1',  type: 'generic', rx: 0.226, ry: 0.09,   direction: 'inout' },
+      { id: 'd1',  label: 'd1',  type: 'generic', rx: 0.309, ry: 0.09,   direction: 'inout' },
+      { id: 'e1',  label: 'e1',  type: 'generic', rx: 0.392, ry: 0.09,   direction: 'inout' },
+      { id: 'f1',  label: 'f1',  type: 'generic', rx: 0.52,  ry: 0.09,   direction: 'inout' },
+      { id: 'g1',  label: 'g1',  type: 'generic', rx: 0.603, ry: 0.09,   direction: 'inout' },
+      { id: 'h1',  label: 'h1',  type: 'generic', rx: 0.686, ry: 0.09,   direction: 'inout' },
+      { id: 'i1',  label: 'i1',  type: 'generic', rx: 0.769, ry: 0.09,   direction: 'inout' },
+      { id: 'j1',  label: 'j1',  type: 'generic', rx: 0.852, ry: 0.09,   direction: 'inout' },
+      { id: 'a2',  label: 'a2',  type: 'generic', rx: 0.06,  ry: 0.1812, direction: 'inout' },
+      { id: 'b2',  label: 'b2',  type: 'generic', rx: 0.143, ry: 0.1812, direction: 'inout' },
+      { id: 'c2',  label: 'c2',  type: 'generic', rx: 0.226, ry: 0.1812, direction: 'inout' },
+      { id: 'd2',  label: 'd2',  type: 'generic', rx: 0.309, ry: 0.1812, direction: 'inout' },
+      { id: 'e2',  label: 'e2',  type: 'generic', rx: 0.392, ry: 0.1812, direction: 'inout' },
+      { id: 'f2',  label: 'f2',  type: 'generic', rx: 0.52,  ry: 0.1812, direction: 'inout' },
+      { id: 'g2',  label: 'g2',  type: 'generic', rx: 0.603, ry: 0.1812, direction: 'inout' },
+      { id: 'h2',  label: 'h2',  type: 'generic', rx: 0.686, ry: 0.1812, direction: 'inout' },
+      { id: 'i2',  label: 'i2',  type: 'generic', rx: 0.769, ry: 0.1812, direction: 'inout' },
+      { id: 'j2',  label: 'j2',  type: 'generic', rx: 0.852, ry: 0.1812, direction: 'inout' },
+      { id: 'a3',  label: 'a3',  type: 'generic', rx: 0.06,  ry: 0.2725, direction: 'inout' },
+      { id: 'b3',  label: 'b3',  type: 'generic', rx: 0.143, ry: 0.2725, direction: 'inout' },
+      { id: 'c3',  label: 'c3',  type: 'generic', rx: 0.226, ry: 0.2725, direction: 'inout' },
+      { id: 'd3',  label: 'd3',  type: 'generic', rx: 0.309, ry: 0.2725, direction: 'inout' },
+      { id: 'e3',  label: 'e3',  type: 'generic', rx: 0.392, ry: 0.2725, direction: 'inout' },
+      { id: 'f3',  label: 'f3',  type: 'generic', rx: 0.52,  ry: 0.2725, direction: 'inout' },
+      { id: 'g3',  label: 'g3',  type: 'generic', rx: 0.603, ry: 0.2725, direction: 'inout' },
+      { id: 'h3',  label: 'h3',  type: 'generic', rx: 0.686, ry: 0.2725, direction: 'inout' },
+      { id: 'i3',  label: 'i3',  type: 'generic', rx: 0.769, ry: 0.2725, direction: 'inout' },
+      { id: 'j3',  label: 'j3',  type: 'generic', rx: 0.852, ry: 0.2725, direction: 'inout' },
+      { id: 'a4',  label: 'a4',  type: 'generic', rx: 0.06,  ry: 0.3638, direction: 'inout' },
+      { id: 'b4',  label: 'b4',  type: 'generic', rx: 0.143, ry: 0.3638, direction: 'inout' },
+      { id: 'c4',  label: 'c4',  type: 'generic', rx: 0.226, ry: 0.3638, direction: 'inout' },
+      { id: 'd4',  label: 'd4',  type: 'generic', rx: 0.309, ry: 0.3638, direction: 'inout' },
+      { id: 'e4',  label: 'e4',  type: 'generic', rx: 0.392, ry: 0.3638, direction: 'inout' },
+      { id: 'f4',  label: 'f4',  type: 'generic', rx: 0.52,  ry: 0.3638, direction: 'inout' },
+      { id: 'g4',  label: 'g4',  type: 'generic', rx: 0.603, ry: 0.3638, direction: 'inout' },
+      { id: 'h4',  label: 'h4',  type: 'generic', rx: 0.686, ry: 0.3638, direction: 'inout' },
+      { id: 'i4',  label: 'i4',  type: 'generic', rx: 0.769, ry: 0.3638, direction: 'inout' },
+      { id: 'j4',  label: 'j4',  type: 'generic', rx: 0.852, ry: 0.3638, direction: 'inout' },
+      { id: 'a5',  label: 'a5',  type: 'generic', rx: 0.06,  ry: 0.455,  direction: 'inout' },
+      { id: 'b5',  label: 'b5',  type: 'generic', rx: 0.143, ry: 0.455,  direction: 'inout' },
+      { id: 'c5',  label: 'c5',  type: 'generic', rx: 0.226, ry: 0.455,  direction: 'inout' },
+      { id: 'd5',  label: 'd5',  type: 'generic', rx: 0.309, ry: 0.455,  direction: 'inout' },
+      { id: 'e5',  label: 'e5',  type: 'generic', rx: 0.392, ry: 0.455,  direction: 'inout' },
+      { id: 'f5',  label: 'f5',  type: 'generic', rx: 0.52,  ry: 0.455,  direction: 'inout' },
+      { id: 'g5',  label: 'g5',  type: 'generic', rx: 0.603, ry: 0.455,  direction: 'inout' },
+      { id: 'h5',  label: 'h5',  type: 'generic', rx: 0.686, ry: 0.455,  direction: 'inout' },
+      { id: 'i5',  label: 'i5',  type: 'generic', rx: 0.769, ry: 0.455,  direction: 'inout' },
+      { id: 'j5',  label: 'j5',  type: 'generic', rx: 0.852, ry: 0.455,  direction: 'inout' },
+      { id: 'a6',  label: 'a6',  type: 'generic', rx: 0.06,  ry: 0.525,  direction: 'inout' },
+      { id: 'b6',  label: 'b6',  type: 'generic', rx: 0.143, ry: 0.525,  direction: 'inout' },
+      { id: 'c6',  label: 'c6',  type: 'generic', rx: 0.226, ry: 0.525,  direction: 'inout' },
+      { id: 'd6',  label: 'd6',  type: 'generic', rx: 0.309, ry: 0.525,  direction: 'inout' },
+      { id: 'e6',  label: 'e6',  type: 'generic', rx: 0.392, ry: 0.525,  direction: 'inout' },
+      { id: 'f6',  label: 'f6',  type: 'generic', rx: 0.52,  ry: 0.525,  direction: 'inout' },
+      { id: 'g6',  label: 'g6',  type: 'generic', rx: 0.603, ry: 0.525,  direction: 'inout' },
+      { id: 'h6',  label: 'h6',  type: 'generic', rx: 0.686, ry: 0.525,  direction: 'inout' },
+      { id: 'i6',  label: 'i6',  type: 'generic', rx: 0.769, ry: 0.525,  direction: 'inout' },
+      { id: 'j6',  label: 'j6',  type: 'generic', rx: 0.852, ry: 0.525,  direction: 'inout' },
+      { id: 'a7',  label: 'a7',  type: 'generic', rx: 0.06,  ry: 0.6162, direction: 'inout' },
+      { id: 'b7',  label: 'b7',  type: 'generic', rx: 0.143, ry: 0.6162, direction: 'inout' },
+      { id: 'c7',  label: 'c7',  type: 'generic', rx: 0.226, ry: 0.6162, direction: 'inout' },
+      { id: 'd7',  label: 'd7',  type: 'generic', rx: 0.309, ry: 0.6162, direction: 'inout' },
+      { id: 'e7',  label: 'e7',  type: 'generic', rx: 0.392, ry: 0.6162, direction: 'inout' },
+      { id: 'f7',  label: 'f7',  type: 'generic', rx: 0.52,  ry: 0.6162, direction: 'inout' },
+      { id: 'g7',  label: 'g7',  type: 'generic', rx: 0.603, ry: 0.6162, direction: 'inout' },
+      { id: 'h7',  label: 'h7',  type: 'generic', rx: 0.686, ry: 0.6162, direction: 'inout' },
+      { id: 'i7',  label: 'i7',  type: 'generic', rx: 0.769, ry: 0.6162, direction: 'inout' },
+      { id: 'j7',  label: 'j7',  type: 'generic', rx: 0.852, ry: 0.6162, direction: 'inout' },
+      { id: 'a8',  label: 'a8',  type: 'generic', rx: 0.06,  ry: 0.7075, direction: 'inout' },
+      { id: 'b8',  label: 'b8',  type: 'generic', rx: 0.143, ry: 0.7075, direction: 'inout' },
+      { id: 'c8',  label: 'c8',  type: 'generic', rx: 0.226, ry: 0.7075, direction: 'inout' },
+      { id: 'd8',  label: 'd8',  type: 'generic', rx: 0.309, ry: 0.7075, direction: 'inout' },
+      { id: 'e8',  label: 'e8',  type: 'generic', rx: 0.392, ry: 0.7075, direction: 'inout' },
+      { id: 'f8',  label: 'f8',  type: 'generic', rx: 0.52,  ry: 0.7075, direction: 'inout' },
+      { id: 'g8',  label: 'g8',  type: 'generic', rx: 0.603, ry: 0.7075, direction: 'inout' },
+      { id: 'h8',  label: 'h8',  type: 'generic', rx: 0.686, ry: 0.7075, direction: 'inout' },
+      { id: 'i8',  label: 'i8',  type: 'generic', rx: 0.769, ry: 0.7075, direction: 'inout' },
+      { id: 'j8',  label: 'j8',  type: 'generic', rx: 0.852, ry: 0.7075, direction: 'inout' },
+      { id: 'a9',  label: 'a9',  type: 'generic', rx: 0.06,  ry: 0.7988, direction: 'inout' },
+      { id: 'b9',  label: 'b9',  type: 'generic', rx: 0.143, ry: 0.7988, direction: 'inout' },
+      { id: 'c9',  label: 'c9',  type: 'generic', rx: 0.226, ry: 0.7988, direction: 'inout' },
+      { id: 'd9',  label: 'd9',  type: 'generic', rx: 0.309, ry: 0.7988, direction: 'inout' },
+      { id: 'e9',  label: 'e9',  type: 'generic', rx: 0.392, ry: 0.7988, direction: 'inout' },
+      { id: 'f9',  label: 'f9',  type: 'generic', rx: 0.52,  ry: 0.7988, direction: 'inout' },
+      { id: 'g9',  label: 'g9',  type: 'generic', rx: 0.603, ry: 0.7988, direction: 'inout' },
+      { id: 'h9',  label: 'h9',  type: 'generic', rx: 0.686, ry: 0.7988, direction: 'inout' },
+      { id: 'i9',  label: 'i9',  type: 'generic', rx: 0.769, ry: 0.7988, direction: 'inout' },
+      { id: 'j9',  label: 'j9',  type: 'generic', rx: 0.852, ry: 0.7988, direction: 'inout' },
+      { id: 'a10', label: 'a10', type: 'generic', rx: 0.06,  ry: 0.89,   direction: 'inout' },
+      { id: 'b10', label: 'b10', type: 'generic', rx: 0.143, ry: 0.89,   direction: 'inout' },
+      { id: 'c10', label: 'c10', type: 'generic', rx: 0.226, ry: 0.89,   direction: 'inout' },
+      { id: 'd10', label: 'd10', type: 'generic', rx: 0.309, ry: 0.89,   direction: 'inout' },
+      { id: 'e10', label: 'e10', type: 'generic', rx: 0.392, ry: 0.89,   direction: 'inout' },
+      { id: 'f10', label: 'f10', type: 'generic', rx: 0.52,  ry: 0.89,   direction: 'inout' },
+      { id: 'g10', label: 'g10', type: 'generic', rx: 0.603, ry: 0.89,   direction: 'inout' },
+      { id: 'h10', label: 'h10', type: 'generic', rx: 0.686, ry: 0.89,   direction: 'inout' },
+      { id: 'i10', label: 'i10', type: 'generic', rx: 0.769, ry: 0.89,   direction: 'inout' },
+      { id: 'j10', label: 'j10', type: 'generic', rx: 0.852, ry: 0.89,   direction: 'inout' },
+    ],
+  },
+  header_8: {
+    type: 'header_8', label: '8-Pin Header', w: 18, h: 104,
+    color: '#111', borderColor: '#333', category: 'passive',
+    description: 'Male 2.54mm pin header · 8 pins · breadboard compatible',
+    pins: [
+      { id: 'p1', label: 'Pin 1', type: 'generic', rx: 0.5, ry: 0.06,  direction: 'inout' },
+      { id: 'p2', label: 'Pin 2', type: 'generic', rx: 0.5, ry: 0.185, direction: 'inout' },
+      { id: 'p3', label: 'Pin 3', type: 'generic', rx: 0.5, ry: 0.31,  direction: 'inout' },
+      { id: 'p4', label: 'Pin 4', type: 'generic', rx: 0.5, ry: 0.435, direction: 'inout' },
+      { id: 'p5', label: 'Pin 5', type: 'generic', rx: 0.5, ry: 0.56,  direction: 'inout' },
+      { id: 'p6', label: 'Pin 6', type: 'generic', rx: 0.5, ry: 0.685, direction: 'inout' },
+      { id: 'p7', label: 'Pin 7', type: 'generic', rx: 0.5, ry: 0.81,  direction: 'inout' },
+      { id: 'p8', label: 'Pin 8', type: 'generic', rx: 0.5, ry: 0.935, direction: 'inout' },
+    ],
+  },
+
+  // ── Full-size breadboard 830 with power rails ─────────────────────────────
+  // Layout: 20 columns (1-20), rows a-j (a-e left of gap, f-j right)
+  // + 4 power rails: pvcc_t (top VCC), pgnd_t (top GND),
+  //                  pgnd_b (bot GND), pvcc_b (bot VCC)
+  // All pvcc_* form one VCC bus; all pgnd_* form one GND bus.
+  breadboard_830: (() => {
+    const COLS = 20
+    const colRx = Array.from({ length: COLS }, (_, i) => 0.04 + i * (0.92 / 19))
+    const compRows: [string, number, 'inout'][] = [
+      ['a', 0.18, 'inout'], ['b', 0.25, 'inout'], ['c', 0.32, 'inout'],
+      ['d', 0.39, 'inout'], ['e', 0.46, 'inout'],
+      ['f', 0.54, 'inout'], ['g', 0.61, 'inout'], ['h', 0.68, 'inout'],
+      ['i', 0.75, 'inout'], ['j', 0.82, 'inout'],
+    ]
+    const pins: CircuitPin[] = []
+    // Top power rails
+    for (let i = 0; i < COLS; i++) {
+      pins.push({ id: `pvcc_t${i + 1}`, label: '+5V', type: 'power', rx: colRx[i], ry: 0.04, direction: 'inout' })
+      pins.push({ id: `pgnd_t${i + 1}`, label: 'GND', type: 'gnd',   rx: colRx[i], ry: 0.09, direction: 'inout' })
+    }
+    // Component holes
+    for (const [letter, ry] of compRows) {
+      for (let i = 0; i < COLS; i++) {
+        pins.push({ id: `${letter}${i + 1}`, label: `${letter}${i + 1}`, type: 'generic', rx: colRx[i], ry, direction: 'inout' })
+      }
+    }
+    // Bottom power rails
+    for (let i = 0; i < COLS; i++) {
+      pins.push({ id: `pgnd_b${i + 1}`, label: 'GND', type: 'gnd',   rx: colRx[i], ry: 0.91, direction: 'inout' })
+      pins.push({ id: `pvcc_b${i + 1}`, label: '+5V', type: 'power', rx: colRx[i], ry: 0.96, direction: 'inout' })
+    }
+    return {
+      type: 'breadboard_830', label: 'Breadboard 830pt', w: 390, h: 240,
+      color: '#f0edd8', borderColor: '#c8c0a0', category: 'passive' as const,
+      description: 'Full-size 830 tie-point breadboard · 20 columns · 4 power rails (VCC + GND)',
+      pins,
+    }
+  })(),
 
   // ── Sensors ───────────────────────────────────────────────────────────────
   dht11: {
@@ -297,13 +536,12 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     color: '#1a5fb4', borderColor: '#0d3d80', category: 'sensor',
     description: 'Digital temp & humidity sensor · ±2°C · ±5%RH',
     pins: [
-      { id: 'vcc',  label: 'VCC (3.3–5V)', type: 'power',  rx: 0, ry: 0.3, direction: 'in'  },
-      { id: 'data', label: 'Data',         type: 'digital',rx: 0, ry: 0.6, direction: 'out' },
-      { id: 'nc',   label: 'NC',           type: 'generic',rx: 1, ry: 0.4, direction: 'in'  },
-      { id: 'gnd',  label: 'GND',          type: 'gnd',    rx: 1, ry: 0.7, direction: 'in'  },
+      { id: 'vcc',  label: 'VCC (3.3–5V)', type: 'power',   rx: 0, ry: 0.3, direction: 'in'  },
+      { id: 'data', label: 'Data',          type: 'digital', rx: 0, ry: 0.6, direction: 'out' },
+      { id: 'nc',   label: 'NC',            type: 'generic', rx: 1, ry: 0.4, direction: 'in'  },
+      { id: 'gnd',  label: 'GND',           type: 'gnd',     rx: 1, ry: 0.7, direction: 'in'  },
     ],
   },
-
   ldr: {
     type: 'ldr', label: 'LDR', w: 34, h: 34,
     color: '#c48a00', borderColor: '#8a6000', category: 'sensor',
@@ -313,27 +551,76 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'pin2', label: 'Pin 2', type: 'analog', rx: 1,   ry: 0.5, direction: 'inout' },
     ],
   },
-
   ultrasonic: {
     type: 'ultrasonic', label: 'HC-SR04', w: 72, h: 42,
     color: '#1a4a2a', borderColor: '#0d3018', category: 'sensor',
     description: 'Ultrasonic distance sensor · 2–400cm · ±3mm',
     pins: [
-      { id: 'vcc',  label: 'VCC 5V',   type: 'power',   rx: 0.1, ry: 0, direction: 'in'  },
-      { id: 'trig', label: 'TRIG',     type: 'digital', rx: 0.37,ry: 0, direction: 'in'  },
-      { id: 'echo', label: 'ECHO',     type: 'digital', rx: 0.63,ry: 0, direction: 'out' },
-      { id: 'gnd',  label: 'GND',      type: 'gnd',     rx: 0.9, ry: 0, direction: 'in'  },
+      { id: 'vcc',  label: 'VCC 5V', type: 'power',   rx: 0.1,  ry: 0, direction: 'in'  },
+      { id: 'trig', label: 'TRIG',   type: 'digital', rx: 0.37, ry: 0, direction: 'in'  },
+      { id: 'echo', label: 'ECHO',   type: 'digital', rx: 0.63, ry: 0, direction: 'out' },
+      { id: 'gnd',  label: 'GND',    type: 'gnd',     rx: 0.9,  ry: 0, direction: 'in'  },
     ],
   },
-
   ir_sensor: {
     type: 'ir_sensor', label: 'IR Sensor', w: 50, h: 36,
     color: '#1a1a1a', borderColor: '#333', category: 'sensor',
     description: 'Infrared obstacle sensor · digital output · 2–30cm',
     pins: [
-      { id: 'vcc', label: 'VCC',    type: 'power',  rx: 0, ry: 0.2, direction: 'in'  },
-      { id: 'gnd', label: 'GND',    type: 'gnd',    rx: 0, ry: 0.8, direction: 'in'  },
-      { id: 'out', label: 'Output', type: 'digital',rx: 1, ry: 0.5, direction: 'out' },
+      { id: 'vcc', label: 'VCC',    type: 'power',   rx: 0, ry: 0.2, direction: 'in'  },
+      { id: 'gnd', label: 'GND',    type: 'gnd',     rx: 0, ry: 0.8, direction: 'in'  },
+      { id: 'out', label: 'Output', type: 'digital', rx: 1, ry: 0.5, direction: 'out' },
+    ],
+  },
+  thermistor: {
+    type: 'thermistor', label: 'Thermistor NTC', w: 36, h: 36,
+    color: '#4a2a2a', borderColor: '#6a3a3a', category: 'sensor',
+    description: 'NTC thermistor 10kΩ · resistance decreases with temperature',
+    pins: [
+      { id: 'pin1', label: 'Pin 1', type: 'analog', rx: 0, ry: 0.5, direction: 'inout' },
+      { id: 'pin2', label: 'Pin 2', type: 'analog', rx: 1, ry: 0.5, direction: 'inout' },
+    ],
+  },
+
+  // ── Actuators ─────────────────────────────────────────────────────────────
+  relay: {
+    type: 'relay', label: 'Relay 5V', w: 60, h: 44,
+    color: '#1a2a1a', borderColor: '#0d1a0d', category: 'actuator',
+    description: '5V single-channel relay · NO/NC · up to 10A 250V AC',
+    pins: [
+      { id: 'vcc', label: 'VCC 5V', type: 'power',   rx: 0, ry: 0.18, direction: 'in'   },
+      { id: 'gnd', label: 'GND',    type: 'gnd',     rx: 0, ry: 0.50, direction: 'in'   },
+      { id: 'in',  label: 'IN',     type: 'digital', rx: 0, ry: 0.82, direction: 'in'   },
+      { id: 'com', label: 'COM',    type: 'generic', rx: 1, ry: 0.25, direction: 'inout'},
+      { id: 'no',  label: 'NO',     type: 'generic', rx: 1, ry: 0.55, direction: 'out'  },
+      { id: 'nc',  label: 'NC',     type: 'generic', rx: 1, ry: 0.82, direction: 'out'  },
+    ],
+  },
+  l298n: {
+    type: 'l298n', label: 'L298N Driver', w: 72, h: 66,
+    color: '#1c1c1c', borderColor: '#2a2a2a', category: 'actuator',
+    description: 'L298N dual H-bridge motor driver · 2A per channel · 5–35V',
+    pins: [
+      { id: 'ena',   label: 'ENA',    type: 'pwm',     rx: 0, ry: 0.10, direction: 'in'  },
+      { id: 'in1',   label: 'IN1',    type: 'digital', rx: 0, ry: 0.26, direction: 'in'  },
+      { id: 'in2',   label: 'IN2',    type: 'digital', rx: 0, ry: 0.40, direction: 'in'  },
+      { id: 'in3',   label: 'IN3',    type: 'digital', rx: 0, ry: 0.54, direction: 'in'  },
+      { id: 'in4',   label: 'IN4',    type: 'digital', rx: 0, ry: 0.68, direction: 'in'  },
+      { id: 'enb',   label: 'ENB',    type: 'pwm',     rx: 0, ry: 0.84, direction: 'in'  },
+      { id: 'vcc',   label: 'VCC',    type: 'power',   rx: 1, ry: 0.10, direction: 'in'  },
+      { id: 'gnd',   label: 'GND',    type: 'gnd',     rx: 1, ry: 0.28, direction: 'in'  },
+      { id: '5v',    label: '5V Out', type: 'power',   rx: 1, ry: 0.46, direction: 'out' },
+      { id: 'outa1', label: 'OUT1',   type: 'generic', rx: 1, ry: 0.62, direction: 'out' },
+      { id: 'outa2', label: 'OUT2',   type: 'generic', rx: 1, ry: 0.76, direction: 'out' },
+    ],
+  },
+  dc_motor: {
+    type: 'dc_motor', label: 'DC Motor', w: 54, h: 54,
+    color: '#2a2a2a', borderColor: '#444', category: 'actuator',
+    description: 'Generic DC motor · 3–12V · use with L298N or MOSFET',
+    pins: [
+      { id: 'pos', label: 'Motor (+)', type: 'power', rx: 0.28, ry: 0, direction: 'in' },
+      { id: 'neg', label: 'Motor (−)', type: 'gnd',   rx: 0.72, ry: 0, direction: 'in' },
     ],
   },
 
@@ -343,21 +630,20 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     color: '#0a3d0a', borderColor: '#063006', category: 'display',
     description: 'HD44780 16×2 character LCD · parallel or I²C',
     pins: [
-      { id: 'vss',  label: 'VSS GND',    type: 'gnd',    rx: 0.04, ry: 1, direction: 'in' },
-      { id: 'vdd',  label: 'VDD 5V',     type: 'power',  rx: 0.11, ry: 1, direction: 'in' },
-      { id: 'vo',   label: 'V0 Contrast',type: 'analog', rx: 0.18, ry: 1, direction: 'in' },
-      { id: 'rs',   label: 'RS',         type: 'digital',rx: 0.25, ry: 1, direction: 'in' },
-      { id: 'rw',   label: 'R/W',        type: 'digital',rx: 0.32, ry: 1, direction: 'in' },
-      { id: 'en',   label: 'Enable',     type: 'digital',rx: 0.39, ry: 1, direction: 'in' },
-      { id: 'd4',   label: 'D4',         type: 'digital',rx: 0.54, ry: 1, direction: 'in' },
-      { id: 'd5',   label: 'D5',         type: 'digital',rx: 0.61, ry: 1, direction: 'in' },
-      { id: 'd6',   label: 'D6',         type: 'digital',rx: 0.68, ry: 1, direction: 'in' },
-      { id: 'd7',   label: 'D7',         type: 'digital',rx: 0.75, ry: 1, direction: 'in' },
-      { id: 'a',    label: 'Anode (BL)', type: 'power',  rx: 0.88, ry: 1, direction: 'in' },
-      { id: 'k',    label: 'Cathode(BL)',type: 'gnd',    rx: 0.96, ry: 1, direction: 'in' },
+      { id: 'vss', label: 'VSS GND',     type: 'gnd',     rx: 0.04, ry: 1, direction: 'in' },
+      { id: 'vdd', label: 'VDD 5V',      type: 'power',   rx: 0.11, ry: 1, direction: 'in' },
+      { id: 'vo',  label: 'V0 Contrast', type: 'analog',  rx: 0.18, ry: 1, direction: 'in' },
+      { id: 'rs',  label: 'RS',          type: 'digital', rx: 0.25, ry: 1, direction: 'in' },
+      { id: 'rw',  label: 'R/W',         type: 'digital', rx: 0.32, ry: 1, direction: 'in' },
+      { id: 'en',  label: 'Enable',      type: 'digital', rx: 0.39, ry: 1, direction: 'in' },
+      { id: 'd4',  label: 'D4',          type: 'digital', rx: 0.54, ry: 1, direction: 'in' },
+      { id: 'd5',  label: 'D5',          type: 'digital', rx: 0.61, ry: 1, direction: 'in' },
+      { id: 'd6',  label: 'D6',          type: 'digital', rx: 0.68, ry: 1, direction: 'in' },
+      { id: 'd7',  label: 'D7',          type: 'digital', rx: 0.75, ry: 1, direction: 'in' },
+      { id: 'a',   label: 'Anode (BL)',  type: 'power',   rx: 0.88, ry: 1, direction: 'in' },
+      { id: 'k',   label: 'Cathode(BL)', type: 'gnd',     rx: 0.96, ry: 1, direction: 'in' },
     ],
   },
-
   seven_seg: {
     type: 'seven_seg', label: '7-Segment', w: 54, h: 76,
     color: '#1a1a1a', borderColor: '#333', category: 'display',
@@ -375,69 +661,17 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
       { id: 'cc2', label: 'Cathode 2', type: 'gnd',     rx: 1, ry: 0.75, direction: 'in' },
     ],
   },
-
-  // ── Power ─────────────────────────────────────────────────────────────────
-  vcc_node: {
-    type: 'vcc_node', label: 'VCC', w: 28, h: 28,
-    color: '#7f1d1d', borderColor: '#450a0a', category: 'power',
-    description: 'Power supply node · 5V',
-    pins: [
-      { id: '5v', label: '5V', type: 'power', rx: 0.5, ry: 1, direction: 'out' },
-    ],
-  },
-
-  gnd_node: {
-    type: 'gnd_node', label: 'GND', w: 28, h: 28,
-    color: '#1c1c1c', borderColor: '#333', category: 'power',
-    description: 'Ground reference node',
-    pins: [
-      { id: 'gnd', label: 'GND', type: 'gnd', rx: 0.5, ry: 0, direction: 'in' },
-    ],
-  },
-
-  power_rail: {
-    type: 'power_rail', label: 'Power Rail', w: 24, h: 90,
-    color: '#111', borderColor: '#2a2a2a', category: 'power',
-    description: 'Dual power rail — 5V + GND bus',
-    pins: [
-      { id: '5v_1',  label: '5V rail 1', type: 'power', rx: 0.5, ry: 0.08, direction: 'inout' },
-      { id: '5v_2',  label: '5V rail 2', type: 'power', rx: 0.5, ry: 0.22, direction: 'inout' },
-      { id: '5v_3',  label: '5V rail 3', type: 'power', rx: 0.5, ry: 0.36, direction: 'inout' },
-      { id: 'gnd_1', label: 'GND rail 1',type: 'gnd',   rx: 0.5, ry: 0.64, direction: 'inout' },
-      { id: 'gnd_2', label: 'GND rail 2',type: 'gnd',   rx: 0.5, ry: 0.78, direction: 'inout' },
-      { id: 'gnd_3', label: 'GND rail 3',type: 'gnd',   rx: 0.5, ry: 0.92, direction: 'inout' },
-    ],
-  },
-
-  // ── NEW: Relay ────────────────────────────────────────────────────────────
-  relay: {
-    type: 'relay', label: 'Relay 5V', w: 60, h: 44,
-    color: '#1a2a1a', borderColor: '#0d1a0d', category: 'actuator',
-    description: '5V single-channel relay · NO/NC · up to 10A 250V AC',
-    pins: [
-      { id: 'vcc',  label: 'VCC 5V',  type: 'power',   rx: 0,   ry: 0.18, direction: 'in'  },
-      { id: 'gnd',  label: 'GND',     type: 'gnd',     rx: 0,   ry: 0.50, direction: 'in'  },
-      { id: 'in',   label: 'IN',      type: 'digital', rx: 0,   ry: 0.82, direction: 'in'  },
-      { id: 'com',  label: 'COM',     type: 'generic', rx: 1,   ry: 0.25, direction: 'inout'},
-      { id: 'no',   label: 'NO',      type: 'generic', rx: 1,   ry: 0.55, direction: 'out' },
-      { id: 'nc',   label: 'NC',      type: 'generic', rx: 1,   ry: 0.82, direction: 'out' },
-    ],
-  },
-
-  // ── NEW: OLED 128×64 ──────────────────────────────────────────────────────
   oled_128x64: {
     type: 'oled_128x64', label: 'OLED 128×64', w: 72, h: 54,
     color: '#0a0a0a', borderColor: '#222', category: 'display',
     description: 'SSD1306 0.96" OLED · 128×64 · I²C · 3.3V–5V',
     pins: [
-      { id: 'gnd',  label: 'GND',  type: 'gnd',   rx: 0.10, ry: 1, direction: 'in'    },
-      { id: 'vcc',  label: 'VCC',  type: 'power', rx: 0.30, ry: 1, direction: 'in'    },
-      { id: 'scl',  label: 'SCL',  type: 'i2c',   rx: 0.58, ry: 1, direction: 'in'    },
-      { id: 'sda',  label: 'SDA',  type: 'i2c',   rx: 0.80, ry: 1, direction: 'inout' },
+      { id: 'gnd', label: 'GND', type: 'gnd',   rx: 0.10, ry: 1, direction: 'in'    },
+      { id: 'vcc', label: 'VCC', type: 'power', rx: 0.30, ry: 1, direction: 'in'    },
+      { id: 'scl', label: 'SCL', type: 'i2c',   rx: 0.58, ry: 1, direction: 'in'    },
+      { id: 'sda', label: 'SDA', type: 'i2c',   rx: 0.80, ry: 1, direction: 'inout' },
     ],
   },
-
-  // ── NEW: NeoPixel Ring ────────────────────────────────────────────────────
   neopixel_ring: {
     type: 'neopixel_ring', label: 'NeoPixel Ring', w: 60, h: 60,
     color: '#111', borderColor: '#333', category: 'output',
@@ -450,63 +684,43 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     ],
   },
 
-  // ── NEW: N-Channel MOSFET ─────────────────────────────────────────────────
-  mosfet_n: {
-    type: 'mosfet_n', label: 'MOSFET N', w: 30, h: 52,
-    color: '#111', borderColor: '#333', category: 'passive',
-    description: 'N-channel MOSFET (TO-92) · Gate / Drain / Source',
+  // ── Power ─────────────────────────────────────────────────────────────────
+  vcc_node: {
+    type: 'vcc_node', label: 'VCC', w: 28, h: 28,
+    color: '#7f1d1d', borderColor: '#450a0a', category: 'power',
+    description: 'Power supply node · 5V',
     pins: [
-      { id: 'gate',   label: 'Gate (G)',   type: 'digital', rx: 0,   ry: 0.40, direction: 'in'  },
-      { id: 'drain',  label: 'Drain (D)',  type: 'generic', rx: 0.5, ry: 0,    direction: 'inout'},
-      { id: 'source', label: 'Source (S)', type: 'gnd',     rx: 0.5, ry: 1,    direction: 'out' },
+      { id: '5v', label: '5V', type: 'power', rx: 0.5, ry: 1, direction: 'out' },
     ],
   },
-
-  // ── NEW: Diode ────────────────────────────────────────────────────────────
-  diode: {
-    type: 'diode', label: 'Diode', w: 44, h: 22,
-    color: '#1a1a1a', borderColor: '#333', category: 'passive',
-    description: 'Rectifier diode 1N4007 · Anode → Cathode',
+  gnd_node: {
+    type: 'gnd_node', label: 'GND', w: 28, h: 28,
+    color: '#1c1c1c', borderColor: '#333', category: 'power',
+    description: 'Ground reference node',
     pins: [
-      { id: 'anode',   label: 'Anode (+)',   type: 'power',   rx: 0, ry: 0.5, direction: 'in'  },
-      { id: 'cathode', label: 'Cathode (−)', type: 'generic', rx: 1, ry: 0.5, direction: 'out' },
+      { id: 'gnd', label: 'GND', type: 'gnd', rx: 0.5, ry: 0, direction: 'in' },
     ],
   },
-
-  // ── NEW: L298N Motor Driver ───────────────────────────────────────────────
-  l298n: {
-    type: 'l298n', label: 'L298N Driver', w: 72, h: 66,
-    color: '#1c1c1c', borderColor: '#2a2a2a', category: 'actuator',
-    description: 'L298N dual H-bridge motor driver · 2A per channel · 5–35V',
+  power_rail: {
+    type: 'power_rail', label: 'Power Rail', w: 30, h: 120,
+    color: '#111', borderColor: '#2a2a2a', category: 'power',
+    description: 'Dual power rail — 5V + GND bus · 5 ports each',
     pins: [
-      { id: 'ena',  label: 'ENA',    type: 'pwm',     rx: 0,   ry: 0.10, direction: 'in'  },
-      { id: 'in1',  label: 'IN1',    type: 'digital', rx: 0,   ry: 0.26, direction: 'in'  },
-      { id: 'in2',  label: 'IN2',    type: 'digital', rx: 0,   ry: 0.40, direction: 'in'  },
-      { id: 'in3',  label: 'IN3',    type: 'digital', rx: 0,   ry: 0.54, direction: 'in'  },
-      { id: 'in4',  label: 'IN4',    type: 'digital', rx: 0,   ry: 0.68, direction: 'in'  },
-      { id: 'enb',  label: 'ENB',    type: 'pwm',     rx: 0,   ry: 0.84, direction: 'in'  },
-      { id: 'vcc',  label: 'VCC',    type: 'power',   rx: 1,   ry: 0.10, direction: 'in'  },
-      { id: 'gnd',  label: 'GND',    type: 'gnd',     rx: 1,   ry: 0.28, direction: 'in'  },
-      { id: '5v',   label: '5V Out', type: 'power',   rx: 1,   ry: 0.46, direction: 'out' },
-      { id: 'outa1',label: 'OUT1',   type: 'generic', rx: 1,   ry: 0.62, direction: 'out' },
-      { id: 'outa2',label: 'OUT2',   type: 'generic', rx: 1,   ry: 0.76, direction: 'out' },
+      { id: '5v_1',  label: '5V rail 1',  type: 'power', rx: 0.5, ry: 0.05, direction: 'inout' },
+      { id: '5v_2',  label: '5V rail 2',  type: 'power', rx: 0.5, ry: 0.13, direction: 'inout' },
+      { id: '5v_3',  label: '5V rail 3',  type: 'power', rx: 0.5, ry: 0.21, direction: 'inout' },
+      { id: '5v_4',  label: '5V rail 4',  type: 'power', rx: 0.5, ry: 0.29, direction: 'inout' },
+      { id: '5v_5',  label: '5V rail 5',  type: 'power', rx: 0.5, ry: 0.37, direction: 'inout' },
+      { id: 'gnd_1', label: 'GND rail 1', type: 'gnd',   rx: 0.5, ry: 0.56, direction: 'inout' },
+      { id: 'gnd_2', label: 'GND rail 2', type: 'gnd',   rx: 0.5, ry: 0.64, direction: 'inout' },
+      { id: 'gnd_3', label: 'GND rail 3', type: 'gnd',   rx: 0.5, ry: 0.72, direction: 'inout' },
+      { id: 'gnd_4', label: 'GND rail 4', type: 'gnd',   rx: 0.5, ry: 0.80, direction: 'inout' },
+      { id: 'gnd_5', label: 'GND rail 5', type: 'gnd',   rx: 0.5, ry: 0.88, direction: 'inout' },
     ],
   },
 }
 
-// ── Wire palette ──────────────────────────────────────────────────────────────
-
-export const WIRE_COLORS = [
-  { color: '#ef4444', label: 'Red (Power)'    },
-  { color: '#1c1c1c', label: 'Black (GND)'    },
-  { color: '#f97316', label: 'Orange'         },
-  { color: '#eab308', label: 'Yellow'         },
-  { color: '#22c55e', label: 'Green'          },
-  { color: '#3b82f6', label: 'Blue (Signal)'  },
-  { color: '#a855f7', label: 'Purple (Analog)'},
-  { color: '#ec4899', label: 'Pink'           },
-  { color: '#e2e2e2', label: 'White'          },
-]
+// ── Default circuit ────────────────────────────────────────────────────────────
 
 export const DEFAULT_CIRCUIT: TsukiCircuit = {
   version: '1',
@@ -518,41 +732,7 @@ export const DEFAULT_CIRCUIT: TsukiCircuit = {
   notes: [],
 }
 
-// ── Utility helpers ───────────────────────────────────────────────────────────
-
-export function getPinAbsPos(comp: PlacedComponent, pin: CircuitPin) {
-  const def = COMP_DEFS[comp.type]
-  if (!def) return { x: comp.x, y: comp.y }
-  return {
-    x: comp.x + pin.rx * def.w,
-    y: comp.y + pin.ry * def.h,
-  }
-}
-
-export function snapToGrid(v: number, grid = 10): number {
-  return Math.round(v / grid) * grid
-}
-
-export function makeBezierPath(ax: number, ay: number, bx: number, by: number): string {
-  const dx = bx - ax
-  const dy = by - ay
-  const dist = Math.sqrt(dx * dx + dy * dy)
-  const cp = Math.max(30, dist * 0.45)
-  // Horizontal-first routing
-  return `M ${ax} ${ay} C ${ax + cp} ${ay}, ${bx - cp} ${by}, ${bx} ${by}`
-}
-
-export function circuitToText(c: TsukiCircuit): string {
-  return JSON.stringify(c, null, 2)
-}
-
-export function textToCircuit(raw: string): TsukiCircuit | null {
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed.components || !parsed.wires) return null
-    return { ...DEFAULT_CIRCUIT, ...parsed }
-  } catch { return null }
-}
+// ── Category metadata ──────────────────────────────────────────────────────────
 
 export const CATEGORY_META: Record<string, { label: string; icon: string }> = {
   mcu:      { label: 'Microcontrollers', icon: '⬡' },
@@ -563,4 +743,112 @@ export const CATEGORY_META: Record<string, { label: string; icon: string }> = {
   sensor:   { label: 'Sensors',          icon: '◎' },
   display:  { label: 'Displays',         icon: '▤' },
   power:    { label: 'Power',            icon: '⚡' },
+}
+
+export const ALL_CATEGORIES = [
+  'mcu', 'output', 'input', 'passive', 'sensor', 'actuator', 'display', 'power',
+] as const
+
+// ── Utility helpers ────────────────────────────────────────────────────────────
+
+/** How many px to pull edge pins inside the component border */
+export const PIN_INSET = 8
+
+export function getPinAbsPos(comp: PlacedComponent, pin: CircuitPin) {
+  const def = COMP_DEFS[comp.type]
+  if (!def) return { x: comp.x, y: comp.y }
+  let x = comp.x + pin.rx * def.w
+  let y = comp.y + pin.ry * def.h
+  if (pin.rx === 0) x += PIN_INSET
+  if (pin.rx === 1) x -= PIN_INSET
+  if (pin.ry === 0) y += PIN_INSET
+  if (pin.ry === 1) y -= PIN_INSET
+  return { x, y }
+}
+
+/** Snap to grid — 10px default (used for component placement) */
+export function snapToGrid(v: number, grid = 10): number {
+  return Math.round(v / grid) * grid
+}
+
+/** Snap to grid — 20px default (used for wire routing) */
+export function snapGrid(v: number, grid = 20): number {
+  return Math.round(v / grid) * grid
+}
+
+/** Bezier path (legacy helper, kept for compatibility) */
+export function makeBezierPath(ax: number, ay: number, bx: number, by: number): string {
+  const dx = bx - ax
+  const dy = by - ay
+  const dist = Math.sqrt(dx * dx + dy * dy)
+  const cp = Math.max(30, dist * 0.45)
+  return `M ${ax} ${ay} C ${ax + cp} ${ay}, ${bx - cp} ${by}, ${bx} ${by}`
+}
+
+/**
+ * Orthogonal (right-angle) wire path — Tinkercad style.
+ * Routes: M start → [H x V y for each waypoint] → H bx V by → end
+ */
+export function makeOrthogonalPath(
+  ax: number, ay: number,
+  bx: number, by: number,
+  waypoints: { x: number; y: number }[] = []
+): string {
+  const pts = [{ x: ax, y: ay }, ...waypoints, { x: bx, y: by }]
+  let d = `M ${pts[0].x},${pts[0].y}`
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i - 1], p = pts[i]
+    if (Math.abs(p.x - prev.x) < 1) {
+      d += ` V ${p.y}`
+    } else if (Math.abs(p.y - prev.y) < 1) {
+      d += ` H ${p.x}`
+    } else {
+      d += ` H ${p.x} V ${p.y}`
+    }
+  }
+  return d
+}
+
+/** Compute estimated V / I / P for a wire given current sim state */
+export function getWireMeasurements(
+  wire: CircuitWire,
+  simPinValues: Record<string, number>,
+  circuit: TsukiCircuit,
+) {
+  const toKey   = `${wire.toComp}:${wire.toPin}`
+  const fromKey = `${wire.fromComp}:${wire.fromPin}`
+  const raw = Math.max(simPinValues[toKey] ?? 0, simPinValues[fromKey] ?? 0)
+  const mA  = Math.max(
+    simPinValues[`${toKey}:mA`]   ?? 0,
+    simPinValues[`${fromKey}:mA`] ?? 0,
+  )
+  const sourceV = raw === 0 ? 0 : raw === 1 ? 5.0 : (raw / 255) * 5.0
+  let totalOhms = 0
+  for (const w of circuit.wires) {
+    const fc = circuit.components.find(c => c.id === w.fromComp)
+    const tc = circuit.components.find(c => c.id === w.toComp)
+    if (!fc || !tc) continue
+    if (fc.type === 'resistor' || tc.type === 'resistor') {
+      const res = fc.type === 'resistor' ? fc : tc
+      totalOhms += Number(res.props?.ohms ?? 0)
+    }
+  }
+  const dropV    = totalOhms > 0 && mA > 0 ? (mA / 1000) * totalOhms : 0
+  const voltage  = Math.max(0, sourceV - dropV)
+  const power_mW = voltage * mA
+  return { voltage, mA, power_mW, sourceV, dropV }
+}
+
+/** Serialize a circuit to JSON text */
+export function circuitToText(c: TsukiCircuit): string {
+  return JSON.stringify(c, null, 2)
+}
+
+/** Parse JSON text back to a circuit (returns null on error) */
+export function textToCircuit(raw: string): TsukiCircuit | null {
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed.components || !parsed.wires) return null
+    return { ...DEFAULT_CIRCUIT, ...parsed }
+  } catch { return null }
 }

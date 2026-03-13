@@ -598,18 +598,255 @@ function SandboxTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Layout definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface LayoutPreset {
+  id: 'default' | 'focused' | 'wide-editor' | 'minimal' | 'custom'
+  name: string
+  desc: string
+  sidebarWidth: number
+  bottomPanelHeight: number
+  // visual sketch proportions (0-1, out of total width/height)
+  sketch: {
+    sidebar: number    // fraction of width
+    bottom:  number    // fraction of height
+  }
+}
+
+const LAYOUT_PRESETS: LayoutPreset[] = [
+  {
+    id: 'default',
+    name: 'Default',
+    desc: 'Sidebar + editor + bottom panel. The classic layout.',
+    sidebarWidth: 224,
+    bottomPanelHeight: 200,
+    sketch: { sidebar: 0.28, bottom: 0.30 },
+  },
+  {
+    id: 'focused',
+    name: 'Focused',
+    desc: 'No sidebar. Editor takes full width. Bottom panel stays compact.',
+    sidebarWidth: 0,
+    bottomPanelHeight: 140,
+    sketch: { sidebar: 0, bottom: 0.22 },
+  },
+  {
+    id: 'wide-editor',
+    name: 'Wide Editor',
+    desc: 'Narrow sidebar, larger editor area. Good for wide monitors.',
+    sidebarWidth: 180,
+    bottomPanelHeight: 160,
+    sketch: { sidebar: 0.18, bottom: 0.22 },
+  },
+  {
+    id: 'minimal',
+    name: 'Minimal',
+    desc: 'Narrow sidebar, small bottom panel. More code, less chrome.',
+    sidebarWidth: 160,
+    bottomPanelHeight: 100,
+    sketch: { sidebar: 0.15, bottom: 0.15 },
+  },
+  {
+    id: 'custom',
+    name: 'Custom',
+    desc: 'Your own manually adjusted layout.',
+    sidebarWidth: 224,
+    bottomPanelHeight: 200,
+    sketch: { sidebar: 0.28, bottom: 0.30 },
+  },
+]
+
+// Mini IDE mockup SVG
+function LayoutSketch({ preset, active }: { preset: LayoutPreset; active: boolean }) {
+  const W = 120, H = 76
+  const actBar = 8
+  const sideW  = Math.round(preset.sketch.sidebar * (W - actBar))
+  const botH   = Math.round(preset.sketch.bottom  * H)
+  const editorX = actBar + sideW
+  const editorW = W - editorX
+  const editorH = H - botH
+  const accent  = active ? '#60a5fa' : '#4b5563'
+  const fg      = active ? '#93c5fd' : '#374151'
+  const bg      = '#1a1a1a'
+  const bg2     = '#222'
+  const border  = active ? '#2d4a7a' : '#2a2a2a'
+
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="rounded overflow-hidden"
+      style={{ border: `1px solid ${border}` }}>
+      {/* Background */}
+      <rect width={W} height={H} fill={bg} />
+      {/* Topbar */}
+      <rect x={0} y={0} width={W} height={6} fill={bg2} />
+      <rect x={4} y={2} width={8} height={2} rx={1} fill={accent} opacity={0.5} />
+      <rect x={14} y={2} width={12} height={2} rx={1} fill={fg} opacity={0.2} />
+      <rect x={28} y={2} width={8} height={2} rx={1} fill={fg} opacity={0.15} />
+      {/* Activity bar */}
+      <rect x={0} y={6} width={actBar} height={H - 6} fill={bg2} />
+      {[12, 22, 32].map(y => (
+        <rect key={y} x={1.5} y={y} width={5} height={5} rx={1} fill={fg} opacity={0.2} />
+      ))}
+      {/* Sidebar */}
+      {sideW > 0 && <>
+        <rect x={actBar} y={6} width={sideW} height={editorH} fill={bg2} opacity={0.8} />
+        {[10, 15, 20, 25, 30].map((y, i) => (
+          <rect key={y} x={actBar + 3} y={y} width={sideW - 8 - (i % 2) * 6} height={2} rx={1} fill={fg} opacity={0.15} />
+        ))}
+      </>}
+      {/* Editor */}
+      <rect x={editorX} y={6} width={editorW} height={editorH} fill={bg} />
+      {[10, 14, 18, 22, 26, 30, 34].map((y, i) => (
+        <rect key={y} x={editorX + 4} y={y}
+          width={Math.max(8, editorW - 8 - (i * 7) % (editorW - 20))}
+          height={2} rx={1} fill={fg} opacity={0.12} />
+      ))}
+      {/* Bottom panel */}
+      {botH > 0 && <>
+        <rect x={actBar} y={editorH} width={W - actBar} height={botH} fill={bg2} opacity={0.9} />
+        <rect x={actBar} y={editorH} width={W - actBar} height={1} fill={border} />
+        {[3, 7, 11].map((dy, i) => (
+          <rect key={dy} x={actBar + 4} y={editorH + dy}
+            width={Math.max(6, (W - actBar - 16) * [0.6, 0.85, 0.4][i])}
+            height={2} rx={1} fill={accent} opacity={[0.5, 0.2, 0.25][i]} />
+        ))}
+      </>}
+      {/* Statusbar */}
+      <rect x={0} y={H - 3} width={W} height={3} fill={active ? '#1e3a5f' : '#1a1a1a'} />
+    </svg>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Appearance tab
 // ─────────────────────────────────────────────────────────────────────────────
 
 function AppearanceTab() {
-  const { settings, updateSetting } = useStore()
-  // Local draft for uiScale — only committed to store on pointer/mouse up
-  const [scaleLocal, setScaleLocal] = useState<number>(settings.uiScale ?? 1)
+  const { settings, updateSetting, setBottomHeight } = useStore()
+  const [scaleLocal, setScaleLocal] = useState<number>(settings.uiScale)
+
+  function applyLayout(preset: LayoutPreset) {
+    updateSetting('ideLayout', preset.id)
+    if (preset.id !== 'custom') {
+      updateSetting('sidebarWidth', preset.sidebarWidth)
+      updateSetting('bottomPanelHeight', preset.bottomPanelHeight)
+      setBottomHeight(preset.bottomPanelHeight)
+    }
+  }
+
+  const activePreset = LAYOUT_PRESETS.find(p => p.id === settings.ideLayout) ?? LAYOUT_PRESETS[0]
 
   return (
     <div>
-      <SectionHeader title="Appearance" desc="Customise the IDE's colour scheme, syntax colours, and interface scale." />
+      <SectionHeader title="Appearance" desc="Customise the IDE's colour scheme, syntax colours, interface scale, and window layout." />
 
+      {/* ── Layout ── */}
+      <GroupHeader title="Layout" />
+      <p className="text-xs text-[var(--fg-muted)] mb-4 leading-relaxed">
+        Choose a preset layout or drag the panel edges in the editor to build a custom one. Dragging any panel edge automatically switches to Custom.
+      </p>
+
+      {/* Preset grid */}
+      <div className="grid grid-cols-5 gap-2 mb-5">
+        {LAYOUT_PRESETS.map(preset => {
+          const active = settings.ideLayout === preset.id
+          return (
+            <button
+              key={preset.id}
+              onClick={() => applyLayout(preset)}
+              className={clsx(
+                'flex flex-col items-center gap-1.5 p-2 rounded-lg border cursor-pointer transition-all text-left',
+                active
+                  ? 'border-[var(--fg-muted)] bg-[var(--active)]'
+                  : 'border-[var(--border)] hover:border-[var(--fg-faint)] hover:bg-[var(--hover)]',
+              )}
+            >
+              <LayoutSketch preset={preset} active={active} />
+              <span className={clsx('text-[10px] font-medium text-center leading-tight w-full',
+                active ? 'text-[var(--fg)]' : 'text-[var(--fg-muted)]')}>
+                {preset.name}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Active layout description */}
+      <div className="mb-5 flex items-start gap-3 px-3 py-2.5 rounded-lg bg-[var(--surface-1)] border border-[var(--border)]">
+        <div className="flex-shrink-0 mt-0.5">
+          <LayoutSketch preset={activePreset} active={true} />
+        </div>
+        <div>
+          <div className="text-sm font-medium mb-0.5">{activePreset.name}</div>
+          <p className="text-xs text-[var(--fg-muted)] leading-relaxed">{activePreset.desc}</p>
+        </div>
+      </div>
+
+      {/* Pane size controls */}
+      <GroupHeader title="Pane Sizes" />
+      <p className="text-xs text-[var(--fg-muted)] mb-3 leading-relaxed">
+        Fine-tune panel dimensions. You can also drag the dividers between panes directly in the editor — they snap to these values and save automatically.
+      </p>
+
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] divide-y divide-[var(--border-subtle)]">
+
+        {/* Sidebar width */}
+        <div className="px-4 py-3 flex items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium mb-0.5">Sidebar width</div>
+            <div className="text-xs text-[var(--fg-muted)]">Left file-tree panel. Min 140px · Max 480px</div>
+          </div>
+          <div className="flex items-center gap-3 w-52 flex-shrink-0">
+            <input type="range" min={140} max={480} step={4}
+              value={settings.sidebarWidth}
+              onChange={e => {
+                updateSetting('sidebarWidth', Number(e.target.value))
+                updateSetting('ideLayout', 'custom')
+              }}
+              className="flex-1 accent-[var(--fg)]" />
+            <span className="text-xs font-mono w-10 text-right text-[var(--fg-muted)]">
+              {settings.sidebarWidth}px
+            </span>
+          </div>
+        </div>
+
+        {/* Bottom panel height */}
+        <div className="px-4 py-3 flex items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium mb-0.5">Bottom panel height</div>
+            <div className="text-xs text-[var(--fg-muted)]">Output / Problems / Terminal area. Min 80px · Max 600px</div>
+          </div>
+          <div className="flex items-center gap-3 w-52 flex-shrink-0">
+            <input type="range" min={80} max={600} step={4}
+              value={settings.bottomPanelHeight}
+              onChange={e => {
+                const h = Number(e.target.value)
+                updateSetting('bottomPanelHeight', h)
+                updateSetting('ideLayout', 'custom')
+                setBottomHeight(h)
+              }}
+              className="flex-1 accent-[var(--fg)]" />
+            <span className="text-xs font-mono w-10 text-right text-[var(--fg-muted)]">
+              {settings.bottomPanelHeight}px
+            </span>
+          </div>
+        </div>
+
+        {/* Reset to preset */}
+        <div className="px-4 py-2.5 flex items-center justify-between">
+          <span className="text-xs text-[var(--fg-faint)]">
+            Current: {settings.ideLayout === 'custom' ? 'Custom' : activePreset.name}
+            {' · '}{settings.sidebarWidth}px sidebar · {settings.bottomPanelHeight}px bottom
+          </span>
+          <button
+            onClick={() => applyLayout(LAYOUT_PRESETS[0])}
+            className="text-xs text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer transition-colors px-2 py-0.5 rounded hover:bg-[var(--hover)]">
+            Reset to Default
+          </button>
+        </div>
+      </div>
+
+      {/* ── IDE Theme ── */}
       <GroupHeader title="IDE Theme" />
       <div className="grid grid-cols-3 gap-2 mt-3 mb-6">
         {IDE_THEMES.map(theme => {
@@ -655,7 +892,7 @@ function AppearanceTab() {
       <GroupHeader title="Icon Pack" />
       <div className="grid grid-cols-1 gap-2 mt-3 mb-6">
         {ICON_PACKS.map(pack => {
-          const active = (settings.iconPack ?? 'minimal') === pack.id
+          const active = settings.iconPack === pack.id
           return (
             <button
               key={pack.id}
@@ -667,21 +904,11 @@ function AppearanceTab() {
                   : 'border-[var(--border)] hover:border-[var(--fg-faint)] hover:bg-[var(--hover)]',
               )}
             >
-              {/* Live preview of icons from this pack */}
               <div className="flex items-center gap-2 flex-shrink-0 w-28">
-                {/* Folder closed */}
-                <span className="flex items-center gap-0.5">
-                  {pack.folderIcon(false)}
-                </span>
-                {/* Folder open */}
-                <span className="flex items-center gap-0.5">
-                  {pack.folderIcon(true)}
-                </span>
-                {/* File icons sample */}
+                <span className="flex items-center gap-0.5">{pack.folderIcon(false)}</span>
+                <span className="flex items-center gap-0.5">{pack.folderIcon(true)}</span>
                 {['go', 'json', 'cpp', 'md'].map(ext => (
-                  <span key={ext} className="flex items-center">
-                    {pack.fileIcon(ext)}
-                  </span>
+                  <span key={ext} className="flex items-center">{pack.fileIcon(ext)}</span>
                 ))}
               </div>
               <div className="flex-1 min-w-0">
@@ -745,7 +972,7 @@ function AppearanceTab() {
         desc="Controls how fonts are anti-aliased. If text looks blurry or too thin, try 'Crisp' or 'Subpixel'."
       >
         <Select
-          value={settings.fontRendering ?? 'auto'}
+          value={settings.fontRendering}
           onChange={e => updateSetting('fontRendering', e.target.value as 'auto' | 'crisp' | 'smooth' | 'subpixel')}
         >
           <option value="auto">Auto (OS default)</option>

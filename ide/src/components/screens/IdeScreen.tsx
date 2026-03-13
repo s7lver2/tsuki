@@ -31,7 +31,7 @@ export default function IdeScreen() {
     sidebarOpen, sidebarTab, toggleSidebar,
     openTabs, activeTabIdx, closeTab, openFile,
     tree, toggleTheme, theme,
-    settings, setBottomTab, saveActiveFile, dispatchCommand,
+    settings, updateSetting, setBottomTab, saveActiveFile, dispatchCommand,
   } = useStore()
 
   const t = useT()
@@ -39,7 +39,8 @@ export default function IdeScreen() {
   const [sandboxOpen, setSandboxOpen] = useState(false)
   const [exeWarning, setExeWarning] = useState<{ command: string; action: () => void } | null>(null)
   const [sandboxWidth, setSandboxWidth] = useState(480)
-  const [resizing, setResizing] = useState(false)
+  const [resizingSandbox, setResizingSandbox] = useState(false)
+  const [resizingSidebar, setResizingSidebar] = useState(false)
 
   // Auto-open sandbox when a circuit is dispatched from Examples panel
   const pendingCircuit = useStore(s => s.pendingCircuit)
@@ -141,15 +142,29 @@ export default function IdeScreen() {
 
   // ── Sandbox resize handle ──
   useEffect(() => {
-    if (!resizing) return
+    if (!resizingSandbox) return
     function onMove(e: MouseEvent) {
       setSandboxWidth(w => Math.max(320, Math.min(900, w + (document.body.clientWidth - e.clientX - w))))
     }
-    function onUp() { setResizing(false) }
+    function onUp() { setResizingSandbox(false) }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-  }, [resizing])
+  }, [resizingSandbox])
+
+  // ── Sidebar resize handle ──
+  useEffect(() => {
+    if (!resizingSidebar) return
+    function onMove(e: MouseEvent) {
+      const newW = Math.max(140, Math.min(480, e.clientX - 40)) // 40px = activity bar
+      updateSetting('sidebarWidth', newW)
+      updateSetting('ideLayout', 'custom')
+    }
+    function onUp() { setResizingSidebar(false) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [resizingSidebar]) // eslint-disable-line
 
   return (
     <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
@@ -290,14 +305,25 @@ export default function IdeScreen() {
 
         {/* Left sidebar */}
         <div className={clsx(
-          'bg-[var(--surface-1)] border-r border-[var(--border)] flex-shrink-0 overflow-hidden transition-all duration-150',
-          sidebarOpen ? 'w-56' : 'w-0',
-        )}>
+          'bg-[var(--surface-1)] border-r border-[var(--border)] flex-shrink-0 overflow-hidden transition-[width] duration-150',
+          sidebarOpen ? '' : 'w-0',
+        )} style={sidebarOpen ? { width: settings.sidebarWidth } : {}}>
           {sidebarOpen && sidebarTab === 'files'    && <FilesSidebar />}
           {sidebarOpen && sidebarTab === 'git'      && <GitSidebar />}
           {sidebarOpen && sidebarTab === 'packages' && <PackagesSidebar />}
           {sidebarOpen && sidebarTab === 'examples' && <ExamplesSidebar />}
         </div>
+
+        {/* Sidebar resize handle */}
+        {sidebarOpen && (
+          <div
+            className="w-[3px] bg-transparent hover:bg-[var(--fg-faint)] cursor-col-resize flex-shrink-0 transition-colors group"
+            onMouseDown={() => setResizingSidebar(true)}
+            title="Drag to resize sidebar"
+          >
+            <div className={clsx('w-full h-full transition-colors', resizingSidebar && 'bg-[var(--fg-faint)]')} />
+          </div>
+        )}
 
         {/* Editor + bottom panel */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -362,7 +388,7 @@ export default function IdeScreen() {
             {/* Resize handle */}
             <div
               className="w-[3px] bg-[var(--border)] hover:bg-[var(--fg-faint)] cursor-col-resize flex-shrink-0 transition-colors"
-              onMouseDown={() => setResizing(true)}
+              onMouseDown={() => setResizingSandbox(true)}
             />
             {/* Panel */}
             <div

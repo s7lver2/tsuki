@@ -109,6 +109,10 @@ export interface SettingsState {
   uiScale: number       // 0.80 – 1.25, default 1
   iconPack: string      // id from ICON_PACKS
   showCurrentFlow: boolean  // show current-flow animation on active wires
+  // ── Layout ────────────────────────────────────────────────────────────────
+  ideLayout: 'default' | 'focused' | 'wide-editor' | 'minimal' | 'custom'
+  sidebarWidth: number          // px, 140–480
+  bottomPanelHeight: number     // px, 80–600
   // ── Experiments ──────────────────────────────────────────────────────────
   experimentsEnabled: boolean
   // Per-experiment toggles
@@ -296,6 +300,10 @@ const DEFAULT_SETTINGS: SettingsState = {
   uiScale: 1,
   iconPack: 'minimal',
   showCurrentFlow: false,
+  // layout
+  ideLayout: 'default',
+  sidebarWidth: 224,
+  bottomPanelHeight: 200,
   // experiments
   experimentsEnabled: false,
   expSandboxEnabled: false,

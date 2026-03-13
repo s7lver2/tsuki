@@ -21,7 +21,7 @@ function useTabs() {
 // ── Resize handle ─────────────────────────────────────────────────────────────
 
 function ResizeHandle() {
-  const { setBottomHeight, bottomHeight } = useStore()
+  const { setBottomHeight, bottomHeight, updateSetting } = useStore()
   const dragging = useRef(false)
   const startY   = useRef(0)
   const startH   = useRef(0)
@@ -40,14 +40,27 @@ function ResizeHandle() {
       setBottomHeight(startH.current + (startY.current - e.clientY))
     }
     function onUp() {
+      if (dragging.current) {
+        const h = startH.current + (startY.current - ((window as any).__lastMouseY ?? 0))
+        updateSetting('bottomPanelHeight', Math.max(80, Math.min(600, h)))
+        updateSetting('ideLayout', 'custom')
+      }
       dragging.current = false
       document.body.style.cursor     = ''
       document.body.style.userSelect = ''
     }
+    function onMouseMove(e: MouseEvent) {
+      (window as any).__lastMouseY = e.clientY
+    }
     window.addEventListener('mousemove', onMove)
+    window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup',   onUp)
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
-  }, [setBottomHeight])
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [setBottomHeight, updateSetting]) // eslint-disable-line
 
   return (
     <div
