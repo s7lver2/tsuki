@@ -9,111 +9,136 @@ cpp_class   = "AccelStepper"
 
 aliases = ["accelstepper", "AccelStepper"]
 
-# ── Constructor ───────────────────────────────────────────────────────────────
+# ── Constructors ──────────────────────────────────────────────────────────────
 [[function]]
-go  = "New"
-cpp = "AccelStepper({0}, {1}, {2})"
+go     = "New"
+python = "new"
+cpp    = "AccelStepper({0}, {1}, {2})"
 
 [[function]]
-go  = "NewFourWire"
-cpp = "AccelStepper(AccelStepper::FULL4WIRE, {0}, {1}, {2}, {3})"
+go     = "NewFourWire"
+python = "new_four_wire"
+cpp    = "AccelStepper(AccelStepper::FULL4WIRE, {0}, {1}, {2}, {3})"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 [[function]]
-go  = "SetMaxSpeed"
-cpp = "{0}.setMaxSpeed({1})"
+go     = "SetMaxSpeed"
+python = "set_max_speed"
+cpp    = "{0}.setMaxSpeed({1})"
 
 [[function]]
-go  = "SetAcceleration"
-cpp = "{0}.setAcceleration({1})"
+go     = "SetAcceleration"
+python = "set_acceleration"
+cpp    = "{0}.setAcceleration({1})"
 
 [[function]]
-go  = "SetSpeed"
-cpp = "{0}.setSpeed({1})"
+go     = "SetSpeed"
+python = "set_speed"
+cpp    = "{0}.setSpeed({1})"
 
 [[function]]
-go  = "SetCurrentPosition"
-cpp = "{0}.setCurrentPosition({1})"
+go     = "SetCurrentPosition"
+python = "set_current_position"
+cpp    = "{0}.setCurrentPosition({1})"
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 [[function]]
-go  = "MoveTo"
-cpp = "{0}.moveTo({1})"
+go     = "MoveTo"
+python = "move_to"
+cpp    = "{0}.moveTo({1})"
 
 [[function]]
-go  = "Move"
-cpp = "{0}.move({1})"
+go     = "Move"
+python = "move"
+cpp    = "{0}.move({1})"
 
 # ── Running ───────────────────────────────────────────────────────────────────
 [[function]]
-go  = "Run"
-cpp = "{0}.run()"
+go     = "Run"
+python = "run"
+cpp    = "{0}.run()"
 
 [[function]]
-go  = "RunSpeed"
-cpp = "{0}.runSpeed()"
+go     = "RunSpeed"
+python = "run_speed"
+cpp    = "{0}.runSpeed()"
 
 [[function]]
-go  = "RunToPosition"
-cpp = "{0}.runToPosition()"
+go     = "RunToPosition"
+python = "run_to_position"
+cpp    = "{0}.runToPosition()"
 
 [[function]]
-go  = "RunSpeedToPosition"
-cpp = "{0}.runSpeedToPosition()"
+go     = "RunSpeedToPosition"
+python = "run_speed_to_position"
+cpp    = "{0}.runSpeedToPosition()"
 
 [[function]]
-go  = "RunToNewPosition"
-cpp = "{0}.runToNewPosition({1})"
+go     = "RunToNewPosition"
+python = "run_to_new_position"
+cpp    = "{0}.runToNewPosition({1})"
 
 [[function]]
-go  = "Stop"
-cpp = "{0}.stop()"
+go     = "Stop"
+python = "stop"
+cpp    = "{0}.stop()"
 
 # ── Status ────────────────────────────────────────────────────────────────────
 [[function]]
-go  = "CurrentPosition"
-cpp = "{0}.currentPosition()"
+go     = "CurrentPosition"
+python = "current_position"
+cpp    = "{0}.currentPosition()"
 
 [[function]]
-go  = "TargetPosition"
-cpp = "{0}.targetPosition()"
+go     = "TargetPosition"
+python = "target_position"
+cpp    = "{0}.targetPosition()"
 
 [[function]]
-go  = "DistanceToGo"
-cpp = "{0}.distanceToGo()"
+go     = "DistanceToGo"
+python = "distance_to_go"
+cpp    = "{0}.distanceToGo()"
 
 [[function]]
-go  = "IsRunning"
-cpp = "{0}.isRunning()"
+go     = "IsRunning"
+python = "is_running"
+cpp    = "{0}.isRunning()"
 
 [[function]]
-go  = "Speed"
-cpp = "{0}.speed()"
+go     = "Speed"
+python = "speed"
+cpp    = "{0}.speed()"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]
-go  = "DRIVER"
-cpp = "AccelStepper::DRIVER"
+go     = "DRIVER"
+python = "DRIVER"
+cpp    = "AccelStepper::DRIVER"
 
 [[constant]]
-go  = "FULL2WIRE"
-cpp = "AccelStepper::FULL2WIRE"
+go     = "FULL2WIRE"
+python = "FULL2WIRE"
+cpp    = "AccelStepper::FULL2WIRE"
 
 [[constant]]
-go  = "FULL3WIRE"
-cpp = "AccelStepper::FULL3WIRE"
+go     = "FULL3WIRE"
+python = "FULL3WIRE"
+cpp    = "AccelStepper::FULL3WIRE"
 
 [[constant]]
-go  = "FULL4WIRE"
-cpp = "AccelStepper::FULL4WIRE"
+go     = "FULL4WIRE"
+python = "FULL4WIRE"
+cpp    = "AccelStepper::FULL4WIRE"
 
 [[constant]]
-go  = "HALF3WIRE"
-cpp = "AccelStepper::HALF3WIRE"
+go     = "HALF3WIRE"
+python = "HALF3WIRE"
+cpp    = "AccelStepper::HALF3WIRE"
 
 [[constant]]
-go  = "HALF4WIRE"
-cpp = "AccelStepper::HALF4WIRE"
+go     = "HALF4WIRE"
+python = "HALF4WIRE"
+cpp    = "AccelStepper::HALF4WIRE"
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 [[example]]
@@ -121,3 +146,9 @@ dir = "examples/basic"
 
 [[example]]
 dir = "examples/speed_control"
+
+[[example]]
+dir = "examples/basic_py"
+
+[[example]]
+dir = "examples/speed_control_py"

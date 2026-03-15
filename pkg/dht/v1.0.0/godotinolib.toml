@@ -11,49 +11,66 @@ aliases = ["DHT"]
 
 # ── Constructor ───────────────────────────────────────────────────────────────
 [[function]]
-go  = "New"
-cpp = "new DHT({0}, {1})"
+go     = "New"
+python = "new"
+cpp    = "new DHT({0}, {1})"
 
 # ── Instance methods ──────────────────────────────────────────────────────────
 [[function]]
-go  = "Begin"
-cpp = "{0}->begin()"
+go     = "Begin"
+python = "begin"
+cpp    = "{0}->begin()"
 
 [[function]]
-go  = "ReadTemperature"
-cpp = "{0}->readTemperature()"
+go     = "ReadTemperature"
+python = "read_temperature"
+cpp    = "{0}->readTemperature()"
 
 [[function]]
-go  = "ReadTemperatureF"
-cpp = "{0}->readTemperature(true)"
+go     = "ReadTemperatureF"
+python = "read_temperature_f"
+cpp    = "{0}->readTemperature(true)"
 
 [[function]]
-go  = "ReadHumidity"
-cpp = "{0}->readHumidity()"
+go     = "ReadHumidity"
+python = "read_humidity"
+cpp    = "{0}->readHumidity()"
 
 [[function]]
-go  = "ComputeHeatIndex"
-cpp = "{0}->computeHeatIndex({1}, {2})"
+go     = "ComputeHeatIndex"
+python = "compute_heat_index"
+cpp    = "{0}->computeHeatIndex({1}, {2})"
 
 [[function]]
-go  = "IsNan"
-cpp = "isnan({1})"
+go     = "IsNan"
+python = "is_nan"
+cpp    = "isnan({1})"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]
-go  = "DHT11"
-cpp = "DHT11"
+go     = "DHT11"
+python = "DHT11"
+cpp    = "DHT11"
 
 [[constant]]
-go  = "DHT22"
-cpp = "DHT22"
+go     = "DHT22"
+python = "DHT22"
+cpp    = "DHT22"
 
 [[constant]]
-go  = "DHT21"
-cpp = "DHT21"
+go     = "DHT21"
+python = "DHT21"
+cpp    = "DHT21"
+
 # ── Examples ──────────────────────────────────────────────────────────────────
 [[example]]
 dir = "examples/basic"
 
 [[example]]
 dir = "examples/dual_sensor"
+
+[[example]]
+dir = "examples/basic_py"
+
+[[example]]
+dir = "examples/dual_sensor_py"

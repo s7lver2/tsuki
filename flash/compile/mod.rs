@@ -5,6 +5,7 @@
 pub mod avr;
 pub mod cache;
 pub mod esp;
+pub mod rp2040;
 
 use std::path::PathBuf;
 use crate::boards::{Board, Toolchain};
@@ -16,6 +17,10 @@ use crate::sdk;
 pub enum Language {
     /// Go project — sources were already transpiled to .cpp by tsuki-core.
     Go,
+    /// Python project — sources were already transpiled to .cpp by tsuki-core
+    /// via PythonPipeline. The compile step is identical to Go: the sketch dir
+    /// already contains .cpp files; tsuki-flash just compiles them.
+    Python,
     /// Native C++ project — src/*.cpp compiled directly.
     Cpp,
     /// Native Arduino .ino sketch — src/*.ino compiled directly.
@@ -25,9 +30,10 @@ pub enum Language {
 impl Language {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "cpp" => Language::Cpp,
-            "ino" => Language::Ino,
-            _     => Language::Go,
+            "python" | "py" => Language::Python,
+            "cpp"           => Language::Cpp,
+            "ino"           => Language::Ino,
+            _               => Language::Go,
         }
     }
 }
@@ -83,9 +89,7 @@ pub fn compile(req: &CompileRequest, board: &Board) -> Result<CompileResult> {
         Toolchain::Sam { .. }   => Err(FlashError::Other(
             "SAM (Due) compile not yet implemented — use arduino-cli for now".into(),
         )),
-        Toolchain::Rp2040 => Err(FlashError::Other(
-            "RP2040 compile not yet implemented — use arduino-cli for now".into(),
-        )),
+        Toolchain::Rp2040       => rp2040::run(&augmented, board, &sdk),
     }
 }
 

@@ -177,23 +177,47 @@ impl Runtime {
         // Add `-Wl,-u,vfprintf -lprintf_flt -lm` to board build flags to enable it,
         // or replace fmt.Printf float args with dtostrf() calls in your Go source.
         self.reg("fmt", PkgMap::new(None)
+            // Go (PascalCase)
             .fun("Print",    FnMap::Template("Serial.print({0})".into()))
             .fun("Println",  FnMap::Template("Serial.println({0})".into()))
             .fun("Printf",   FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
             .fun("Fprintf",  FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
             .fun("Sprintf",  FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
             .fun("Errorf",   FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
+            // Python (snake_case) aliases
+            .fun("print",    FnMap::Template("Serial.print({0})".into()))
+            .fun("println",  FnMap::Template("Serial.println({0})".into()))
+            .fun("printf",   FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
+            .fun("sprintf",  FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
         );
     }
 
     fn init_time(&mut self) {
         self.reg("time", PkgMap::new(None)
+            // ── Go (PascalCase) — nanosecond-based, Go time.Duration convention ──
             .fun("Sleep",  FnMap::Template("delay(({0})/1000000UL)".into()))
             .fun("Now",    FnMap::Direct("millis()".into()))
             .fun("Since",  FnMap::Template("(millis()-{0})".into()))
+            // ── Python (snake_case) ───────────────────────────────────────────
+            // time.sleep(n)    → delay(n)            n is milliseconds (Arduino-natural)
+            // time.sleep_ms(n) → delay(n)            explicit ms alias
+            // time.sleep_us(n) → delayMicroseconds(n)
+            // time.sleep_ns(n) → delay((n)/1000000UL) nanosecond-exact alias
+            .fun("sleep",    FnMap::Template("delay({0})".into()))
+            .fun("sleep_ms", FnMap::Template("delay({0})".into()))
+            .fun("sleep_us", FnMap::Template("delayMicroseconds({0})".into()))
+            .fun("sleep_ns", FnMap::Template("delay(({0})/1000000UL)".into()))
+            .fun("now",      FnMap::Direct("millis()".into()))
+            .fun("since",    FnMap::Template("(millis()-{0})".into()))
+            .fun("millis",   FnMap::Direct("millis()".into()))
+            .fun("micros",   FnMap::Direct("micros()".into()))
+            // ── Constants (nanosecond values — Go convention kept for Go source) ─
             .cst("Second",      "1000000000ULL")
             .cst("Millisecond", "1000000ULL")
             .cst("Microsecond", "1000ULL")
+            // Python-friendly ms constants (no need to multiply by Millisecond)
+            .cst("MS",  "1")    // time.sleep(500 * time.MS)  == delay(500)
+            .cst("US",  "1")    // used with sleep_us
         );
     }
 
@@ -227,12 +251,24 @@ impl Runtime {
             .fun("IsInf",   FnMap::Template("isinf({0})".into()));
         for (go_fn, cpp_fn) in fns {
             m = m.fun(go_fn, FnMap::Template(format!("{}({{0}})", cpp_fn)));
+            // Python: also register lowercase alias (e.g. "sqrt" alongside "Sqrt")
+            let py_fn = go_fn.to_lowercase();
+            if py_fn != *go_fn {
+                m = m.fun(&py_fn, FnMap::Template(format!("{}({{0}})", cpp_fn)));
+            }
         }
+        // Extra two-arg python aliases
+        m = m.fun("atan2",       FnMap::Template("atan2({0},{1})".into()));
+        m = m.fun("pow",         FnMap::Template("pow({0},{1})".into()));
+        m = m.fun("fmod",        FnMap::Template("fmod({0},{1})".into()));
+        m = m.fun("is_nan",      FnMap::Template("isnan({0})".into()));
+        m = m.fun("is_inf",      FnMap::Template("isinf({0})".into()));
         self.reg("math", m);
     }
 
     fn init_strconv(&mut self) {
         self.reg("strconv", PkgMap::new(None)
+            // Go (PascalCase)
             .fun("Itoa",        FnMap::Template("String({0})".into()))
             .fun("Atoi",        FnMap::Template("({0}).toInt()".into()))
             .fun("FormatInt",   FnMap::Template("String({0},{1})".into()))
@@ -241,6 +277,15 @@ impl Runtime {
             .fun("ParseInt",    FnMap::Template("({0}).toInt()".into()))
             .fun("ParseBool",   FnMap::Template("({0} == \"true\")".into()))
             .fun("FormatBool",  FnMap::Template("({0} ? \"true\" : \"false\")".into()))
+            // Python (snake_case) aliases
+            .fun("itoa",         FnMap::Template("String({0})".into()))
+            .fun("atoi",         FnMap::Template("({0}).toInt()".into()))
+            .fun("format_int",   FnMap::Template("String({0},{1})".into()))
+            .fun("format_float", FnMap::Template("String({0})".into()))
+            .fun("parse_float",  FnMap::Template("({0}).toFloat()".into()))
+            .fun("parse_int",    FnMap::Template("({0}).toInt()".into()))
+            .fun("parse_bool",   FnMap::Template("({0} == \"true\")".into()))
+            .fun("format_bool",  FnMap::Template("({0} ? \"true\" : \"false\")".into()))
         );
     }
 
@@ -473,7 +518,8 @@ impl Board {
             Board { id: "mkr1000".into(),     name: "Arduino MKR WiFi 1000".into(),   fqbn: "arduino:samd:mkr1000".into(),             cpu: "ATSAMD21G18A".into(), flash_kb: 256,  ram_kb: 32,   clock_mhz: 48,  extra_flags: vec![] },
             Board { id: "esp32".into(),       name: "ESP32 Dev Module".into(),         fqbn: "esp32:esp32:esp32".into(),                cpu: "Xtensa LX6".into(),   flash_kb: 4096, ram_kb: 520,  clock_mhz: 240, extra_flags: vec![] },
             Board { id: "esp8266".into(),     name: "ESP8266 NodeMCU".into(),          fqbn: "esp8266:esp8266:nodemcuv2".into(),        cpu: "ESP8266".into(),      flash_kb: 4096, ram_kb: 80,   clock_mhz: 80,  extra_flags: vec![] },
-            Board { id: "pico".into(),        name: "Raspberry Pi Pico (RP2040)".into(), fqbn: "rp2040:rp2040:rpipico".into(),          cpu: "RP2040".into(),       flash_kb: 2048, ram_kb: 264,  clock_mhz: 133, extra_flags: vec![] },
+            Board { id: "pico".into(),        name: "Raspberry Pi Pico (RP2040)".into(), fqbn: "rp2040:rp2040:rpipico".into(),                  cpu: "RP2040".into(),       flash_kb: 2048, ram_kb: 264,  clock_mhz: 133, extra_flags: vec![] },
+            Board { id: "xiao_rp2040".into(), name: "Seeed XIAO RP2040".into(),          fqbn: "rp2040:rp2040:seeed_xiao_rp2040".into(),          cpu: "RP2040".into(),       flash_kb: 2048, ram_kb: 264,  clock_mhz: 133, extra_flags: vec![] },
             Board { id: "teensy41".into(),    name: "Teensy 4.1".into(),               fqbn: "teensy:avr:teensy41".into(),              cpu: "iMXRT1062".into(),    flash_kb: 8192, ram_kb: 1024, clock_mhz: 600, extra_flags: vec![] },
             Board { id: "portenta_h7".into(), name: "Arduino Portenta H7".into(),      fqbn: "arduino:mbed_portenta:envie_m7".into(),   cpu: "STM32H747XI".into(),  flash_kb: 2048, ram_kb: 8192, clock_mhz: 480, extra_flags: vec![] },
         ]

@@ -47,9 +47,10 @@ type langChoice struct {
 }
 
 var langChoices = []langChoice{
-	{"go",  "Go  ❆",  "statically typed · compiled · fast"},
-	{"cpp", "C++",       "native Arduino C++ · full control"},
-	{"ino", "Arduino",   "classic .ino sketch · beginner-friendly"},
+	{"go",     "Go  ❆",       "statically typed · compiled · fast"},
+	{"python", "Python  🐍",  "dynamic · readable · tsuki transpiles Python → C++"},
+	{"cpp",    "C++",          "native Arduino C++ · full control"},
+	{"ino",    "Arduino",      "classic .ino sketch · beginner-friendly"},
 }
 
 // ── Board catalog ─────────────────────────────────────────────────────────────
@@ -70,7 +71,8 @@ var boardChoices = []boardChoice{
 	{"esp32", "ESP32 Dev Module", "Dual-core · 240 MHz · WiFi + BT"},
 	{"esp8266", "ESP8266 Generic", "Single-core · 80 MHz · WiFi"},
 	{"d1_mini", "Wemos D1 Mini", "ESP8266 · compact · popular"},
-	{"pico", "Raspberry Pi Pico", "RP2040 · 133 MHz · 2 MB"},
+	{"pico",        "Raspberry Pi Pico",  "RP2040 · 133 MHz · 2 MB"},
+	{"xiao_rp2040",  "Seeed XIAO RP2040",  "RP2040 · 133 MHz · 2 MB · tiny"},
 }
 
 // ── Compiler backend choices ──────────────────────────────────────────────────
@@ -245,9 +247,59 @@ void loop() {
 	},
 }
 
+// templateChoicesPython contains starter Python templates.
+var templateChoicesPython = []templateChoice{
+	{
+		id:   "blink",
+		name: "Blink  (LED)",
+		code: `import arduino
+import time
+
+LED_PIN: int = 13
+
+def setup():
+    arduino.pinMode(LED_PIN, arduino.OUTPUT)
+
+def loop():
+    arduino.digitalWrite(LED_PIN, arduino.HIGH)
+    time.sleep(500 * time.Millisecond)
+    arduino.digitalWrite(LED_PIN, arduino.LOW)
+    time.sleep(500 * time.Millisecond)
+`,
+	},
+	{
+		id:   "serial",
+		name: "Serial Hello",
+		code: `import arduino
+import time
+
+def setup():
+    arduino.Serial.begin(9600)
+
+def loop():
+    print("Hello from tsuki!")
+    time.sleep(1000 * time.Millisecond)
+`,
+	},
+	{
+		id:   "empty",
+		name: "Empty project",
+		code: `import arduino
+
+def setup():
+    pass
+
+def loop():
+    pass
+`,
+	},
+}
+
 // templatesForLang returns the right set of templates for the selected language.
 func templatesForLang(langID string) []templateChoice {
 	switch langID {
+	case "python":
+		return templateChoicesPython
 	case "cpp":
 		return templateChoicesCpp
 	case "ino":
@@ -395,6 +447,8 @@ func scaffold(name string, lang langChoice, board boardChoice, backend backendCh
 		mainFile = "main.cpp"
 	case "ino":
 		mainFile = name + ".ino"
+	case "python":
+		mainFile = "main.py"
 	default:
 		mainFile = "main.go"
 	}
@@ -689,6 +743,8 @@ func printSuccess(name string, lang langChoice, board boardChoice, backend backe
 		editFile = "src/main.cpp"
 	case "ino":
 		editFile = "src/" + name + ".ino"
+	case "python":
+		editFile = "src/main.py"
 	default:
 		editFile = "src/main.go"
 	}

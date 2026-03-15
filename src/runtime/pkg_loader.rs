@@ -88,12 +88,19 @@ pub struct LibFunction {
     pub go:  String,
     /// C++ template. `{0}` = first arg, `{1}` = second arg, `{self}` = receiver.
     pub cpp: String,
+    /// Python function name (snake_case). When present, the function is also
+    /// registered under this name so Python source files can use idiomatic
+    /// snake_case calls (e.g. `dht.read_temperature()`).
+    pub python: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LibConstant {
     pub go:  String,
     pub cpp: String,
+    /// Python constant name. When present, registered alongside the Go name
+    /// so Python source can use `dht.DHT11` or `dht.dht11` interchangeably.
+    pub python: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -138,9 +145,22 @@ pub fn load_from_str(toml_str: &str, path: &Path) -> Result<LoadedLib> {
 
     for f in &manifest.functions {
         pkg = pkg.fun(&f.go, FnMap::Template(f.cpp.clone()));
+        // Also register under the Python snake_case name when provided.
+        // This lets Python source files call `dht.read_temperature()` while
+        // Go source files keep using `dht.ReadTemperature()`.
+        if let Some(ref py_name) = f.python {
+            if !py_name.is_empty() && py_name != &f.go {
+                pkg = pkg.fun(py_name, FnMap::Template(f.cpp.clone()));
+            }
+        }
     }
     for c in &manifest.constants {
         pkg = pkg.cst(&c.go, &c.cpp);
+        if let Some(ref py_name) = c.python {
+            if !py_name.is_empty() && py_name != &c.go {
+                pkg = pkg.cst(py_name, &c.cpp);
+            }
+        }
     }
 
     Ok(LoadedLib {

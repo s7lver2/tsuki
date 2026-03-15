@@ -37,7 +37,8 @@ type Issue struct {
 	IsError bool
 }
 
-// Run checks all .go files in the project src/ directory.
+// Run checks all source files in the project src/ directory.
+// Supports Go (.go) and Python (.py) projects.
 func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error) {
 	board := opts.Board
 	if board == "" {
@@ -52,36 +53,52 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 	}
 
 	srcDir := filepath.Join(projectDir, "src")
-	goFiles, err := filepath.Glob(filepath.Join(srcDir, "*.go"))
-	if err != nil || len(goFiles) == 0 {
-		return nil, fmt.Errorf("no .go files found in %s", srcDir)
+
+	// Determine which files to check based on the project language.
+	lang := m.EffectiveLanguage()
+	var srcFiles []string
+	var ext, langLabel string
+
+	switch lang {
+	case manifest.LangPython:
+		ext = "*.py"
+		langLabel = "Python"
+	default:
+		ext = "*.go"
+		langLabel = "Go"
 	}
 
-	ui.SectionTitle(fmt.Sprintf("Checking  [board: %s]", board))
+	var err error
+	srcFiles, err = filepath.Glob(filepath.Join(srcDir, ext))
+	if err != nil || len(srcFiles) == 0 {
+		return nil, fmt.Errorf("no %s files found in %s", ext, srcDir)
+	}
 
-	report := &Report{Files: len(goFiles)}
+	ui.SectionTitle(fmt.Sprintf("Checking %s  [board: %s]", langLabel, board))
 
-	for _, goFile := range goFiles {
-		ui.Info(fmt.Sprintf("Checking %s…", filepath.Base(goFile)))
+	// Convert []manifest.Package -> []string
+	pkgNames := make([]string, 0, len(m.Packages))
+	for _, p := range m.Packages {
+		pkgNames = append(pkgNames, p.Name)
+	}
+	libsDir := ""
 
-		// Convert []manifest.Package -> []string
-		pkgNames := make([]string, 0, len(m.Packages))
-		for _, p := range m.Packages {
-			pkgNames = append(pkgNames, p.Name)
-		}
+	report := &Report{Files: len(srcFiles)}
 
-		libsDir := ""
+	for _, srcFile := range srcFiles {
+		ui.Info(fmt.Sprintf("Checking %s…", filepath.Base(srcFile)))
 
-		warnings, errors, err := transpiler.Check(
-			goFile,   // full path to the .go file
-			board,    // the board string
-			libsDir,  // libs dir (empty unless you have packages)
+		warnings, errors, err := transpiler.CheckFile(
+			srcFile,
+			board,
+			lang,
+			libsDir,
 			pkgNames,
 		)
 
 		for _, w := range warnings {
 			report.Warnings = append(report.Warnings, Issue{
-				File:    goFile,
+				File:    srcFile,
 				Message: w,
 				IsError: false,
 			})
@@ -89,7 +106,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 
 		for _, e := range errors {
 			report.Errors = append(report.Errors, Issue{
-				File:    goFile,
+				File:    srcFile,
 				Message: e,
 				IsError: true,
 			})
@@ -97,7 +114,7 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Report, error)
 
 		if err != nil {
 			report.Errors = append(report.Errors, Issue{
-				File:    goFile,
+				File:    srcFile,
 				Message: err.Error(),
 				IsError: true,
 			})

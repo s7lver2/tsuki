@@ -1,5 +1,6 @@
 'use client'
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
+import ProfilesPanel from '@/components/other/ProfilesPanel'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
 import { ICON_PACKS } from '@/lib/iconPacks'
 import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/shared/primitives'
@@ -7,7 +8,7 @@ import {
   ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
   Beaker, ToggleLeft, GitBranch, Languages, Bug, FileText,
-  Trash2, ExternalLink, AlertTriangle, RotateCcw,
+  Trash2, ExternalLink, AlertTriangle, RotateCcw, User, Layers,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { clsx } from 'clsx'
@@ -19,6 +20,7 @@ import { useT, AVAILABLE_LANGS, LANG_META, LangCode } from '@/lib/i18n'
 
 const MAIN_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
   { id: 'appearance', labelKey: 'settings.tab_appearance', icon: <Palette  size={13} /> },
+  { id: 'profile', labelKey: 'settings.tab_profile', icon: <User size={13} /> },
   { id: 'cli',        labelKey: 'settings.tab_tools',      icon: <Terminal size={13} /> },
   { id: 'defaults',   labelKey: 'settings.tab_board',      icon: <Sliders  size={13} /> },
   { id: 'editor',     labelKey: 'settings.tab_editor',     icon: <Code2    size={13} /> },
@@ -29,11 +31,12 @@ const DEV_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = 
   { id: 'developer', labelKey: 'settings.tab_developer', icon: <Beaker size={13} /> },
 ]
 
-const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' }[] = [
+const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled' }[] = [
   { id: 'experiments', label: 'General',   icon: <FlaskConical size={13} /> },
   { id: 'exp-sandbox', label: 'Sandbox',   icon: <Cpu          size={13} />, settingKey: 'expSandboxEnabled' },
   { id: 'exp-git',     label: 'Git',       icon: <GitBranch    size={13} />, settingKey: 'expGitEnabled'     },
   { id: 'exp-lsp',     label: 'LSP',       icon: <Zap          size={13} />, settingKey: 'expLspEnabled'     },
+  { id: 'exp-workstations', label: 'Workstations', icon: <Layers size={13} />, settingKey: 'expWorkstationsEnabled' },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,6 +210,7 @@ export default function SettingsScreen() {
             {settingsTab === 'defaults'     && <DefaultsTab />}
             {settingsTab === 'editor'       && <EditorTab />}
             {settingsTab === 'language'     && <LanguageTab />}
+            {settingsTab === 'profile'      && <ProfilesPanel />}
             {settingsTab === 'experiments'  && <ExperimentsTab />}
             {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
             {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
@@ -234,7 +238,7 @@ interface ExpDef {
   tag: string
   icon: React.ReactNode
   desc: string
-  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled'  // union grows as experiments are added
+  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled'  // union grows as experiments are added
   resources: string                 // what it costs when enabled
 }
 
@@ -268,6 +272,16 @@ const EXPERIMENTS: ExpDef[] = [
     desc: 'Enable tsuki-lsp for completions, diagnostics, and hover docs. Supports Go, C++, and .ino files.',
     settingKey: 'expLspEnabled',
     resources: 'Launches a background tsuki-lsp process. Adds ~5–15 MB RAM. Requires tsuki-lsp in PATH.',
+  },
+  {
+    id: 'workstations',
+    tab: 'exp-workstations',
+    name: 'Workstations',
+    tag: 'α',
+    icon: <Layers size={16} />,
+    desc: 'DaVinci Resolve-style page bar at the bottom of the IDE. Switch between Code, Sandbox, and Export workstations — each occupies the full screen area.',
+    settingKey: 'expWorkstationsEnabled',
+    resources: 'Zero overhead when inactive. Sandbox workstation re-uses the existing simulator — no extra bundle cost.',
   },
 ]
 

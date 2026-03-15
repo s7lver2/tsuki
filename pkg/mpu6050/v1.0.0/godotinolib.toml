@@ -11,121 +11,149 @@ aliases = ["MPU6050", "imu"]
 
 # ── Constructor ───────────────────────────────────────────────────────────────
 [[function]]
-go  = "New"
-cpp = "Adafruit_MPU6050()"
+go     = "New"
+python = "new"
+cpp    = "Adafruit_MPU6050()"
 
 # ── Init ──────────────────────────────────────────────────────────────────────
 [[function]]
-go  = "Begin"
-cpp = "{0}.begin()"
+go     = "Begin"
+python = "begin"
+cpp    = "{0}.begin()"
 
-# ── Read sensor event (fills three sensors: accel, gyro, temp) ────────────────
+# ── Read sensor events ────────────────────────────────────────────────────────
 [[function]]
-go  = "GetEvent"
-cpp = "{0}.getEvent(&{1}, &{2}, &{3})"
+go     = "GetEvent"
+python = "get_event"
+cpp    = "{0}.getEvent(&{1}, &{2}, &{3})"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 [[function]]
-go  = "SetAccelerometerRange"
-cpp = "{0}.setAccelerometerRange({1})"
+go     = "SetAccelerometerRange"
+python = "set_accelerometer_range"
+cpp    = "{0}.setAccelerometerRange({1})"
 
 [[function]]
-go  = "SetGyroRange"
-cpp = "{0}.setGyroRange({1})"
+go     = "SetGyroRange"
+python = "set_gyro_range"
+cpp    = "{0}.setGyroRange({1})"
 
 [[function]]
-go  = "SetFilterBandwidth"
-cpp = "{0}.setFilterBandwidth({1})"
+go     = "SetFilterBandwidth"
+python = "set_filter_bandwidth"
+cpp    = "{0}.setFilterBandwidth({1})"
 
-# ── Raw data helpers (using sensors_event_t fields) ───────────────────────────
+# ── Raw data field accessors ──────────────────────────────────────────────────
 [[function]]
-go  = "AccelX"
-cpp = "{0}.acceleration.x"
-
-[[function]]
-go  = "AccelY"
-cpp = "{0}.acceleration.y"
+go     = "AccelX"
+python = "accel_x"
+cpp    = "{0}.acceleration.x"
 
 [[function]]
-go  = "AccelZ"
-cpp = "{0}.acceleration.z"
+go     = "AccelY"
+python = "accel_y"
+cpp    = "{0}.acceleration.y"
 
 [[function]]
-go  = "GyroX"
-cpp = "{0}.gyro.x"
+go     = "AccelZ"
+python = "accel_z"
+cpp    = "{0}.acceleration.z"
 
 [[function]]
-go  = "GyroY"
-cpp = "{0}.gyro.y"
+go     = "GyroX"
+python = "gyro_x"
+cpp    = "{0}.gyro.x"
 
 [[function]]
-go  = "GyroZ"
-cpp = "{0}.gyro.z"
+go     = "GyroY"
+python = "gyro_y"
+cpp    = "{0}.gyro.y"
 
 [[function]]
-go  = "Temp"
-cpp = "{0}.temperature"
+go     = "GyroZ"
+python = "gyro_z"
+cpp    = "{0}.gyro.z"
+
+[[function]]
+go     = "Temp"
+python = "temp"
+cpp    = "{0}.temperature"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]
-go  = "RANGE_2_G"
-cpp = "MPU6050_RANGE_2_G"
+go     = "RANGE_2_G"
+python = "RANGE_2_G"
+cpp    = "MPU6050_RANGE_2_G"
 
 [[constant]]
-go  = "RANGE_4_G"
-cpp = "MPU6050_RANGE_4_G"
+go     = "RANGE_4_G"
+python = "RANGE_4_G"
+cpp    = "MPU6050_RANGE_4_G"
 
 [[constant]]
-go  = "RANGE_8_G"
-cpp = "MPU6050_RANGE_8_G"
+go     = "RANGE_8_G"
+python = "RANGE_8_G"
+cpp    = "MPU6050_RANGE_8_G"
 
 [[constant]]
-go  = "RANGE_16_G"
-cpp = "MPU6050_RANGE_16_G"
+go     = "RANGE_16_G"
+python = "RANGE_16_G"
+cpp    = "MPU6050_RANGE_16_G"
 
 [[constant]]
-go  = "RANGE_250_DEG"
-cpp = "MPU6050_RANGE_250_DEG"
+go     = "RANGE_250_DEG"
+python = "RANGE_250_DEG"
+cpp    = "MPU6050_RANGE_250_DEG"
 
 [[constant]]
-go  = "RANGE_500_DEG"
-cpp = "MPU6050_RANGE_500_DEG"
+go     = "RANGE_500_DEG"
+python = "RANGE_500_DEG"
+cpp    = "MPU6050_RANGE_500_DEG"
 
 [[constant]]
-go  = "RANGE_1000_DEG"
-cpp = "MPU6050_RANGE_1000_DEG"
+go     = "RANGE_1000_DEG"
+python = "RANGE_1000_DEG"
+cpp    = "MPU6050_RANGE_1000_DEG"
 
 [[constant]]
-go  = "RANGE_2000_DEG"
-cpp = "MPU6050_RANGE_2000_DEG"
+go     = "RANGE_2000_DEG"
+python = "RANGE_2000_DEG"
+cpp    = "MPU6050_RANGE_2000_DEG"
 
 [[constant]]
-go  = "BAND_5_HZ"
-cpp = "MPU6050_BAND_5_HZ"
+go     = "BAND_5_HZ"
+python = "BAND_5_HZ"
+cpp    = "MPU6050_BAND_5_HZ"
 
 [[constant]]
-go  = "BAND_10_HZ"
-cpp = "MPU6050_BAND_10_HZ"
+go     = "BAND_10_HZ"
+python = "BAND_10_HZ"
+cpp    = "MPU6050_BAND_10_HZ"
 
 [[constant]]
-go  = "BAND_21_HZ"
-cpp = "MPU6050_BAND_21_HZ"
+go     = "BAND_21_HZ"
+python = "BAND_21_HZ"
+cpp    = "MPU6050_BAND_21_HZ"
 
 [[constant]]
-go  = "BAND_44_HZ"
-cpp = "MPU6050_BAND_44_HZ"
+go     = "BAND_44_HZ"
+python = "BAND_44_HZ"
+cpp    = "MPU6050_BAND_44_HZ"
 
 [[constant]]
-go  = "BAND_94_HZ"
-cpp = "MPU6050_BAND_94_HZ"
+go     = "BAND_94_HZ"
+python = "BAND_94_HZ"
+cpp    = "MPU6050_BAND_94_HZ"
 
 [[constant]]
-go  = "BAND_184_HZ"
-cpp = "MPU6050_BAND_184_HZ"
+go     = "BAND_184_HZ"
+python = "BAND_184_HZ"
+cpp    = "MPU6050_BAND_184_HZ"
 
 [[constant]]
-go  = "BAND_260_HZ"
-cpp = "MPU6050_BAND_260_HZ"
+go     = "BAND_260_HZ"
+python = "BAND_260_HZ"
+cpp    = "MPU6050_BAND_260_HZ"
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 [[example]]
@@ -133,3 +161,9 @@ dir = "examples/basic"
 
 [[example]]
 dir = "examples/tilt_servo"
+
+[[example]]
+dir = "examples/basic_py"
+
+[[example]]
+dir = "examples/tilt_servo_py"

@@ -129,7 +129,7 @@ function useBuzzerAudio(
   return { unlockAudio }
 }
 
-export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
+export default function SandboxPanel({ onClose, fullscreen = false }: { onClose?: () => void; fullscreen?: boolean }) {
   const { board } = useStore()
 
   // ── Shared state (passed to both Canvas and Sim views) ─────────────────────

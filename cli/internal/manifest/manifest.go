@@ -30,15 +30,17 @@ import (
 const FileName = "tsuki_package.json"
 
 // Language identifies which source language the project uses.
-// "go"  → tsuki-core transpiles .go → .cpp (default, original behaviour)
-// "cpp" → native C++ project; src/*.cpp are compiled directly
-// "ino" → Arduino .ino sketch project; src/*.ino are compiled directly
+// "go"     → tsuki-core transpiles .go → .cpp (default, original behaviour)
+// "python" → tsuki-core transpiles .py → .cpp via PythonPipeline
+// "cpp"    → native C++ project; src/*.cpp are compiled directly
+// "ino"    → Arduino .ino sketch project; src/*.ino are compiled directly
 type Language = string
 
 const (
-	LangGo  Language = "go"
-	LangCpp Language = "cpp"
-	LangIno Language = "ino"
+	LangGo     Language = "go"
+	LangPython Language = "python"
+	LangCpp    Language = "cpp"
+	LangIno    Language = "ino"
 )
 
 type Manifest struct {
@@ -60,6 +62,8 @@ type Manifest struct {
 // EffectiveLanguage returns the project language, defaulting to "go".
 func (m *Manifest) EffectiveLanguage() string {
 	switch m.Language {
+	case LangPython:
+		return LangPython
 	case LangCpp, LangIno:
 		return m.Language
 	default:

@@ -65,6 +65,8 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	}
 
 	switch m.EffectiveLanguage() {
+	case manifest.LangPython:
+		return runPython(projectDir, m, opts, board, baseOutDir)
 	case manifest.LangCpp:
 		return runNative(projectDir, m, opts, board, baseOutDir, "cpp")
 	case manifest.LangIno:
@@ -72,6 +74,95 @@ func Run(projectDir string, m *manifest.Manifest, opts Options) (*Result, error)
 	default:
 		return runGo(projectDir, m, opts, board, baseOutDir)
 	}
+}
+
+// runPython is the Python → transpile → compile pipeline.
+// It mirrors runGo exactly but searches for *.py files and passes
+// --lang python to tsuki-core so PythonPipeline is used.
+func runPython(projectDir string, m *manifest.Manifest, opts Options, board, baseOutDir string) (*Result, error) {
+	sketchName := sanitizeSketchName(m.Name)
+	if sketchName == "" {
+		sketchName = "sketch"
+	}
+	sketchDir := filepath.Join(baseOutDir, sketchName)
+	if err := os.MkdirAll(sketchDir, 0755); err != nil {
+		return nil, fmt.Errorf("creating sketch dir: %w", err)
+	}
+
+	transpiler := core.New(opts.CoreBin, opts.Verbose)
+	if !transpiler.Installed() {
+		return nil, fmt.Errorf(
+			"tsuki-core not found — install it or set core_binary in config\n" +
+				"  tsuki config set core_binary /path/to/tsuki-core",
+		)
+	}
+
+	srcDir  := filepath.Join(projectDir, "src")
+	pyFiles, err := filepath.Glob(filepath.Join(srcDir, "*.py"))
+	if err != nil || len(pyFiles) == 0 {
+		return nil, fmt.Errorf("no .py files found in %s", srcDir)
+	}
+
+	pkgNames := m.PackageNames()
+	libsDir  := pkgmgr.LibsDir()
+
+	if len(pkgNames) > 0 {
+		ui.SectionTitle(fmt.Sprintf("Transpiling Python  [board: %s]  [packages: %s]",
+			board, strings.Join(pkgNames, ", ")))
+		for _, name := range pkgNames {
+			if ok, _ := pkgmgr.IsInstalled(name); !ok {
+				return nil, fmt.Errorf(
+					"package %q declared in tsuki_package.json is not installed\n"+
+						"  Run: tsuki pkg install %s", name, name,
+				)
+			}
+		}
+	} else {
+		ui.SectionTitle(fmt.Sprintf("Transpiling Python  [board: %s]", board))
+	}
+
+	result := &Result{SketchDir: sketchDir}
+
+	for _, pyFile := range pyFiles {
+		base    := strings.TrimSuffix(filepath.Base(pyFile), ".py")
+		cppFile := filepath.Join(sketchDir, base+".cpp")
+
+		sp := ui.NewSpinner(fmt.Sprintf("%s → %s", filepath.Base(pyFile), filepath.Base(cppFile)))
+		sp.Start()
+
+		tr, err := transpiler.Transpile(core.TranspileRequest{
+			InputFile:  pyFile,
+			OutputFile: cppFile,
+			Board:      board,
+			Language:   "python",
+			SourceMap:  opts.SourceMap || m.Build.SourceMap,
+			LibsDir:    libsDir,
+			PkgNames:   pkgNames,
+		})
+		if err != nil {
+			sp.Stop(false, fmt.Sprintf("failed: %s", filepath.Base(pyFile)))
+			return nil, err
+		}
+
+		sp.Stop(true, fmt.Sprintf("%s  →  %s", filepath.Base(pyFile), filepath.Base(cppFile)))
+		result.CppFiles = append(result.CppFiles, tr.OutputFile)
+		result.Warnings  = append(result.Warnings, tr.Warnings...)
+	}
+
+	for _, w := range result.Warnings {
+		ui.Warn(w)
+	}
+
+	if err := writeInoStub(sketchDir, sketchName, result.CppFiles); err != nil {
+		return nil, fmt.Errorf("writing .ino stub: %w", err)
+	}
+	ui.Step("sketch", fmt.Sprintf("wrote %s/%s.ino", sketchName, sketchName))
+
+	if !opts.Compile {
+		return result, nil
+	}
+
+	return compileSketch(result, m, board, opts, sketchDir, baseOutDir)
 }
 
 // runGo is the original Go → transpile → compile pipeline.
@@ -627,17 +718,18 @@ func renderArduinoError(output string) {
 
 func boardFQBN(id string) (string, error) {
 	table := map[string]string{
-		"uno":      "arduino:avr:uno",
-		"nano":     "arduino:avr:nano",
-		"mega":     "arduino:avr:mega",
-		"leonardo": "arduino:avr:leonardo",
-		"micro":    "arduino:avr:micro",
-		"due":      "arduino:sam:arduino_due_x",
-		"mkr1000":  "arduino:samd:mkr1000",
-		"esp32":    "esp32:esp32:esp32",
-		"esp8266":  "esp8266:esp8266:generic",
-		"pico":     "rp2040:rp2040:rpipico",
-		"teensy40": "teensy:avr:teensy40",
+		"uno":          "arduino:avr:uno",
+		"nano":         "arduino:avr:nano",
+		"mega":         "arduino:avr:mega",
+		"leonardo":     "arduino:avr:leonardo",
+		"micro":        "arduino:avr:micro",
+		"due":          "arduino:sam:arduino_due_x",
+		"mkr1000":      "arduino:samd:mkr1000",
+		"esp32":        "esp32:esp32:esp32",
+		"esp8266":      "esp8266:esp8266:generic",
+		"pico":         "rp2040:rp2040:rpipico",
+		"xiao_rp2040":  "rp2040:rp2040:seeed_xiao_rp2040",
+		"teensy40":     "teensy:avr:teensy40",
 	}
 	fqbn, ok := table[strings.ToLower(id)]
 	if !ok {

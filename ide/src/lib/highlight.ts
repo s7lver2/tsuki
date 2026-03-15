@@ -175,10 +175,85 @@ export function highlightIno(code: string): string {
   return highlightCpp(code)
 }
 
+// ── Python highlighter ────────────────────────────────────────────────────────
+
+const PY_KW  = new Set(['def','return','if','elif','else','while','for','in','import','from','pass','break','continue','class','and','or','not','global','lambda','yield','with','as','try','except','finally','raise','del','assert','is','None','True','False'])
+const PY_TY  = new Set(['int','float','str','bool','bytes','list','dict','tuple','set','type','object','auto','void','uint8','uint16','uint32','int8','int16','int32','byte','word','size_t'])
+const PY_PKG = new Set(['arduino','fmt','time','math','dht','ws2812','u8g2','irremote','mpu6050','stepper','bmp280'])
+
+function tokenizePyLine(line: string): string {
+  // full-line comment
+  const trimmed = line.trimStart()
+  if (trimmed.startsWith('#')) return `<span class="syn-com">${esc(line)}</span>`
+
+  let out = ''
+  let i = 0
+
+  while (i < line.length) {
+    // inline comment
+    if (line[i] === '#') {
+      out += `<span class="syn-com">${esc(line.slice(i))}</span>`
+      break
+    }
+
+    // triple-quoted strings (simplified: just colour from here to end of line)
+    if ((line[i] === '"' || line[i] === "'") && line.slice(i, i + 3) === line[i].repeat(3)) {
+      out += `<span class="syn-str">${esc(line.slice(i))}</span>`
+      break
+    }
+
+    // single/double quoted string
+    if (line[i] === '"' || line[i] === "'") {
+      const q = line[i]; let j = i + 1
+      while (j < line.length && !(line[j] === q && line[j - 1] !== '\\')) j++
+      out += `<span class="syn-str">${esc(line.slice(i, j + 1))}</span>`
+      i = j + 1; continue
+    }
+
+    // number
+    if (/\d/.test(line[i]) && (i === 0 || /[\s(,=+\-*/<>!&|^~%]/.test(line[i - 1]))) {
+      let j = i
+      while (j < line.length && /[0-9._xXa-fA-FbBoO]/.test(line[j])) j++
+      out += `<span class="syn-num">${esc(line.slice(i, j))}</span>`
+      i = j; continue
+    }
+
+    // word
+    if (/[a-zA-Z_]/.test(line[i])) {
+      let j = i
+      while (j < line.length && /\w/.test(line[j])) j++
+      const word = line.slice(i, j)
+      if (PY_KW.has(word))       out += `<span class="syn-kw">${esc(word)}</span>`
+      else if (PY_TY.has(word))  out += `<span class="syn-typ">${esc(word)}</span>`
+      else if (PY_PKG.has(word)) out += `<span class="syn-pkg">${esc(word)}</span>`
+      else if (j < line.length && line[j] === '(') out += `<span class="syn-fn">${esc(word)}</span>`
+      else out += esc(word)
+      i = j; continue
+    }
+
+    // two-char ops
+    const pyOps2 = [':=', '**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '<<', '>>']
+    let matched = false
+    for (const op of pyOps2) {
+      if (line.slice(i, i + op.length) === op) {
+        out += `<span class="syn-op">${esc(op)}</span>`
+        i += op.length; matched = true; break
+      }
+    }
+    if (!matched) { out += esc(line[i]); i++ }
+  }
+  return out
+}
+
+export function highlightPython(code: string): string {
+  return code.split('\n').map(tokenizePyLine).join('\n')
+}
+
 export function highlightByExt(code: string, ext: string): string {
   switch (ext) {
     case 'cpp': case 'h': case 'hpp': return highlightCpp(code)
     case 'ino': return highlightIno(code)
-    default: return highlightGo(code)
+    case 'py':  return highlightPython(code)
+    default:    return highlightGo(code)
   }
 }

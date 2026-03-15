@@ -20,6 +20,12 @@ const LANGUAGES = [
     badge: 'recommended' as const,
   },
   {
+    id: 'python',
+    label: 'Python 🐍',
+    desc: 'Dynamic \u00b7 readable \u00b7 tsuki transpiles Python \u2192 C++ automatically.',
+    badge: null,
+  },
+  {
     id: 'cpp',
     label: 'C++',
     desc: 'Native Arduino C++ with #include <Arduino.h> \u2014 full control, no transpilation.',
@@ -43,8 +49,8 @@ const BOARDS = [
   { id: 'esp32',        label: 'ESP32 Dev Module',    note: 'Dual-core · 240 MHz · WiFi + BT' },
   { id: 'esp8266',      label: 'ESP8266 Generic',     note: 'Single-core · 80 MHz · WiFi' },
   { id: 'd1_mini',      label: 'Wemos D1 Mini',       note: 'ESP8266 · compact · popular' },
-  { id: 'pico',         label: 'Raspberry Pi Pico',   note: 'RP2040 · 133 MHz · 2 MB' },
-  { id: 'xiao_rp2040',  label: 'Seeed XIAO RP2040',  note: 'RP2040 · 133 MHz · 2 MB · tiny', badge: 'new' as const },
+  { id: 'pico',          label: 'Raspberry Pi Pico',   note: 'RP2040 · 133 MHz · 2 MB' },
+  { id: 'xiao_rp2040',  label: 'Seeed XIAO RP2040',   note: 'RP2040 · 133 MHz · 2 MB · tiny', badge: 'new' as const },
 ]
 
 const BACKENDS = [
@@ -73,8 +79,14 @@ const TEMPLATES_INO: TemplateItem[] = [
   { id: 'empty',  label: 'Empty project', desc: 'Blank .ino sketch, ready to fill in.',                        icon: '\ud83d\udcc4' },
 ]
 
+const TEMPLATES_PYTHON: TemplateItem[] = [
+  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Toggle LED_BUILTIN using arduino.digitalWrite — Python style.', icon: '\ud83d\udca1' },
+  { id: 'serial', label: 'Serial Hello',  desc: 'print() over Serial — maps to Serial.println() in C++.',        icon: '\ud83d\udce1' },
+  { id: 'empty',  label: 'Empty project', desc: 'Blank setup() + loop() \u2014 start from scratch.',                icon: '\ud83d\udcc4' },
+]
+
 const TEMPLATES_BY_LANG: Record<string, TemplateItem[]> = {
-  go: TEMPLATES_GO, cpp: TEMPLATES_CPP, ino: TEMPLATES_INO,
+  go: TEMPLATES_GO, python: TEMPLATES_PYTHON, cpp: TEMPLATES_CPP, ino: TEMPLATES_INO,
 }
 
 // ── Step IDs ──────────────────────────────────────────────────────────────────
@@ -515,7 +527,7 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
             {error ? (
               <p className="text-xs text-red-400 flex-1 mr-4 truncate">{error}</p>
             ) : (
-              <div className="flex-1">
+              <div className="flex-1 min-w-0 overflow-hidden mr-3">
                 {isLastStep && (
                   <div className="text-xs text-[var(--fg-faint)] font-mono truncate">{'→'} {fullPath}</div>
                 )}

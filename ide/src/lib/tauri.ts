@@ -499,12 +499,12 @@ export async function runSimulator(
   }
 }
 /**
- * Transpile a Go source string and write a .sim.json bundle to bundlePath.
- * Replaces: runShell(coreBin, [tmpPath, '--board', board, '--emit-sim', bundlePath])
+ * Transpile a source string and write a .sim.json bundle to bundlePath.
+ * lang: "go" (default) or "python" — selects the tsuki-core pipeline.
  */
-export async function emitSimBundle(source: string, board: string, bundlePath: string): Promise<void> {
+export async function emitSimBundle(source: string, board: string, bundlePath: string, lang = 'go'): Promise<void> {
   if (!isTauri()) throw new Error('emitSimBundle: not in Tauri')
-  return invoke<void>('emit_sim_bundle', { source, board, bundlePath })
+  return invoke<void>('emit_sim_bundle', { source, board, bundlePath, lang })
 }
 // ── PTY sessions (xterm.js backend) ──────────────────────────────────────────
 //

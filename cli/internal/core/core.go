@@ -35,6 +35,9 @@ type TranspileRequest struct {
 	InputFile  string
 	OutputFile string
 	Board      string
+	// Language selects the pipeline: "" or "go" for Go, "python" for Python.
+	// Passed as --lang to tsuki-core; inferred from file extension when empty.
+	Language   string
 	SourceMap  bool
 	// Optional: root directory where external libs are installed.
 	// Passed as --libs-dir to tsuki-core.
@@ -53,6 +56,12 @@ type TranspileResult struct {
 // Transpile transpiles a single .go file to C++.
 func (t *Transpiler) Transpile(req TranspileRequest) (*TranspileResult, error) {
 	args := []string{req.InputFile, req.OutputFile, "--board", req.Board}
+
+	// Explicit language flag — tsuki-core also infers from extension, but being
+	// explicit avoids any ambiguity when the user uses a non-standard filename.
+	if req.Language != "" && req.Language != "go" {
+		args = append(args, "--lang", req.Language)
+	}
 
 	if req.SourceMap {
 		args = append(args, "--source-map")
@@ -89,9 +98,13 @@ func (t *Transpiler) Transpile(req TranspileRequest) (*TranspileResult, error) {
 	}, nil
 }
 
-// Check validates a .go source file without producing output.
-func (t *Transpiler) Check(inputFile, board, libsDir string, pkgNames []string) ([]string, []string, error) {
+// CheckFile validates a source file without producing output.
+// lang selects the pipeline: "" or "go" for Go, "python" for Python.
+func (t *Transpiler) CheckFile(inputFile, board, lang, libsDir string, pkgNames []string) ([]string, []string, error) {
 	args := []string{inputFile, "--board", board, "--check"}
+	if lang != "" && lang != "go" {
+		args = append(args, "--lang", lang)
+	}
 	if libsDir != "" {
 		args = append(args, "--libs-dir", libsDir)
 	}
@@ -115,6 +128,13 @@ func (t *Transpiler) Check(inputFile, board, libsDir string, pkgNames []string) 
 	}
 	return warnings, errors, nil
 }
+
+// Check validates a .go source file without producing output.
+// Deprecated: use CheckFile with lang="" for Go projects.
+func (t *Transpiler) Check(inputFile, board, libsDir string, pkgNames []string) ([]string, []string, error) {
+	return t.CheckFile(inputFile, board, "go", libsDir, pkgNames)
+}
+
 
 // Version returns the version string of the core binary.
 func (t *Transpiler) Version() (string, error) {

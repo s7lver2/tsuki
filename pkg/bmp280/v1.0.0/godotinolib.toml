@@ -11,108 +11,133 @@ aliases = ["BME280", "bme280"]
 
 # ── Constructor ───────────────────────────────────────────────────────────────
 [[function]]
-go  = "New"
-cpp = "Adafruit_BMP280()"
+go     = "New"
+python = "new"
+cpp    = "Adafruit_BMP280()"
 
 # ── Init ──────────────────────────────────────────────────────────────────────
 [[function]]
-go  = "Begin"
-cpp = "{0}.begin()"
+go     = "Begin"
+python = "begin"
+cpp    = "{0}.begin()"
 
 [[function]]
-go  = "BeginAddr"
-cpp = "{0}.begin({1})"
+go     = "BeginAddr"
+python = "begin_addr"
+cpp    = "{0}.begin({1})"
 
 # ── Readings ──────────────────────────────────────────────────────────────────
 [[function]]
-go  = "ReadTemperature"
-cpp = "{0}.readTemperature()"
+go     = "ReadTemperature"
+python = "read_temperature"
+cpp    = "{0}.readTemperature()"
 
 [[function]]
-go  = "ReadPressure"
-cpp = "{0}.readPressure()"
+go     = "ReadPressure"
+python = "read_pressure"
+cpp    = "{0}.readPressure()"
 
 [[function]]
-go  = "ReadAltitude"
-cpp = "{0}.readAltitude({1})"
+go     = "ReadAltitude"
+python = "read_altitude"
+cpp    = "{0}.readAltitude({1})"
 
 [[function]]
-go  = "ReadAltitudeStd"
-cpp = "{0}.readAltitude(1013.25)"
+go     = "ReadAltitudeStd"
+python = "read_altitude_std"
+cpp    = "{0}.readAltitude(1013.25)"
 
 # ── Sampling config ───────────────────────────────────────────────────────────
 [[function]]
-go  = "SetSampling"
-cpp = "{0}.setSampling({1}, {2}, {3}, {4}, {5})"
+go     = "SetSampling"
+python = "set_sampling"
+cpp    = "{0}.setSampling({1}, {2}, {3}, {4}, {5})"
 
 [[function]]
-go  = "ForcedSample"
-cpp = "{0}.takeForcedMeasurement()"
+go     = "ForcedSample"
+python = "forced_sample"
+cpp    = "{0}.takeForcedMeasurement()"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]
-go  = "MODE_NORMAL"
-cpp = "Adafruit_BMP280::MODE_NORMAL"
+go     = "MODE_NORMAL"
+python = "MODE_NORMAL"
+cpp    = "Adafruit_BMP280::MODE_NORMAL"
 
 [[constant]]
-go  = "MODE_FORCED"
-cpp = "Adafruit_BMP280::MODE_FORCED"
+go     = "MODE_FORCED"
+python = "MODE_FORCED"
+cpp    = "Adafruit_BMP280::MODE_FORCED"
 
 [[constant]]
-go  = "MODE_SLEEP"
-cpp = "Adafruit_BMP280::MODE_SLEEP"
+go     = "MODE_SLEEP"
+python = "MODE_SLEEP"
+cpp    = "Adafruit_BMP280::MODE_SLEEP"
 
 [[constant]]
-go  = "SAMPLING_X1"
-cpp = "Adafruit_BMP280::SAMPLING_X1"
+go     = "SAMPLING_X1"
+python = "SAMPLING_X1"
+cpp    = "Adafruit_BMP280::SAMPLING_X1"
 
 [[constant]]
-go  = "SAMPLING_X2"
-cpp = "Adafruit_BMP280::SAMPLING_X2"
+go     = "SAMPLING_X2"
+python = "SAMPLING_X2"
+cpp    = "Adafruit_BMP280::SAMPLING_X2"
 
 [[constant]]
-go  = "SAMPLING_X4"
-cpp = "Adafruit_BMP280::SAMPLING_X4"
+go     = "SAMPLING_X4"
+python = "SAMPLING_X4"
+cpp    = "Adafruit_BMP280::SAMPLING_X4"
 
 [[constant]]
-go  = "SAMPLING_X8"
-cpp = "Adafruit_BMP280::SAMPLING_X8"
+go     = "SAMPLING_X8"
+python = "SAMPLING_X8"
+cpp    = "Adafruit_BMP280::SAMPLING_X8"
 
 [[constant]]
-go  = "SAMPLING_X16"
-cpp = "Adafruit_BMP280::SAMPLING_X16"
+go     = "SAMPLING_X16"
+python = "SAMPLING_X16"
+cpp    = "Adafruit_BMP280::SAMPLING_X16"
 
 [[constant]]
-go  = "FILTER_OFF"
-cpp = "Adafruit_BMP280::FILTER_OFF"
+go     = "FILTER_OFF"
+python = "FILTER_OFF"
+cpp    = "Adafruit_BMP280::FILTER_OFF"
 
 [[constant]]
-go  = "FILTER_X2"
-cpp = "Adafruit_BMP280::FILTER_X2"
+go     = "FILTER_X2"
+python = "FILTER_X2"
+cpp    = "Adafruit_BMP280::FILTER_X2"
 
 [[constant]]
-go  = "FILTER_X4"
-cpp = "Adafruit_BMP280::FILTER_X4"
+go     = "FILTER_X4"
+python = "FILTER_X4"
+cpp    = "Adafruit_BMP280::FILTER_X4"
 
 [[constant]]
-go  = "FILTER_X16"
-cpp = "Adafruit_BMP280::FILTER_X16"
+go     = "FILTER_X16"
+python = "FILTER_X16"
+cpp    = "Adafruit_BMP280::FILTER_X16"
 
 [[constant]]
-go  = "STANDBY_MS_1"
-cpp = "Adafruit_BMP280::STANDBY_MS_1"
+go     = "STANDBY_MS_1"
+python = "STANDBY_MS_1"
+cpp    = "Adafruit_BMP280::STANDBY_MS_1"
 
 [[constant]]
-go  = "STANDBY_MS_63"
-cpp = "Adafruit_BMP280::STANDBY_MS_63"
+go     = "STANDBY_MS_63"
+python = "STANDBY_MS_63"
+cpp    = "Adafruit_BMP280::STANDBY_MS_63"
 
 [[constant]]
-go  = "STANDBY_MS_500"
-cpp = "Adafruit_BMP280::STANDBY_MS_500"
+go     = "STANDBY_MS_500"
+python = "STANDBY_MS_500"
+cpp    = "Adafruit_BMP280::STANDBY_MS_500"
 
 [[constant]]
-go  = "STANDBY_MS_1000"
-cpp = "Adafruit_BMP280::STANDBY_MS_1000"
+go     = "STANDBY_MS_1000"
+python = "STANDBY_MS_1000"
+cpp    = "Adafruit_BMP280::STANDBY_MS_1000"
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 [[example]]
@@ -120,3 +145,9 @@ dir = "examples/basic"
 
 [[example]]
 dir = "examples/altitude_logger"
+
+[[example]]
+dir = "examples/basic_py"
+
+[[example]]
+dir = "examples/altitude_logger_py"

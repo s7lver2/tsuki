@@ -10,98 +10,121 @@ aliases = ["ir", "IRremote"]
 
 # ── Receiver ──────────────────────────────────────────────────────────────────
 [[function]]
-go  = "ReceiverBegin"
-cpp = "IrReceiver.begin({0}, ENABLE_LED_FEEDBACK)"
+go     = "ReceiverBegin"
+python = "receiver_begin"
+cpp    = "IrReceiver.begin({0}, ENABLE_LED_FEEDBACK)"
 
 [[function]]
-go  = "ReceiverBeginNoLed"
-cpp = "IrReceiver.begin({0}, DISABLE_LED_FEEDBACK)"
+go     = "ReceiverBeginNoLed"
+python = "receiver_begin_no_led"
+cpp    = "IrReceiver.begin({0}, DISABLE_LED_FEEDBACK)"
 
 [[function]]
-go  = "DataAvailable"
-cpp = "IrReceiver.decode()"
+go     = "DataAvailable"
+python = "data_available"
+cpp    = "IrReceiver.decode()"
 
 [[function]]
-go  = "Resume"
-cpp = "IrReceiver.resume()"
+go     = "Resume"
+python = "resume"
+cpp    = "IrReceiver.resume()"
 
 [[function]]
-go  = "GetCommand"
-cpp = "IrReceiver.decodedIRData.command"
+go     = "GetCommand"
+python = "get_command"
+cpp    = "IrReceiver.decodedIRData.command"
 
 [[function]]
-go  = "GetAddress"
-cpp = "IrReceiver.decodedIRData.address"
+go     = "GetAddress"
+python = "get_address"
+cpp    = "IrReceiver.decodedIRData.address"
 
 [[function]]
-go  = "GetRawCode"
-cpp = "IrReceiver.decodedIRData.decodedRawData"
+go     = "GetRawCode"
+python = "get_raw_code"
+cpp    = "IrReceiver.decodedIRData.decodedRawData"
 
 [[function]]
-go  = "GetProtocol"
-cpp = "IrReceiver.decodedIRData.protocol"
+go     = "GetProtocol"
+python = "get_protocol"
+cpp    = "IrReceiver.decodedIRData.protocol"
 
 [[function]]
-go  = "PrintResultShort"
-cpp = "IrReceiver.printIRResultShort(&Serial)"
+go     = "PrintResultShort"
+python = "print_result_short"
+cpp    = "IrReceiver.printIRResultShort(&Serial)"
 
 [[function]]
-go  = "PrintResultRaw"
-cpp = "IrReceiver.printIRResultRawFormatted(&Serial, true)"
+go     = "PrintResultRaw"
+python = "print_result_raw"
+cpp    = "IrReceiver.printIRResultRawFormatted(&Serial, true)"
 
 # ── Sender ────────────────────────────────────────────────────────────────────
 [[function]]
-go  = "SenderBegin"
-cpp = "IrSender.begin({0})"
+go     = "SenderBegin"
+python = "sender_begin"
+cpp    = "IrSender.begin({0})"
 
 [[function]]
-go  = "SendNEC"
-cpp = "IrSender.sendNEC({0}, {1}, {2})"
+go     = "SendNEC"
+python = "send_nec"
+cpp    = "IrSender.sendNEC({0}, {1}, {2})"
 
 [[function]]
-go  = "SendSony"
-cpp = "IrSender.sendSony({0}, {1}, {2})"
+go     = "SendSony"
+python = "send_sony"
+cpp    = "IrSender.sendSony({0}, {1}, {2})"
 
 [[function]]
-go  = "SendSamsung"
-cpp = "IrSender.sendSamsung({0}, {1}, {2})"
+go     = "SendSamsung"
+python = "send_samsung"
+cpp    = "IrSender.sendSamsung({0}, {1}, {2})"
 
 [[function]]
-go  = "SendRC5"
-cpp = "IrSender.sendRC5({0}, {1}, {2})"
+go     = "SendRC5"
+python = "send_rc5"
+cpp    = "IrSender.sendRC5({0}, {1}, {2})"
 
 [[function]]
-go  = "SendRC6"
-cpp = "IrSender.sendRC6({0}, {1}, {2})"
+go     = "SendRC6"
+python = "send_rc6"
+cpp    = "IrSender.sendRC6({0}, {1}, {2})"
 
 [[function]]
-go  = "SendRaw"
-cpp = "IrSender.sendRaw({0}, {1}, 38)"
+go     = "SendRaw"
+python = "send_raw"
+cpp    = "IrSender.sendRaw({0}, {1}, 38)"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]
-go  = "PROTOCOL_NEC"
-cpp = "NEC"
+go     = "PROTOCOL_NEC"
+python = "PROTOCOL_NEC"
+cpp    = "NEC"
 
 [[constant]]
-go  = "PROTOCOL_SONY"
-cpp = "SONY"
+go     = "PROTOCOL_SONY"
+python = "PROTOCOL_SONY"
+cpp    = "SONY"
 
 [[constant]]
-go  = "PROTOCOL_SAMSUNG"
-cpp = "SAMSUNG"
+go     = "PROTOCOL_SAMSUNG"
+python = "PROTOCOL_SAMSUNG"
+cpp    = "SAMSUNG"
 
 [[constant]]
-go  = "PROTOCOL_RC5"
-cpp = "RC5"
+go     = "PROTOCOL_RC5"
+python = "PROTOCOL_RC5"
+cpp    = "RC5"
 
 [[constant]]
-go  = "PROTOCOL_RC6"
-cpp = "RC6"
+go     = "PROTOCOL_RC6"
+python = "PROTOCOL_RC6"
+cpp    = "RC6"
 
 [[constant]]
-go  = "PROTOCOL_UNKNOWN"
-cpp = "UNKNOWN"
+go     = "PROTOCOL_UNKNOWN"
+python = "PROTOCOL_UNKNOWN"
+cpp    = "UNKNOWN"
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 [[example]]
@@ -109,3 +132,9 @@ dir = "examples/receiver"
 
 [[example]]
 dir = "examples/sender"
+
+[[example]]
+dir = "examples/receiver_py"
+
+[[example]]
+dir = "examples/sender_py"

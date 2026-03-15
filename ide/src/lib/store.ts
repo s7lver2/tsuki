@@ -5,7 +5,7 @@ import { applyTheme, applyUiScale, applyFontRendering } from './themes'
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'language' | 'developer'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'language' | 'developer' | 'profile'
 
 export interface FileNode {
   id: string
@@ -79,8 +79,29 @@ export interface RecentProject {
   lastOpened: number
 }
 
+// ── Profiles ──────────────────────────────────────────────────────────────────
+
+/**
+ * A named settings profile. Each profile stores its own copy of SettingsState
+ * so users can switch between e.g. "home/AVR" and "work/ESP32" configs.
+ */
+export interface UserProfile {
+  id: string
+  name: string
+  avatarDataUrl: string
+  createdAt: number
+  /** Partial settings overrides for this profile. Merged on top of DEFAULT_SETTINGS when active. */
+  settings: Partial<SettingsState>
+}
+
+function makeProfileId() {
+  return `profile_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+}
+
 export interface SettingsState {
-  // ── CLI ───────────────────────────────────────────────────────────────────
+  // ── Profile ───────────────────────────────────────────────────────────────
+  username: string          // display name shown in the IDE header
+  avatarDataUrl: string     // base64 data URL of the user's profile picture
   tsukiPath: string
   tsukiCorePath: string
   tsukiSimPath: string   // path to tsuki-sim binary (auto-detected by default)
@@ -127,6 +148,7 @@ export interface SettingsState {
   expSandboxEnabled: boolean
   expGitEnabled: boolean
   expLspEnabled: boolean
+  expWorkstationsEnabled: boolean  // Workstation page bar (DaVinci-style Code/Sandbox/Export)
   // ── Developer ─────────────────────────────────────────────────────────────
   developerOptions: boolean
   // ── Language / i18n ──────────────────────────────────────────────────────
@@ -181,7 +203,7 @@ interface AppState {
   setScreen: (s: Screen) => void
   projectName: string
   projectPath: string
-  projectLanguage: 'go' | 'cpp' | 'ino'
+  projectLanguage: 'go' | 'cpp' | 'ino' | 'python'
   board: string
   backend: string
   gitInit: boolean
@@ -226,6 +248,12 @@ interface AppState {
   clearTerminal: () => void
   pendingCommand: { cmd: string; args: string[]; cwd?: string; chainArgs?: string[]; id: number } | null
   dispatchCommand: (cmd: string, args: string[], cwd?: string, chainArgs?: string[]) => void
+  /**
+   * Like dispatchCommand but routes output to the Output tab (addLog) instead
+   * of the Terminal's raw cmdLines area. Used for build/upload toolbar actions.
+   */
+  dispatchBuild: (cmd: string, args: string[], cwd?: string, chainArgs?: string[]) => void
+  pendingBuild: { cmd: string; args: string[]; cwd?: string; chainArgs?: string[]; id: number } | null
   clearPendingCommand: () => void
   pendingCircuit: { data: Record<string, unknown>; id: number } | null
   loadCircuitInSandbox: (data: Record<string, unknown>) => void
@@ -247,6 +275,17 @@ interface AppState {
   refreshTree: () => Promise<void>
   previousScreen: Screen
   goBack: () => void
+  // ── Profiles ───────────────────────────────────────────────────────────────
+  profiles: UserProfile[]
+  activeProfileId: string
+  /** Create a new profile and immediately switch to it. Returns the new profile's id. */
+  createProfile: (name: string, avatarDataUrl?: string, initialSettings?: Partial<SettingsState>) => string
+  /** Switch the active profile, merging its settings over DEFAULT_SETTINGS. */
+  switchProfile: (id: string) => void
+  /** Delete a profile by id. Cannot delete the last remaining profile. */
+  deleteProfile: (id: string) => void
+  /** Update a setting on the currently active profile (persisted in profiles array). */
+  updateProfileField: (id: string, patch: { name?: string; avatarDataUrl?: string }) => void
 }
 
 // ── Templates ─────────────────────────────────────────────────────────────────
@@ -273,11 +312,19 @@ const TEMPLATES_INO: Record<string, string> = {
 
 const TEMPLATES = TEMPLATES_GO
 
+const TEMPLATES_PYTHON: Record<string, string> = {
+  blink: `import arduino\nimport time\n\nLED_PIN: int = 13\n\ndef setup():\n    arduino.pinMode(LED_PIN, arduino.OUTPUT)\n\ndef loop():\n    arduino.digitalWrite(LED_PIN, arduino.HIGH)\n    time.sleep(500 * time.Millisecond)\n    arduino.digitalWrite(LED_PIN, arduino.LOW)\n    time.sleep(500 * time.Millisecond)`,
+  sensor: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(9600)\n\ndef loop():\n    val: int = arduino.analogRead(arduino.A0)\n    print(val)\n    time.sleep(500 * time.Millisecond)`,
+  serial: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(115200)\n    print("Serial ready!")\n\ndef loop():\n    if arduino.Serial.available() > 0:\n        b: int = arduino.Serial.read()\n        print(str(b))`,
+  empty: `import arduino\n\ndef setup():\n    pass\n\ndef loop():\n    pass`,
+}
+
 function templatesForLang(lang: string): Record<string, string> {
   switch (lang) {
-    case 'cpp': return TEMPLATES_CPP
-    case 'ino': return TEMPLATES_INO
-    default:    return TEMPLATES_GO
+    case 'python': return TEMPLATES_PYTHON
+    case 'cpp':    return TEMPLATES_CPP
+    case 'ino':    return TEMPLATES_INO
+    default:       return TEMPLATES_GO
   }
 }
 
@@ -295,6 +342,8 @@ let logId = 0
 
 
 const DEFAULT_SETTINGS: SettingsState = {
+  username: '',
+  avatarDataUrl: '',
   tsukiPath: '',
   tsukiCorePath: '',
   tsukiSimPath: '',      // auto-detect: same dir as tsuki-core or PATH
@@ -338,6 +387,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   expSandboxEnabled: false,
   expGitEnabled: false,
   expLspEnabled: false,
+  expWorkstationsEnabled: false,
   developerOptions: false,
   // advanced
   tsukiFlashPath: '',
@@ -497,25 +547,25 @@ export const useStore = create<AppState>((set, get) => ({
       { id: 'src', name: 'src', type: 'dir', open: true, path: path ? pathJoin(path, 'src') : undefined, children: ['main'] },
       {
         id: 'main',
-        name: language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go',
+        name: language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : language === 'python' ? 'main.py' : 'main.go',
         type: 'file',
-        ext:  language === 'cpp' ? 'cpp' : language === 'ino' ? 'ino' : 'go',
+        ext:  language === 'cpp' ? 'cpp' : language === 'ino' ? 'ino' : language === 'python' ? 'py' : 'go',
         content: mainContent,
-        path: path ? pathJoin(path, 'src', language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go') : undefined,
+        path: path ? pathJoin(path, 'src', language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : language === 'python' ? 'main.py' : 'main.go') : undefined,
         git: 'A',
       },
       { id: 'build', name: 'build', type: 'dir', open: false, path: path ? pathJoin(path, 'build') : undefined, children: [] },
       { id: 'gitignore', name: '.gitignore', type: 'file', ext: 'txt', content: gitignoreContent, path: path ? pathJoin(path, '.gitignore') : undefined, git: 'A' },
     ]
 
-    const mainFileName = language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : 'main.go'
+    const mainFileName = language === 'cpp' ? 'main.cpp' : language === 'ino' ? `${name}.ino` : language === 'python' ? 'main.py' : 'main.go'
     const gitChanges: GitChange[] = [
       { letter: 'A', name: mainFileName,         path: `src/${mainFileName}` },
       { letter: 'A', name: 'tsuki_package.json', path: 'tsuki_package.json' },
       { letter: 'A', name: '.gitignore',          path: '.gitignore' },
     ]
 
-    set({ projectName: name, projectPath: path, projectLanguage: (language as 'go' | 'cpp' | 'ino') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
+    set({ projectName: name, projectPath: path, projectLanguage: (language as 'go' | 'cpp' | 'ino' | 'python') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
 
     if (path) {
       try {
@@ -551,7 +601,7 @@ export const useStore = create<AppState>((set, get) => ({
     let projectName = folder.split(/[/\\]/).pop() ?? 'project'
     let projectBoard = 'uno'
     let projectBackend = 'tsuki-flash'
-    let projectLanguage: 'go' | 'cpp' | 'ino' = 'go'
+    let projectLanguage: 'go' | 'cpp' | 'ino' | 'python' = 'go'
 
     try {
       const { readFile } = await import('./tauri')
@@ -564,7 +614,7 @@ export const useStore = create<AppState>((set, get) => ({
         projectName    = mf.name    ?? projectName
         projectBoard   = mf.board   ?? projectBoard
         projectBackend = mf.backend ?? projectBackend
-        if (mf.language === 'cpp' || mf.language === 'ino') projectLanguage = mf.language
+        if (mf.language === 'cpp' || mf.language === 'ino' || mf.language === 'python') projectLanguage = mf.language
         // Sync installed packages from manifest into store
         if (Array.isArray(mf.packages)) {
           get().syncInstalledPackages(mf.packages)
@@ -592,7 +642,8 @@ export const useStore = create<AppState>((set, get) => ({
           n.name?.endsWith('.ino') ||
           (projectLanguage === 'go' && n.name?.endsWith('.go')) ||
           (projectLanguage === 'cpp' && n.name?.endsWith('.cpp')) ||
-          (projectLanguage === 'ino' && n.name?.endsWith('.ino'))
+          (projectLanguage === 'ino' && n.name?.endsWith('.ino')) ||
+          (projectLanguage === 'python' && n.name?.endsWith('.py'))
         )
       )
       if (mainNode) setTimeout(() => get().openFile(mainNode.id), 50)
@@ -608,7 +659,7 @@ export const useStore = create<AppState>((set, get) => ({
   // ── openExample ────────────────────────────────────────────────────────────
   openExample: ({ name, board, files }) => {
     const exBoard = board ?? get().board ?? 'uno'
-    const mainFile = files.find(f => f.name.endsWith('.go') || f.name === 'main.go' || f.name.endsWith('.ino')) ?? files[0]
+    const mainFile = files.find(f => f.name.endsWith('.go') || f.name === 'main.go' || f.name.endsWith('.ino') || f.name.endsWith('.py')) ?? files[0]
     const manifestContent = manifest(name, exBoard)
 
     // Build tree
@@ -838,7 +889,12 @@ export const useStore = create<AppState>((set, get) => ({
   dispatchCommand: (cmd, args, cwd, chainArgs) => {
     set({ pendingCommand: { cmd, args, cwd, chainArgs, id: Date.now() } })
   },
+  pendingBuild: null,
+  dispatchBuild: (cmd, args, cwd, chainArgs) => {
+    set({ pendingBuild: { cmd, args, cwd, chainArgs, id: Date.now() }, bottomTab: 'output' })
+  },
   clearPendingCommand: () => set({ pendingCommand: null }),
+  clearPendingBuild:   () => set({ pendingBuild: null }),
 
   pendingCircuit: null,
   loadCircuitInSandbox: (data) => set({ pendingCircuit: { data, id: Date.now() } }),
@@ -926,7 +982,112 @@ export const useStore = create<AppState>((set, get) => ({
       set({ tree: merged })
     } catch (e) { get().addLog('err', `refreshTree failed: ${e}`) }
   },
+  // ── Profiles ───────────────────────────────────────────────────────────────
+
+  profiles: loadProfiles(),
+  activeProfileId: loadActiveProfileId(),
+
+  createProfile: (name, avatarDataUrl = '', initialSettings = {}) => {
+    const id = makeProfileId()
+    const profile: UserProfile = {
+      id,
+      name: name.trim() || 'New Profile',
+      avatarDataUrl,
+      createdAt: Date.now(),
+      settings: { username: name.trim(), avatarDataUrl, ...initialSettings },
+    }
+    const profiles = [...get().profiles, profile]
+    const merged: SettingsState = { ...DEFAULT_SETTINGS, ...get().settings, ...profile.settings }
+    set({ profiles, activeProfileId: id, settings: merged })
+    saveProfiles(profiles)
+    saveActiveProfileId(id)
+    return id
+  },
+
+  switchProfile: (id) => {
+    const profiles = get().profiles
+    const profile = profiles.find(p => p.id === id)
+    if (!profile) return
+    const currentId = get().activeProfileId
+    const updatedProfiles = profiles.map(p =>
+      p.id === currentId ? { ...p, settings: { ...get().settings } } : p
+    )
+    const merged: SettingsState = { ...DEFAULT_SETTINGS, ...profile.settings }
+    set({ activeProfileId: id, profiles: updatedProfiles, settings: merged })
+    saveProfiles(updatedProfiles)
+    saveActiveProfileId(id)
+  },
+
+  deleteProfile: (id) => {
+    const profiles = get().profiles
+    if (profiles.length <= 1) return
+    const next = profiles.filter(p => p.id !== id)
+    let activeProfileId = get().activeProfileId
+    if (activeProfileId === id) {
+      activeProfileId = next[0].id
+      const merged: SettingsState = { ...DEFAULT_SETTINGS, ...next[0].settings }
+      set({ settings: merged })
+    }
+    set({ profiles: next, activeProfileId })
+    saveProfiles(next)
+    saveActiveProfileId(activeProfileId)
+  },
+
+  updateProfileField: (id, patch) => {
+    const profiles = get().profiles.map(p => {
+      if (p.id !== id) return p
+      return {
+        ...p,
+        name:          patch.name          !== undefined ? patch.name          : p.name,
+        avatarDataUrl: patch.avatarDataUrl !== undefined ? patch.avatarDataUrl : p.avatarDataUrl,
+        settings: {
+          ...p.settings,
+          ...(patch.name          !== undefined ? { username: patch.name }              : {}),
+          ...(patch.avatarDataUrl !== undefined ? { avatarDataUrl: patch.avatarDataUrl } : {}),
+        },
+      }
+    })
+    set({ profiles })
+    if (id === get().activeProfileId) {
+      const ps = profiles.find(p => p.id === id)
+      if (ps) set({ settings: { ...get().settings, ...ps.settings } })
+    }
+    saveProfiles(profiles)
+  },
+
+
 }))
+
+
+// ── Profile persistence helpers ───────────────────────────────────────────────
+
+const PROFILES_KEY      = 'tsuki_profiles'
+const ACTIVE_PROFILE_KEY = 'tsuki_active_profile'
+
+function loadProfiles(): UserProfile[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(PROFILES_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as UserProfile[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+
+function saveProfiles(profiles: UserProfile[]) {
+  if (typeof window === 'undefined') return
+  try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)) } catch {}
+}
+
+function loadActiveProfileId(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(ACTIVE_PROFILE_KEY) ?? ''
+}
+
+function saveActiveProfileId(id: string) {
+  if (typeof window === 'undefined') return
+  try { localStorage.setItem(ACTIVE_PROFILE_KEY, id) } catch {}
+}
 
 // ── Bootstrap: load persisted settings and apply theme on startup ─────────────
 

@@ -250,8 +250,9 @@ export function useSimRunner(
     if (simRunning) { handleStop(); return }
     if (!code.trim()) {
       const hint =
-        projectLanguage === 'cpp' ? 'a .cpp file' :
-        projectLanguage === 'ino' ? 'a .ino file' : 'a .go file'
+        projectLanguage === 'cpp'    ? 'a .cpp file' :
+        projectLanguage === 'ino'    ? 'a .ino file' :
+        projectLanguage === 'python' ? 'a .py file'  : 'a .go file'
       setSimLog([{ t: 0, level: 'err', msg: `⚠ No file open — open ${hint} first` }])
       return
     }
@@ -272,9 +273,10 @@ export function useSimRunner(
         const hasMcu = cur.components.some(c => COMP_DEFS[c.type]?.category === 'mcu')
         if (hasMcu) return cur
         const usedPins = new Set<number>()
-        const reC  = /digitalWrite\s*\(\s*(\w+)\s*,/g
-        const reGo = /arduino\.DigitalWrite\s*\(\s*(\w+)\s*,/g
-        for (const re of [reC, reGo]) {
+        const reC   = /digitalWrite\s*\(\s*(\w+)\s*,/g
+        const reGo  = /arduino\.DigitalWrite\s*\(\s*(\w+)\s*,/g
+        const rePy  = /arduino\.digitalWrite\s*\(\s*(\w+)\s*,/g
+        for (const re of [reC, reGo, rePy]) {
           let m: RegExpExecArray | null
           while ((m = re.exec(code)) !== null) {
             const n = parseInt(m[1])
@@ -306,9 +308,9 @@ export function useSimRunner(
         return { ...cur, components: newComps, wires: newWires }
       })
 
-      // Transpile
+      // Transpile (pass language so PythonPipeline is used for .py projects)
       try {
-        await emitSimBundle(code, boardName, bundlePath)
+        await emitSimBundle(code, boardName, bundlePath, projectLanguage === 'python' ? 'python' : 'go')
       } catch (e) {
         setSimLoadError(e instanceof Error ? e.message : String(e))
         setSimStatus('error')

@@ -8,112 +8,144 @@ arduino_lib = "U8g2"
 
 aliases = ["U8g2", "oled"]
 
-# ── Constructor ───────────────────────────────────────────────────────────────
+# ── Constructors ──────────────────────────────────────────────────────────────
 [[function]]
-go  = "NewSSD1306_128x64"
-cpp = "U8G2_SSD1306_128X64_NONAME_F_HW_I2C({0}, U8X8_PIN_NONE)"
+go     = "NewSSD1306_128x64"
+python = "new_ssd1306_128x64"
+cpp    = "U8G2_SSD1306_128X64_NONAME_F_HW_I2C({0}, U8X8_PIN_NONE)"
 
 [[function]]
-go  = "NewSH1106_128x64"
-cpp = "U8G2_SH1106_128X64_NONAME_F_HW_I2C({0}, U8X8_PIN_NONE)"
+go     = "NewSH1106_128x64"
+python = "new_sh1106_128x64"
+cpp    = "U8G2_SH1106_128X64_NONAME_F_HW_I2C({0}, U8X8_PIN_NONE)"
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 [[function]]
-go  = "Begin"
-cpp = "{0}.begin()"
+go     = "Begin"
+python = "begin"
+cpp    = "{0}.begin()"
 
 [[function]]
-go  = "ClearBuffer"
-cpp = "{0}.clearBuffer()"
+go     = "ClearBuffer"
+python = "clear_buffer"
+cpp    = "{0}.clearBuffer()"
 
 [[function]]
-go  = "SendBuffer"
-cpp = "{0}.sendBuffer()"
+go     = "SendBuffer"
+python = "send_buffer"
+cpp    = "{0}.sendBuffer()"
 
 [[function]]
-go  = "Clear"
-cpp = "{0}.clear()"
+go     = "Clear"
+python = "clear"
+cpp    = "{0}.clear()"
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 [[function]]
-go  = "SetFont"
-cpp = "{0}.setFont({1})"
+go     = "SetFont"
+python = "set_font"
+cpp    = "{0}.setFont({1})"
 
 [[function]]
-go  = "DrawStr"
-cpp = "{0}.drawStr({1}, {2}, {3})"
+go     = "DrawStr"
+python = "draw_str"
+cpp    = "{0}.drawStr({1}, {2}, {3})"
 
 [[function]]
-go  = "DrawBox"
-cpp = "{0}.drawBox({1}, {2}, {3}, {4})"
+go     = "DrawBox"
+python = "draw_box"
+cpp    = "{0}.drawBox({1}, {2}, {3}, {4})"
 
 [[function]]
-go  = "DrawFrame"
-cpp = "{0}.drawFrame({1}, {2}, {3}, {4})"
+go     = "DrawFrame"
+python = "draw_frame"
+cpp    = "{0}.drawFrame({1}, {2}, {3}, {4})"
 
 [[function]]
-go  = "DrawCircle"
-cpp = "{0}.drawCircle({1}, {2}, {3})"
+go     = "DrawCircle"
+python = "draw_circle"
+cpp    = "{0}.drawCircle({1}, {2}, {3})"
 
 [[function]]
-go  = "DrawDisc"
-cpp = "{0}.drawDisc({1}, {2}, {3})"
+go     = "DrawDisc"
+python = "draw_disc"
+cpp    = "{0}.drawDisc({1}, {2}, {3})"
 
 [[function]]
-go  = "DrawLine"
-cpp = "{0}.drawLine({1}, {2}, {3}, {4})"
+go     = "DrawLine"
+python = "draw_line"
+cpp    = "{0}.drawLine({1}, {2}, {3}, {4})"
 
 [[function]]
-go  = "DrawPixel"
-cpp = "{0}.drawPixel({1}, {2})"
+go     = "DrawPixel"
+python = "draw_pixel"
+cpp    = "{0}.drawPixel({1}, {2})"
 
 [[function]]
-go  = "DrawBitmap"
-cpp = "{0}.drawBitmap({1}, {2}, {3}, {4}, {5})"
+go     = "DrawBitmap"
+python = "draw_bitmap"
+cpp    = "{0}.drawBitmap({1}, {2}, {3}, {4}, {5})"
 
 [[function]]
-go  = "SetDrawColor"
-cpp = "{0}.setDrawColor({1})"
+go     = "SetDrawColor"
+python = "set_draw_color"
+cpp    = "{0}.setDrawColor({1})"
 
 [[function]]
-go  = "GetDisplayWidth"
-cpp = "{0}.getDisplayWidth()"
+go     = "GetDisplayWidth"
+python = "get_display_width"
+cpp    = "{0}.getDisplayWidth()"
 
 [[function]]
-go  = "GetDisplayHeight"
-cpp = "{0}.getDisplayHeight()"
+go     = "GetDisplayHeight"
+python = "get_display_height"
+cpp    = "{0}.getDisplayHeight()"
 
 [[function]]
-go  = "SetContrast"
-cpp = "{0}.setContrast({1})"
+go     = "SetContrast"
+python = "set_contrast"
+cpp    = "{0}.setContrast({1})"
 
 [[function]]
-go  = "SetFlipMode"
-cpp = "{0}.setFlipMode({1})"
+go     = "SetFlipMode"
+python = "set_flip_mode"
+cpp    = "{0}.setFlipMode({1})"
 
 [[function]]
-go  = "SetPowerSave"
-cpp = "{0}.setPowerSave({1})"
+go     = "SetPowerSave"
+python = "set_power_save"
+cpp    = "{0}.setPowerSave({1})"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 [[constant]]
-go  = "ROTATION_R0"
-cpp = "U8G2_R0"
+go     = "ROTATION_R0"
+python = "ROTATION_R0"
+cpp    = "U8G2_R0"
 
 [[constant]]
-go  = "ROTATION_R1"
-cpp = "U8G2_R1"
+go     = "ROTATION_R1"
+python = "ROTATION_R1"
+cpp    = "U8G2_R1"
 
 [[constant]]
-go  = "ROTATION_R2"
-cpp = "U8G2_R2"
+go     = "ROTATION_R2"
+python = "ROTATION_R2"
+cpp    = "U8G2_R2"
 
 [[constant]]
-go  = "ROTATION_R3"
-cpp = "U8G2_R3"
+go     = "ROTATION_R3"
+python = "ROTATION_R3"
+cpp    = "U8G2_R3"
+
 # ── Examples ──────────────────────────────────────────────────────────────────
 [[example]]
 dir = "examples/hello_world"
 
 [[example]]
 dir = "examples/counter"
+
+[[example]]
+dir = "examples/hello_world_py"
+
+[[example]]
+dir = "examples/counter_py"

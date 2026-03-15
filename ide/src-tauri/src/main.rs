@@ -1187,16 +1187,29 @@ async fn transpile_source(source: String, board: String) -> Result<String, Strin
 /// Transpile a Go source string and write a .sim.json bundle to disk.
 /// Used by the Sandbox panel (replaces: tsuki-core <src> --emit-sim <bundle>).
 #[tauri::command]
-async fn emit_sim_bundle(source: String, board: String, bundle_path: String) -> Result<(), String> {
-    use tsuki_core::{Pipeline, TranspileConfig};
+async fn emit_sim_bundle(source: String, board: String, bundle_path: String, lang: Option<String>) -> Result<(), String> {
+    use tsuki_core::{Pipeline, PythonPipeline, TranspileConfig};
     let cfg = TranspileConfig { board: board.clone(), ..Default::default() };
-    let cpp = Pipeline::new(cfg)
-        .run(&source, "main.go")
-        .map_err(|e| tsuki_core::pretty_error(&e, &source))?;
+
+    let language = lang.as_deref().unwrap_or("go");
+    let (cpp, filename) = match language {
+        "python" | "py" => {
+            let cpp = PythonPipeline::new(cfg)
+                .run(&source, "main.py")
+                .map_err(|e| tsuki_core::pretty_error(&e, &source))?;
+            (cpp, "main.py")
+        }
+        _ => {
+            let cpp = Pipeline::new(cfg)
+                .run(&source, "main.go")
+                .map_err(|e| tsuki_core::pretty_error(&e, &source))?;
+            (cpp, "main.go")
+        }
+    };
 
     let bundle = serde_json::json!({
         "source":   source,
-        "filename": "main.go",
+        "filename": filename,
         "board":    board,
         "cpp":      cpp,
     });

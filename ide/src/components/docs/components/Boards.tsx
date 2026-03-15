@@ -541,7 +541,7 @@ interface BoardMeta {
   tsukiId: string
   chip: string
   badge: string
-  diagram: React.ReactNode
+  Diagram: React.ComponentType
   specs: SpecRow[]
   desc: string
 }
@@ -554,7 +554,7 @@ const BOARDS: BoardMeta[] = [
     chip: 'ATmega328P',
     badge: 'AVR',
     desc: 'The classic. 5 V I/O, 2 KB SRAM, 32 KB flash. Best board for learning tsuki — every example targets Uno by default.',
-    diagram: <ArduinoUnoPinout />,
+    Diagram: ArduinoUnoPinout,
     specs: UNO_SPECS,
   },
   {
@@ -564,7 +564,7 @@ const BOARDS: BoardMeta[] = [
     chip: 'ESP8266EX',
     badge: 'ESP',
     desc: 'Compact Wi-Fi board. 3.3 V I/O, 80 KB SRAM, 4 MB flash. Use it for IoT projects — HTTP, MQTT, and WebSocket work out of the box.',
-    diagram: <WemosD1Pinout />,
+    Diagram: WemosD1Pinout,
     specs: WEMOS_SPECS,
   },
   {
@@ -574,7 +574,7 @@ const BOARDS: BoardMeta[] = [
     chip: 'RP2040',
     badge: 'RP2',
     desc: 'Tiny 21×17.5 mm powerhouse. Dual-core Cortex-M0+ at 133 MHz, 264 KB SRAM, 2 MB flash, USB-C and an onboard NeoPixel RGB LED. 3.3 V I/O only.',
-    diagram: <XiaoRp2040Pinout />,
+    Diagram: XiaoRp2040Pinout,
     specs: XIAO_SPECS,
   },
 ]
@@ -643,7 +643,7 @@ export default function BoardsPage() {
       {/* Pinout */}
       <H2>Pinout</H2>
       <P>Hover any pin to see its mode, voltage, and available functions.</P>
-      {board.diagram}
+      {board.Diagram && <board.Diagram />}
 
       {/* Specs */}
       <H2>Specifications</H2>

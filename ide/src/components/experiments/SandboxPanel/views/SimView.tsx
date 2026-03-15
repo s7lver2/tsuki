@@ -246,8 +246,21 @@ export default function SimView(props: SimViewProps) {
   } = props
 
   const { openTabs, activeTabIdx, board, settings, projectLanguage } = useStore()
-  const activeTab    = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
   const showCurrentFlow = settings.showCurrentFlow
+
+  // Find the main source file for the current language — this is what the
+  // simulator should always use, regardless of which tab is currently active.
+  const sourceExt = projectLanguage === 'python' ? '.py'
+                  : projectLanguage === 'cpp'    ? '.cpp'
+                  : projectLanguage === 'ino'    ? '.ino'
+                  :                                '.go'
+
+  const mainTab = openTabs.find(t => t.name?.endsWith(sourceExt))
+               ?? openTabs.find(t => ['main.go','main.py','main.cpp'].includes(t.name ?? ''))
+               ?? (activeTabIdx >= 0 ? openTabs[activeTabIdx] : null)
+
+  // For the UI indicator, also keep track of the active tab name
+  const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
 
   const analogPins  = getAnalogInputPins(circuit)
   const digitalPins = getDigitalInputPins(circuit)
@@ -266,7 +279,7 @@ export default function SimView(props: SimViewProps) {
         <button
           onClick={simRunning
             ? handleStop
-            : () => handleRun(activeTab?.content ?? '', board || 'uno')}
+            : () => handleRun(mainTab?.content ?? '', board || 'uno')}
           disabled={simStatus === 'loading'}
           className={clsx(
             'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer border-0 transition-colors',
@@ -292,14 +305,14 @@ export default function SimView(props: SimViewProps) {
 
         <div className="flex-1" />
 
-        {activeTab ? (
+        {mainTab ? (
           <span className="text-[10px] text-[var(--ok)] flex items-center gap-1">
-            <CheckCircle2 size={9} /> {activeTab.name}
+            <CheckCircle2 size={9} /> {mainTab.name}
           </span>
         ) : (
           <span className="text-[10px] text-[var(--fg-faint)] flex items-center gap-1">
             <AlertCircle size={9} />
-            {projectLanguage === 'cpp' ? 'Open a .cpp file' : projectLanguage === 'ino' ? 'Open a .ino file' : 'Open a .go file'}
+            {projectLanguage === 'cpp' ? 'Open a .cpp file' : projectLanguage === 'ino' ? 'Open a .ino file' : projectLanguage === 'python' ? 'Open a .py file' : 'Open a .go file'}
           </span>
         )}
 

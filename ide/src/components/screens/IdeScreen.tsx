@@ -12,17 +12,28 @@ import BottomPanel from '@/components/other/BottomPanel'
 import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
-  Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, ChevronLeft, BookOpen,
+  Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, BookOpen,
+  Code2, Share2, Layers,
 } from 'lucide-react'
+import type { ElementType } from 'react'
 import { clsx } from 'clsx'
 import TsukiLogo from '@/components/shared/TsukiLogo'
 import { showContextMenu } from '@/components/shared/ContextMenu'
 import { useT } from '@/lib/i18n'
 
-
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
   'esp32','esp32s2','esp32c3','esp8266','d1_mini','nodemcu','pico','xiao_rp2040',
+]
+
+// ── Workstation pages ─────────────────────────────────────────────────────────
+
+type Workstation = 'code' | 'sandbox' | 'export'
+
+const WORKSTATIONS: { id: Workstation; label: string; Icon: ElementType; shortcut: string }[] = [
+  { id: 'code',    label: 'Code',    Icon: Code2,  shortcut: '1' },
+  { id: 'sandbox', label: 'Sandbox', Icon: Cpu,    shortcut: '2' },
+  { id: 'export',  label: 'Export',  Icon: Share2, shortcut: '3' },
 ]
 
 export default function IdeScreen() {
@@ -36,16 +47,26 @@ export default function IdeScreen() {
 
   const t = useT()
   const [showNewProjectModal, setShowNewProjectModal] = useState(false)
-  const [sandboxOpen, setSandboxOpen] = useState(false)
 
+  // Legacy sandbox panel (used when workstations are OFF)
+  const [sandboxOpen, setSandboxOpen] = useState(false)
   const [sandboxWidth, setSandboxWidth] = useState(480)
   const [resizingSandbox, setResizingSandbox] = useState(false)
   const [resizingSidebar, setResizingSidebar] = useState(false)
 
-  // Auto-open sandbox when a circuit is dispatched from Examples panel
+  // Workstation page (used when workstations experiment is ON)
+  const [workstation, setWorkstation] = useState<Workstation>('code')
+
+  const workstationsEnabled = settings.experimentsEnabled && settings.expWorkstationsEnabled
+  const sandboxEnabled      = settings.experimentsEnabled && settings.expSandboxEnabled
+
+  // Auto-open sandbox when a circuit is dispatched from Examples
   const pendingCircuit = useStore(s => s.pendingCircuit)
   useEffect(() => {
-    if (pendingCircuit && settings.experimentsEnabled && settings.expSandboxEnabled) {
+    if (!pendingCircuit) return
+    if (workstationsEnabled) {
+      setWorkstation('sandbox')
+    } else if (sandboxEnabled) {
       setSandboxOpen(true)
     }
   }, [pendingCircuit?.id]) // eslint-disable-line
@@ -59,7 +80,6 @@ export default function IdeScreen() {
   const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^\"|\"$/g, '')
   const cwd   = projectPath || undefined
 
-  /** Build a tsuki args array, appending --board and --verbose as configured. */
   function makeArgs(verb: string, ...extra: string[]): string[] {
     const args = [verb, ...extra]
     if (board)            args.push('--board', board)
@@ -75,12 +95,10 @@ export default function IdeScreen() {
   function handleCheck()   { dispatch(makeArgs('check')) }
   function handleBuild()   { dispatch(makeArgs('build', '--compile')) }
   function handleFlash()   { dispatch(makeArgs('upload')) }
-
   function handleRun() {
     setBottomTab('terminal')
     dispatchCommand(tsuki, makeArgs('build', '--compile'), cwd, makeArgs('upload'))
   }
-
   function handleMonitor() {
     const args = makeArgs('monitor')
     if (settings.defaultBaud && settings.defaultBaud !== '9600') args.push('--baud', settings.defaultBaud)
@@ -96,6 +114,12 @@ export default function IdeScreen() {
       if (e.key === 'T' && e.shiftKey)  { e.preventDefault(); handleCheck();   return }
       if (e.key === 'U' && e.shiftKey)  { e.preventDefault(); handleFlash();   return }
       if (e.key === 'm' && !e.shiftKey) { e.preventDefault(); handleMonitor(); return }
+      // Workstation shortcuts: Ctrl+1/2/3 when workstations enabled
+      if (workstationsEnabled) {
+        if (e.key === '1') { setWorkstation('code'); return }
+        if (e.key === '2') { setWorkstation('sandbox'); return }
+        if (e.key === '3') { setWorkstation('export'); return }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -118,7 +142,7 @@ export default function IdeScreen() {
     }
   }, [])
 
-  // ── Sandbox resize handle ──
+  // Sandbox resize (legacy mode)
   useEffect(() => {
     if (!resizingSandbox) return
     function onMove(e: MouseEvent) {
@@ -130,11 +154,11 @@ export default function IdeScreen() {
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [resizingSandbox])
 
-  // ── Sidebar resize handle ──
+  // Sidebar resize
   useEffect(() => {
     if (!resizingSidebar) return
     function onMove(e: MouseEvent) {
-      const newW = Math.max(140, Math.min(480, e.clientX - 40)) // 40px = activity bar
+      const newW = Math.max(140, Math.min(480, e.clientX - 40))
       updateSetting('sidebarWidth', newW)
       updateSetting('ideLayout', 'custom')
     }
@@ -176,7 +200,6 @@ export default function IdeScreen() {
 
         <Divider vertical />
 
-        {/* Check: only relevant for Go projects (tsuki check transpiles & validates Go) */}
         {projectLanguage === 'go' && (
           <Btn variant="ghost" size="xs" onClick={handleCheck}
             title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
@@ -212,22 +235,22 @@ export default function IdeScreen() {
 
         <div className="flex-1" />
 
-        {/* ── Sandbox toggle (only when experiment enabled) ── */}
-        {settings.experimentsEnabled && settings.expSandboxEnabled && (
-        <button
-          onClick={() => setSandboxOpen(o => !o)}
-          title="Tsuki Sandbox — Arduino circuit simulator"
-          className={clsx(
-            'flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium transition-colors cursor-pointer flex-shrink-0',
-            sandboxOpen
-              ? 'bg-[var(--active)] border-[var(--border)] text-[var(--fg)]'
-              : 'bg-transparent border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-          )}
-        >
-          <Cpu size={11} />
-          {t('topbar.sandbox')}
-          <span className="text-[9px] opacity-60 font-mono">β</span>
-        </button>
+        {/* Legacy sandbox toggle — only shown when workstations are OFF */}
+        {!workstationsEnabled && sandboxEnabled && (
+          <button
+            onClick={() => setSandboxOpen(o => !o)}
+            title="Tsuki Sandbox — Arduino circuit simulator"
+            className={clsx(
+              'flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium transition-colors cursor-pointer flex-shrink-0',
+              sandboxOpen
+                ? 'bg-[var(--active)] border-[var(--border)] text-[var(--fg)]'
+                : 'bg-transparent border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+            )}
+          >
+            <Cpu size={11} />
+            {t('topbar.sandbox')}
+            <span className="text-[9px] opacity-60 font-mono">β</span>
+          </button>
         )}
 
         <Btn variant="ghost" size="xs" onClick={toggleTheme}>
@@ -245,7 +268,7 @@ export default function IdeScreen() {
       </div>
 
       {/* ── Body ── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
 
         {/* Activity bar */}
         <div className="w-10 flex flex-col items-center py-1.5 gap-0.5 border-r border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
@@ -303,107 +326,301 @@ export default function IdeScreen() {
           </div>
         )}
 
-        {/* Editor + bottom panel */}
+        {/* ── Main content area ── */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
-          {/* Tab bar */}
-          <div
-            className="flex items-end h-8 bg-[var(--surface-1)] border-b border-[var(--border)] overflow-x-auto flex-shrink-0 gap-0.5 px-1 pt-1"
-            style={{ scrollbarWidth: 'none' }}
-          >
-            {openTabs.map((tab, i) => (
-              <div
-                key={tab.fileId}
-                onClick={() => openFile(tab.fileId)}
-                onContextMenu={e => showContextMenu(e, [
-                  { label: t('editor.closeTab'),    action: () => closeTab(i) },
-                  { label: t('editor.closeOthers'), action: () => openTabs.forEach((_, j) => j !== i && closeTab(j > i ? openTabs.length - 1 - (j - i) : j)), sep: false },
-                  { label: 'Copy filename',     action: () => navigator.clipboard.writeText(tab.name).catch(() => {}), sep: true },
-                  { label: t('editor.save'),    shortcut: 'Ctrl+S', action: () => saveActiveFile() },
-                ])}
-                className={clsx(
-                  'flex items-center gap-1.5 px-3 h-full rounded-t border-t cursor-pointer text-xs font-medium transition-colors flex-shrink-0 group',
-                  i === activeTabIdx
-                    ? 'bg-[var(--surface)] border-[var(--border)] border-x text-[var(--fg)]'
-                    : 'bg-transparent border-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
-                )}
-              >
-                {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-[var(--fg-muted)]" />}
-                <span>{tab.name}</span>
-                <button
-                  onClick={e => { e.stopPropagation(); closeTab(i) }}
-                  className="w-4 h-4 flex items-center justify-center rounded transition-colors border-0 bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--active)] opacity-0 group-hover:opacity-100"
-                >
-                  <X size={10} />
-                </button>
+          {/* When workstations are enabled, show the active workstation page */}
+          {workstationsEnabled ? (
+            <>
+              {/* Code workstation */}
+              <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'code' && 'hidden')}>
+                <CodeWorkstation
+                  openTabs={openTabs}
+                  activeTabIdx={activeTabIdx}
+                  activeNode={activeNode}
+                  parentNode={parentNode}
+                  projectName={projectName}
+                  openFile={openFile}
+                  closeTab={closeTab}
+                  saveActiveFile={saveActiveFile}
+                  showContextMenu={showContextMenu}
+                  t={t}
+                />
               </div>
-            ))}
-          </div>
 
-          {/* Breadcrumb */}
-          {activeNode && (
-            <div className="h-6 flex items-center px-3 gap-1 border-b border-[var(--border-subtle)] bg-[var(--surface)] text-xs text-[var(--fg-muted)] flex-shrink-0">
-              <span>{projectName}</span>
-              {parentNode && (
-                <><ChevronRight size={10} className="text-[var(--fg-faint)]" />
-                  <span>{parentNode.name}</span></>
-              )}
-              <ChevronRight size={10} className="text-[var(--fg-faint)]" />
-              <span className="text-[var(--fg)]">{activeNode.name}</span>
-            </div>
+              {/* Sandbox workstation */}
+              <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'sandbox' && 'hidden')}>
+                <SandboxWorkstation />
+              </div>
+
+              {/* Export workstation */}
+              <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'export' && 'hidden')}>
+                <ExportWorkstation board={board} projectName={projectName} />
+              </div>
+
+              {/* Bottom panel always visible in code workstation, hidden in others */}
+              {workstation === 'code' && <BottomPanel />}
+            </>
+          ) : (
+            /* Legacy layout — editor + sandbox side panel */
+            <>
+              <div className="flex flex-1 overflow-hidden min-h-0">
+                {/* Editor column */}
+                <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+                  {/* Tab bar */}
+                  <div
+                    className="flex items-end h-8 bg-[var(--surface-1)] border-b border-[var(--border)] overflow-x-auto flex-shrink-0 gap-0.5 px-1 pt-1"
+                    style={{ scrollbarWidth: 'none' }}
+                  >
+                    {openTabs.map((tab, i) => (
+                      <div
+                        key={tab.fileId}
+                        onClick={() => openFile(tab.fileId)}
+                        onContextMenu={e => showContextMenu(e, [
+                          { label: t('editor.closeTab'),    action: () => closeTab(i) },
+                          { label: 'Copy filename', action: () => navigator.clipboard.writeText(tab.name).catch(() => {}), sep: true },
+                          { label: t('editor.save'), shortcut: 'Ctrl+S', action: () => saveActiveFile() },
+                        ])}
+                        className={clsx(
+                          'flex items-center gap-1.5 px-3 h-full rounded-t border-t cursor-pointer text-xs font-medium transition-colors flex-shrink-0 group',
+                          i === activeTabIdx
+                            ? 'bg-[var(--surface)] border-[var(--border)] border-x text-[var(--fg)]'
+                            : 'bg-transparent border-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
+                        )}
+                      >
+                        {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-[var(--fg-muted)]" />}
+                        <span>{tab.name}</span>
+                        <button
+                          onClick={e => { e.stopPropagation(); closeTab(i) }}
+                          className="w-4 h-4 flex items-center justify-center rounded transition-colors border-0 bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--active)] opacity-0 group-hover:opacity-100"
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {activeNode && (
+                    <div className="h-6 flex items-center px-3 gap-1 border-b border-[var(--border-subtle)] bg-[var(--surface)] text-xs text-[var(--fg-muted)] flex-shrink-0">
+                      <span>{projectName}</span>
+                      {parentNode && (
+                        <><ChevronRight size={10} className="text-[var(--fg-faint)]" />
+                          <span>{parentNode.name}</span></>
+                      )}
+                      <ChevronRight size={10} className="text-[var(--fg-faint)]" />
+                      <span className="text-[var(--fg)]">{activeNode.name}</span>
+                    </div>
+                  )}
+
+                  <div className="flex-1 flex overflow-hidden">
+                    <CodeEditor />
+                  </div>
+                </div>
+
+                {/* Legacy sandbox side panel */}
+                {sandboxEnabled && sandboxOpen && (
+                  <>
+                    <div
+                      className="w-[3px] bg-[var(--border)] hover:bg-[var(--fg-faint)] cursor-col-resize flex-shrink-0 transition-colors"
+                      onMouseDown={() => setResizingSandbox(true)}
+                    />
+                    <div
+                      className="flex flex-col border-l border-[var(--border)] bg-[var(--surface)] flex-shrink-0 overflow-hidden"
+                      style={{ width: sandboxWidth }}
+                    >
+                      <SandboxPanel onClose={() => setSandboxOpen(false)} />
+                    </div>
+                  </>
+                )}
+
+                {sandboxEnabled && !sandboxOpen && (
+                  <div className="w-6 border-l border-[var(--border)] bg-[var(--surface-1)] flex flex-col items-center py-2 flex-shrink-0">
+                    <button
+                      onClick={() => setSandboxOpen(true)}
+                      title="Open Tsuki Sandbox"
+                      className="w-5 flex flex-col items-center gap-0 text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent transition-colors py-1"
+                    >
+                      <Cpu size={12} />
+                      <span
+                        className="text-[8px] font-semibold uppercase tracking-widest mt-2"
+                        style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
+                      >
+                        Sandbox
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <BottomPanel />
+            </>
           )}
-
-          <div className="flex-1 flex overflow-hidden">
-            <CodeEditor />
-          </div>
-
-          <BottomPanel />
         </div>
-
-        {/* ── Sandbox right panel (experiment-gated) ── */}
-        {settings.experimentsEnabled && settings.expSandboxEnabled && sandboxOpen && (
-          <>
-            {/* Resize handle */}
-            <div
-              className="w-[3px] bg-[var(--border)] hover:bg-[var(--fg-faint)] cursor-col-resize flex-shrink-0 transition-colors"
-              onMouseDown={() => setResizingSandbox(true)}
-            />
-            {/* Panel */}
-            <div
-              className="flex flex-col border-l border-[var(--border)] bg-[var(--surface)] flex-shrink-0 overflow-hidden"
-              style={{ width: sandboxWidth }}
-            >
-              <SandboxPanel onClose={() => setSandboxOpen(false)} />
-            </div>
-          </>
-        )}
-
-        {/* Collapsed sandbox tab (experiment-gated) */}
-        {settings.experimentsEnabled && settings.expSandboxEnabled && !sandboxOpen && (
-          <div className="w-6 border-l border-[var(--border)] bg-[var(--surface-1)] flex flex-col items-center py-2 flex-shrink-0">
-            <button
-              onClick={() => setSandboxOpen(true)}
-              title="Open Tsuki Sandbox"
-              className="w-5 flex flex-col items-center gap-0 text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent transition-colors py-1"
-            >
-              <Cpu size={12} />
-              <span
-                className="text-[8px] font-semibold uppercase tracking-widest mt-2"
-                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
-              >
-                Sandbox
-              </span>
-            </button>
-          </div>
-        )}
       </div>
+
+      {/* ── Workstation bar (DaVinci-style) — only when experiment enabled ── */}
+      {workstationsEnabled && (
+        <WorkstationBar
+          active={workstation}
+          onSelect={setWorkstation}
+        />
+      )}
 
       <StatusBar tsuki={tsuki} />
 
       {showNewProjectModal && (
         <NewProjectModal onClose={() => setShowNewProjectModal(false)} />
       )}
+    </div>
+  )
+}
 
+// ── Workstation bar ───────────────────────────────────────────────────────────
+
+function WorkstationBar({
+  active, onSelect,
+}: {
+  active: Workstation
+  onSelect: (w: Workstation) => void
+}) {
+  return (
+    <div className="h-9 flex items-center justify-center gap-0 border-t border-[var(--border)] bg-[var(--surface-2)] flex-shrink-0 px-2 select-none">
+      <div className="flex items-center gap-px rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--surface-3)]">
+        {WORKSTATIONS.map((ws, i) => (
+          <button
+            key={ws.id}
+            onClick={() => onSelect(ws.id)}
+            title={`${ws.label} (Ctrl+${ws.shortcut})`}
+            className={clsx(
+              'flex items-center gap-1.5 px-4 h-7 text-xs font-semibold transition-all cursor-pointer border-0 relative',
+              active === ws.id
+                ? 'bg-[var(--surface-1)] text-[var(--fg)] shadow-sm'
+                : 'bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
+              i > 0 && active !== ws.id && active !== WORKSTATIONS[i - 1].id && 'border-l border-[var(--border)]',
+            )}
+          >
+            <ws.Icon size={13} />
+            <span className="tracking-wide uppercase text-[10px]">{ws.label}</span>
+            {active === ws.id && (
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[var(--fg)]" />
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Code workstation ──────────────────────────────────────────────────────────
+
+function CodeWorkstation({
+  openTabs, activeTabIdx, activeNode, parentNode, projectName,
+  openFile, closeTab, saveActiveFile, showContextMenu, t,
+}: any) {
+  return (
+    <>
+      {/* Tab bar */}
+      <div
+        className="flex items-end h-8 bg-[var(--surface-1)] border-b border-[var(--border)] overflow-x-auto flex-shrink-0 gap-0.5 px-1 pt-1"
+        style={{ scrollbarWidth: 'none' }}
+      >
+        {openTabs.map((tab: any, i: number) => (
+          <div
+            key={tab.fileId}
+            onClick={() => openFile(tab.fileId)}
+            onContextMenu={(e: React.MouseEvent) => showContextMenu(e, [
+              { label: t('editor.closeTab'),    action: () => closeTab(i) },
+              { label: 'Copy filename', action: () => navigator.clipboard.writeText(tab.name).catch(() => {}), sep: true },
+              { label: t('editor.save'), shortcut: 'Ctrl+S', action: () => saveActiveFile() },
+            ])}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 h-full rounded-t border-t cursor-pointer text-xs font-medium transition-colors flex-shrink-0 group',
+              i === activeTabIdx
+                ? 'bg-[var(--surface)] border-[var(--border)] border-x text-[var(--fg)]'
+                : 'bg-transparent border-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
+            )}
+          >
+            {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-[var(--fg-muted)]" />}
+            <span>{tab.name}</span>
+            <button
+              onClick={(e: React.MouseEvent) => { e.stopPropagation(); closeTab(i) }}
+              className="w-4 h-4 flex items-center justify-center rounded transition-colors border-0 bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--active)] opacity-0 group-hover:opacity-100"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Breadcrumb */}
+      {activeNode && (
+        <div className="h-6 flex items-center px-3 gap-1 border-b border-[var(--border-subtle)] bg-[var(--surface)] text-xs text-[var(--fg-muted)] flex-shrink-0">
+          <span>{projectName}</span>
+          {parentNode && (
+            <><ChevronRight size={10} className="text-[var(--fg-faint)]" />
+              <span>{parentNode.name}</span></>
+          )}
+          <ChevronRight size={10} className="text-[var(--fg-faint)]" />
+          <span className="text-[var(--fg)]">{activeNode.name}</span>
+        </div>
+      )}
+
+      {/* Editor */}
+      <div className="flex-1 flex overflow-hidden">
+        <CodeEditor />
+      </div>
+    </>
+  )
+}
+
+// ── Sandbox workstation ───────────────────────────────────────────────────────
+
+function SandboxWorkstation() {
+  const { settings } = useStore()
+  const sandboxEnabled = settings.experimentsEnabled && settings.expSandboxEnabled
+
+  if (!sandboxEnabled) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 text-[var(--fg-faint)]">
+        <Cpu size={32} className="opacity-30" />
+        <div className="text-center">
+          <p className="text-sm font-medium text-[var(--fg-muted)]">Sandbox not enabled</p>
+          <p className="text-xs mt-1">Enable the <strong className="text-[var(--fg-muted)]">Sandbox</strong> experiment in Settings → Experiments.</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* SandboxPanel in full-width mode — no close button needed */}
+      <SandboxPanel fullscreen />
+    </div>
+  )
+}
+
+// ── Export workstation ────────────────────────────────────────────────────────
+
+function ExportWorkstation({ board, projectName }: { board: string; projectName: string }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-[var(--fg-faint)]">
+      <Share2 size={32} className="opacity-30" />
+      <div className="text-center max-w-sm">
+        <p className="text-sm font-semibold text-[var(--fg-muted)] mb-1">Export workstation</p>
+        <p className="text-xs leading-relaxed">
+          Release builds, OTA packaging, and deployment options will appear here.
+          <br />
+          <span className="text-[var(--fg-faint)] opacity-60 italic mt-2 block">Coming soon.</span>
+        </p>
+      </div>
+      {projectName && (
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] text-xs font-mono text-[var(--fg-muted)]">
+          <span className="text-[var(--fg-faint)]">project</span>
+          <span className="text-[var(--fg)]">{projectName}</span>
+          <span className="text-[var(--fg-faint)]">board</span>
+          <span className="text-[var(--fg)]">{board}</span>
+        </div>
+      )}
     </div>
   )
 }
