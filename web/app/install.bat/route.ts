@@ -1,109 +1,77 @@
 import { NextResponse } from "next/server";
 
-const GITHUB_REPO = "s7lver/tsuki";
+const GITHUB_REPO = "s7lver2/tsuki";
 
-const script = `@echo off
-setlocal EnableDelayedExpansion
-chcp 65001 >nul 2>&1
+const script = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
 
-:: tsuki installer for Windows
-:: Usage: irm https://tsuki.sh/install.bat | iex
-:: ──────────────────────────────────────────────
+$repo    = "${GITHUB_REPO}"
+$tempDir = "$env:TEMP\\tsuki-install-$([System.IO.Path]::GetRandomFileName())"
 
-set "GITHUB_REPO=${GITHUB_REPO}"
-set "TSUKI_HOME=%USERPROFILE%\\.tsuki"
-set "INSTALL_DIR=%TSUKI_HOME%\\bin"
-set "TEMP_DIR=%TEMP%\\tsuki-install-%RANDOM%"
+Write-Host ""
+Write-Host "  tsuki installer"
+Write-Host "  ---------------------------"
+Write-Host ""
 
-echo.
-echo   tsuki installer
-echo   ---------------------------
-echo.
+# ── Detect architecture ────────────────────────────────────────────
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $env:PROCESSOR_ARCHITEW6432 -eq "ARM64") { "arm64" } else { "x64" }
+Write-Host "  Detected platform: windows/$arch"
 
-:: ── Check PowerShell ────────────────────────────────
-where powershell >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   [ERROR] PowerShell is required but not found.
-    exit /b 1
-)
+New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
-:: ── Detect architecture ─────────────────────────────
-set "ARCH_TYPE=amd64"
-if "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ARCH_TYPE=arm64"
-if "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "ARCH_TYPE=arm64"
+try {
+    # ── Fetch latest stable release (skip pre-releases) ───────────
+    Write-Host "  Fetching latest release..."
+    $releases = Invoke-RestMethod "https://api.github.com/repos/$repo/releases"
+    $release  = $releases | Where-Object { -not $_.prerelease -and -not $_.draft } | Select-Object -First 1
 
-echo   Detected platform: windows/%ARCH_TYPE%
+    if (-not $release) {
+        throw "No stable release found."
+    }
 
-:: ── Create temp dir ─────────────────────────────────
-mkdir "%TEMP_DIR%" 2>nul
+    $version = $release.tag_name
+    Write-Host "  Latest stable version: $version"
 
-:: ── Fetch latest release via PowerShell ─────────────
-echo   Fetching latest release...
+    # ── Find the installer asset ───────────────────────────────────
+    $assetName = "tsuki-$version-windows-$arch-setup.exe"
+    $asset     = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
 
-powershell -NoProfile -Command ^
-  "$r = Invoke-RestMethod 'https://api.github.com/repos/%GITHUB_REPO%/releases/latest'; ^
-   $r.tag_name | Out-File '%TEMP_DIR%\\version.txt' -Encoding UTF8 -NoNewline"
+    if (-not $asset) {
+        # fallback: any .exe asset in the release
+        $asset = $release.assets | Where-Object { $_.name -like "*windows*$arch*.exe" -or $_.name -like "*setup*.exe" } | Select-Object -First 1
+    }
 
-if %errorlevel% neq 0 (
-    echo   [ERROR] Failed to fetch latest release. Check your internet connection.
-    goto :cleanup
-)
+    if (-not $asset) {
+        throw "No installer (.exe) found in release $version. Assets: $($release.assets.name -join ', ')"
+    }
 
-set /p LATEST=<"%TEMP_DIR%\\version.txt"
-echo   Latest version: %LATEST%
+    $exePath = "$tempDir\\$($asset.name)"
 
-:: ── Download ─────────────────────────────────────────
-set "FILENAME=tsuki-windows-%ARCH_TYPE%.zip"
-set "DOWNLOAD_URL=https://github.com/%GITHUB_REPO%/releases/download/%LATEST%/%FILENAME%"
+    # ── Download ───────────────────────────────────────────────────
+    Write-Host "  Downloading $($asset.name)..."
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $exePath -UseBasicParsing
 
-echo   Downloading tsuki %LATEST%...
+    # ── Run installer ──────────────────────────────────────────────
+    Write-Host "  Launching installer..."
+    Start-Process -FilePath $exePath -ArgumentList "/SILENT", "/NORESTART" -Wait
 
-powershell -NoProfile -Command ^
-  "Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TEMP_DIR%\\tsuki.zip' -UseBasicParsing"
+    Write-Host ""
+    Write-Host "  tsuki $version installed successfully!"
+    Write-Host "  ------------------------------------------"
+    Write-Host "  Run: tsuki --help"
+    Write-Host "  Docs: https://tsuki.s7lver.xyz/docs"
+    Write-Host ""
+    Write-Host "  NOTE: Restart your terminal for PATH changes to take effect."
+    Write-Host ""
 
-if %errorlevel% neq 0 (
-    echo   [ERROR] Download failed.
-    goto :cleanup
-)
-
-:: ── Extract ───────────────────────────────────────────
-echo   Extracting...
-
-powershell -NoProfile -Command ^
-  "Expand-Archive -Path '%TEMP_DIR%\\tsuki.zip' -DestinationPath '%TEMP_DIR%' -Force"
-
-:: ── Install ───────────────────────────────────────────
-echo   Installing to %INSTALL_DIR%...
-
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-
-copy /y "%TEMP_DIR%\\tsuki.exe" "%INSTALL_DIR%\\tsuki.exe" >nul
-if %errorlevel% neq 0 (
-    echo   [ERROR] Failed to copy tsuki.exe to %INSTALL_DIR%
-    goto :cleanup
-)
-
-:: ── Add to PATH ───────────────────────────────────────
-powershell -NoProfile -Command ^
-  "$path = [Environment]::GetEnvironmentVariable('PATH', 'User'); ^
-   if ($path -notlike '*%INSTALL_DIR%*') { ^
-     [Environment]::SetEnvironmentVariable('PATH', $path + ';%INSTALL_DIR%', 'User'); ^
-     Write-Host '   Added %INSTALL_DIR% to PATH.' ^
-   }"
-
-:: ── Done ──────────────────────────────────────────────
-echo.
-echo   tsuki %LATEST% installed successfully!
-echo   ------------------------------------------
-echo   Run: tsuki --help
-echo   Docs: https://tsuki.sh/docs
-echo.
-echo   NOTE: Restart your terminal for PATH changes to take effect.
-echo.
-
-:cleanup
-if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%" 2>nul
-endlocal
+} catch {
+    Write-Host ""
+    Write-Host "  [ERROR] $_" -ForegroundColor Red
+    Write-Host ""
+} finally {
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
+}
 `;
 
 export async function GET() {
@@ -111,7 +79,7 @@ export async function GET() {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-cache, no-store, must-revalidate",
-      "Content-Disposition": "inline; filename=install.bat",
+      "Content-Disposition": "inline; filename=install.ps1",
     },
   });
 }

@@ -152,7 +152,13 @@ function ComponentBody({ comp, def, simPinValues }: {
       return <RgbLedBody w={w} h={h} r={r} gr={gr} b={b} g={g} />
     }
     case 'buzzer':        return <BuzzerBody      w={w} h={h} active={(simPinValues[`${id}:pos`]    ?? 0) > 0} />
-    case 'servo':         return <ServoBody       w={w} h={h} val={simPinValues[`${id}:signal`] ?? 0} g={g} />
+    case 'servo': {
+      // tsuki-sim emits servo angle 0-180 via Servo.write(); ServoBody expects 0-1
+      // analogWrite(0-255) fallback: if value > 180 treat as 0-255
+      const rawVal = simPinValues[`${id}:signal`] ?? 0
+      const val    = rawVal > 180 ? rawVal / 255 : rawVal > 1 ? rawVal / 180 : rawVal
+      return <ServoBody w={w} h={h} val={val} g={g} />
+    }
     case 'lcd_16x2': {
       const lines = [
         simPinValues[`${id}:lcd_line0`] ? String(simPinValues[`${id}:lcd_line0`]) : '',

@@ -40,7 +40,7 @@ export default function Nav() {
             { label: "Benchmark",  href: "#benchmark"  },
             { label: "Transpiler", href: "#demo"       },
             { label: "IDE",        href: "#ide"        },
-            { label: "GitHub",     href: "https://github.com/s7lver/tsuki", external: true },
+            { label: "GitHub",     href: "https://github.com/s7lver2/tsuki", external: true },
           ].map(l => (
             <a key={l.label} href={l.href}
               target={(l as any).external ? "_blank" : undefined}

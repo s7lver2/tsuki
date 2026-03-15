@@ -75,69 +75,115 @@ export function L298nBody({ w, h, g }: { w: number; h: number; g: string }) {
 export function BreadboardBody({ w, h, simPinValues = {}, id = '' }: {
   w: number; h: number; simPinValues?: Record<string, number>; id?: string
 }) {
-  const ROW_STEP  = (0.455 - 0.09) / 4          // 0.09125
-  const rowsTop   = Array.from({ length: 5 }, (_, i) => 0.09  + i * ROW_STEP)
-  const rowsBot   = Array.from({ length: 5 }, (_, i) => 0.525 + i * ROW_STEP)
-  const colsLeft  = [0.06, 0.143, 0.226, 0.309, 0.392]
-  const colsRight = [0.52, 0.603, 0.686, 0.769, 0.852]
-  const allRows   = [...rowsTop, ...rowsBot]
+  // ── Grid constants — must match SandboxDefs.ts breadboard pin rx/ry exactly ──
+  // Uniform pitch p = 0.090, margin = (1 − 9p) / 2 = 0.095
+  // Left  (a–e): 0.095, 0.185, 0.275, 0.365, 0.455
+  // Gap center:  0.500  (gap width = 0.090, same as pin pitch)
+  // Right (f–j): 0.545, 0.635, 0.725, 0.815, 0.905
+  const colsLeft  = [0.095, 0.185, 0.275, 0.365, 0.455]
+  const colsRight = [0.545, 0.635, 0.725, 0.815, 0.905]
+  const allCols   = [...colsLeft, ...colsRight]
+  const rows      = [0.100, 0.190, 0.280, 0.370, 0.460, 0.550, 0.640, 0.730, 0.820, 0.910]
   const LETTERS   = ['a','b','c','d','e','f','g','h','i','j']
+  const HOLE_R    = 3.0   // radius in SVG units — larger = easier to target
+  const GLOW_R    = 5.5
 
   const isActive = (pinId: string) => id ? (simPinValues[`${id}:${pinId}`] ?? 0) > 0 : false
 
   return (
     <>
-      {/* Base */}
-      <rect width={w} height={h} rx={4} fill="#f5f0e0" stroke="#c8c090" strokeWidth={1} />
-      <rect x={2} y={2} width={w-4} height={h-4} rx={3} fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth={0.5} />
+      {/* ── Base board ── */}
+      <rect width={w} height={h} rx={5} fill="#f5f0e0" stroke="#c8b870" strokeWidth={1.2} />
+      <rect x={2} y={2} width={w-4} height={h-4} rx={4}
+        fill="none" stroke="rgba(255,255,255,0.50)" strokeWidth={0.6} />
 
-      {/* Row lane tints */}
-      {allRows.map((ry, i) => (
-        <rect key={i} x={w*0.01} y={h*ry - 4.5} width={w*0.98} height={9}
-          rx={1} fill={i % 2 === 0 ? 'rgba(0,0,0,0.03)' : 'transparent'} />
+      {/* ── Alternating row tint bands (across full width, excluding center gap) ── */}
+      {rows.map((ry, i) => (
+        i % 2 === 0 ? (
+          <rect key={i}
+            x={w*0.005} y={h*ry - h*0.038}
+            width={w*0.990} height={h*0.076}
+            rx={2} fill="rgba(0,0,0,0.025)" />
+        ) : null
       ))}
 
-      {/* Center gap divider */}
-      <rect x={w*0.435} y={h*0.02} width={w*0.13} height={h*0.96}
-        fill="#ddd5b8" stroke="#c0b080" strokeWidth={0.6} rx={3} />
-      <text x={w*0.5} y={h*0.5 + 3} textAnchor="middle" fontSize={4} fill="#aaa"
-        fontFamily="monospace" writingMode="tb" letterSpacing={1}>· · · · · · ·</text>
+      {/* ── Center gap (vertical notch between cols e and f) ── */}
+      {/* e=0.455, f=0.545 → gap rect from 0.463 to 0.537 (0.008 clearance each side from hole edge) */}
+      <rect x={w*0.463} y={h*0.020} width={w*0.074} height={h*0.960}
+        fill="#ddd5b8" stroke="#c0a870" strokeWidth={0.6} rx={3} />
 
-      {/* Holes with live signal feedback */}
-      {allRows.map((ry, ri) =>
-        [...colsLeft, ...colsRight].map((cx, ci) => {
+      {/* ── Column labels — top ── */}
+      {LETTERS.slice(0, 5).map((l, i) => (
+        <text key={`lt${l}`} x={w*colsLeft[i]} y={h*0.040}
+          fontSize={6} fill="#888" fontFamily="monospace" textAnchor="middle" fontWeight="600">
+          {l}
+        </text>
+      ))}
+      {LETTERS.slice(5).map((l, i) => (
+        <text key={`rt${l}`} x={w*colsRight[i]} y={h*0.040}
+          fontSize={6} fill="#888" fontFamily="monospace" textAnchor="middle" fontWeight="600">
+          {l}
+        </text>
+      ))}
+
+      {/* ── Column labels — bottom ── */}
+      {LETTERS.slice(0, 5).map((l, i) => (
+        <text key={`lb${l}`} x={w*colsLeft[i]} y={h*0.976}
+          fontSize={6} fill="#888" fontFamily="monospace" textAnchor="middle" fontWeight="600">
+          {l}
+        </text>
+      ))}
+      {LETTERS.slice(5).map((l, i) => (
+        <text key={`rb${l}`} x={w*colsRight[i]} y={h*0.976}
+          fontSize={6} fill="#888" fontFamily="monospace" textAnchor="middle" fontWeight="600">
+          {l}
+        </text>
+      ))}
+
+      {/* ── Row numbers — left margin ── */}
+      {rows.map((ry, i) => (
+        <text key={`rowL${i}`} x={w*0.012} y={h*ry + 2}
+          fontSize={5} fill="#bbb" fontFamily="monospace" textAnchor="start">
+          {i + 1}
+        </text>
+      ))}
+
+      {/* ── Row numbers — right margin ── */}
+      {rows.map((ry, i) => (
+        <text key={`rowR${i}`} x={w*0.988} y={h*ry + 2}
+          fontSize={5} fill="#bbb" fontFamily="monospace" textAnchor="end">
+          {i + 1}
+        </text>
+      ))}
+
+      {/* ── Holes — rendered last so they sit on top ── */}
+      {rows.map((ry, ri) =>
+        allCols.map((cx, ci) => {
           const pinId  = `${LETTERS[ci]}${ri + 1}`
           const active = isActive(pinId)
           return (
             <g key={`${ri}-${ci}`}>
+              {/* Glow ring when active */}
               {active && (
-                <circle cx={w*cx} cy={h*ry} r={4.5}
-                  fill="#22c55e" opacity={0.25} />
+                <circle cx={w*cx} cy={h*ry} r={GLOW_R}
+                  fill="#22c55e" opacity={0.22} />
               )}
-              <circle cx={w*cx} cy={h*ry} r={2.4}
-                fill={active ? '#22c55e' : '#111'}
-                stroke={active ? '#16a34a' : '#000'}
-                strokeWidth={0.3} />
+              {/* Hole rim (metallic ring) */}
+              <circle cx={w*cx} cy={h*ry} r={HOLE_R + 0.8}
+                fill={active ? '#15803d' : '#6b6040'}
+                opacity={0.55} />
+              {/* Hole center */}
+              <circle cx={w*cx} cy={h*ry} r={HOLE_R}
+                fill={active ? '#22c55e' : '#1a1508'}
+                stroke={active ? '#16a34a' : '#0a0800'}
+                strokeWidth={0.4} />
+              {/* Inner specular dot */}
+              <circle cx={w*cx - HOLE_R*0.28} cy={h*ry - HOLE_R*0.28} r={HOLE_R*0.28}
+                fill="rgba(255,255,255,0.12)" />
             </g>
           )
         })
       )}
-
-      {/* Column labels (top) */}
-      {['a','b','c','d','e'].map((l, i) => (
-        <text key={l} x={w*colsLeft[i]} y={h*0.028} fontSize={4.5} fill="#999"
-          fontFamily="monospace" textAnchor="middle">{l}</text>
-      ))}
-      {['f','g','h','i','j'].map((l, i) => (
-        <text key={l} x={w*colsRight[i]} y={h*0.028} fontSize={4.5} fill="#999"
-          fontFamily="monospace" textAnchor="middle">{l}</text>
-      ))}
-
-      {/* Row numbers (left margin) */}
-      {allRows.map((ry, i) => (
-        <text key={i} x={w*0.012} y={h*ry + 1.8} fontSize={4} fill="#bbb"
-          fontFamily="monospace" textAnchor="start">{i + 1}</text>
-      ))}
     </>
   )
 }

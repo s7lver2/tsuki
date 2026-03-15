@@ -84,8 +84,9 @@ export async function spawnProcess(
 
   let pid: number
   try {
+    // 'exeCmd' not 'cmd' — avoids Tauri 1.x IPC dispatch key collision
     pid = await invoke<number>('spawn_process', {
-      cmd,
+      exeCmd: cmd,
       args,
       cwd: cwd ?? null,
       eventId,
@@ -205,6 +206,17 @@ export async function renamePath(oldPath: string, newPath: string): Promise<void
 
 export interface DirEntry { name: string; is_dir: boolean }
 
+/** Returns true if the given path exists on the filesystem. */
+export async function pathExists(path: string): Promise<boolean> {
+  if (!isTauri()) return false
+  try {
+    await invoke<void>('check_path_exists', { path })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function readDirEntries(path: string): Promise<DirEntry[]> {
   if (!isTauri()) {
     console.error('[tsuki-ide] readDirEntries: no estamos en Tauri, path:', path)
@@ -285,14 +297,20 @@ export async function spawnShell(
 
   let pid: number
   try {
+    console.log(
+      `[spawn_shell:ts] shell=${JSON.stringify(shell)} cwd=${cwd ?? 'null'} eventId=${eventId}`
+    )
     pid = await invoke<number>('spawn_shell', {
       shellId:   shell.id,
       shellPath: shell.path,
       cwd:       cwd ?? null,
       eventId,
     })
+    console.log(`[spawn_shell:ts] ok pid=${pid} shell=${shell.id}`)
   } catch (e) {
-    console.error('[tsuki-ide] spawn_shell falló:', e)
+    console.error(
+      `[spawn_shell:ts] FAILED shell=${JSON.stringify(shell)} cwd=${cwd ?? 'null'} err=${e}`
+    )
     onLine(`ERROR al lanzar shell: ${e}`, true)
     unsubs.forEach((f) => f())
     resolveDone(1)
@@ -508,8 +526,12 @@ export async function ptyCreate(
   env?:  Array<[string, string]>,   // [[key,value],…] — Rust expects Vec<[String;2]>
 ): Promise<void> {
   if (!isTauri()) throw new Error('ptyCreate: not in Tauri')
+  // NOTE: pass 'shellCmd' not 'cmd' — Tauri 1.x uses the 'cmd' key in the
+  // IPC payload to dispatch to the handler. Passing a key named 'cmd' would
+  // overwrite the dispatch field with the shell path, causing Tauri to look
+  // for a handler named e.g. "C:\Windows\system32\cmd.exe" and fail.
   return invoke<void>('pty_create', {
-    id, cmd, args, cwd: cwd ?? null, cols, rows,
+    id, shellCmd: cmd, args, cwd: cwd ?? null, cols, rows,
     env: env ?? null,
   })
 }
@@ -541,4 +563,108 @@ export async function ptyOnExit(
   handler: (code: number) => void,
 ): Promise<() => void> {
   return listen(`pty://${id}:exit`, handler as (payload: unknown) => void)
+}
+// ── Debug / logging system ────────────────────────────────────────────────────
+//
+// When debugMode is enabled in settings AND we're inside Tauri, all
+// console.log / console.warn / console.error calls are intercepted and
+// forwarded to the Rust backend, which appends them to the debug log file.
+//
+// The patch is applied once (installDebugLogger) and is idempotent.
+// Call it from app startup after settings are loaded.
+
+let _debugPatchInstalled = false
+
+/** Send a message to the Rust debug logger. No-op outside Tauri or if not patched. */
+export async function logFrontend(level: 'log' | 'warn' | 'error', message: string): Promise<void> {
+  if (!isTauri()) return
+  try {
+    await invoke<void>('log_frontend', { level, message })
+  } catch {
+    // Swallow — never let logging break the app
+  }
+}
+
+/**
+ * Patches console.log / console.warn / console.error so every call is also
+ * forwarded to the Rust debug logger. Call this once at app startup when
+ * debugMode === true. It is idempotent and safe to call multiple times.
+ */
+export function installDebugLogger(): void {
+  if (_debugPatchInstalled || !isTauri()) return
+  _debugPatchInstalled = true
+
+  const original = {
+    log:   console.log.bind(console),
+    warn:  console.warn.bind(console),
+    error: console.error.bind(console),
+  }
+
+  function fmt(args: unknown[]): string {
+    return args.map(a => {
+      if (typeof a === 'string') return a
+      try { return JSON.stringify(a) } catch { return String(a) }
+    }).join(' ')
+  }
+
+  console.log = (...args: unknown[]) => {
+    original.log(...args)
+    logFrontend('log', fmt(args)).catch(() => {})
+  }
+  console.warn = (...args: unknown[]) => {
+    original.warn(...args)
+    logFrontend('warn', fmt(args)).catch(() => {})
+  }
+  console.error = (...args: unknown[]) => {
+    original.error(...args)
+    logFrontend('error', fmt(args)).catch(() => {})
+  }
+
+  // Also capture unhandled promise rejections and JS errors
+  if (typeof window !== 'undefined') {
+    window.addEventListener('unhandledrejection', (e) => {
+      logFrontend('error', `[unhandledRejection] ${e.reason}`).catch(() => {})
+    })
+    window.addEventListener('error', (e) => {
+      logFrontend('error', `[uncaughtError] ${e.message} @ ${e.filename}:${e.lineno}`).catch(() => {})
+    })
+  }
+
+  logFrontend('log', '=== debug logger installed ===').catch(() => {})
+}
+
+/** Returns the OS path of the debug log file. */
+export async function getDebugLogPath(): Promise<string> {
+  if (!isTauri()) return '/tmp/tsuki-ide-debug.log'
+  return invoke<string>('get_debug_log_path')
+}
+
+/** Opens the debug log in the OS default text editor. */
+export async function openDebugLog(): Promise<void> {
+  if (!isTauri()) return
+  return invoke<void>('open_debug_log')
+}
+
+/** Clears / truncates the debug log file. */
+export async function clearDebugLog(): Promise<void> {
+  if (!isTauri()) return
+  return invoke<void>('clear_debug_log')
+}
+
+/** Returns the last `lines` lines from the debug log as a single string. */
+export async function tailDebugLog(lines = 200): Promise<string> {
+  if (!isTauri()) return ''
+  return invoke<string>('tail_debug_log', { lines })
+}
+
+/** Push live category-flag changes to Rust without requiring a restart. */
+export async function setLogCategories(cats: Record<string, boolean>): Promise<void> {
+  if (!isTauri()) return
+  return invoke<void>('set_log_categories', { categories: cats })
+}
+
+/** Run a full system diagnostics check and return a human-readable report. */
+export async function runDiagnostics(): Promise<string> {
+  if (!isTauri()) return '(diagnostics only available inside Tauri)'
+  return invoke<string>('run_diagnostics')
 }

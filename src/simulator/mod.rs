@@ -157,6 +157,10 @@ pub struct Simulator {
     pins:       PinState,
     virtual_ms: f64,
     setup_done: bool,
+    /// Maps servo variable name → attached pin number (from Servo.attach / s.Attach)
+    servo_pins: HashMap<String, usize>,
+    /// Maps pin number → current tone frequency (0 = silent)
+    tone_pins:  HashMap<usize, u32>,
 }
 
 impl Simulator {
@@ -179,6 +183,8 @@ impl Simulator {
         for (k, v) in builtins { globals.insert(k.into(), v); }
 
         let mut functions: HashMap<String, (Vec<String>, Block)> = HashMap::new();
+        // Servo variable names detected from type annotations (pre-populated before any call)
+        let mut servo_vars: Vec<String> = Vec::new();
 
         // ── Collect top-level declarations ────────────────────────────────────
         for decl in &prog.decls {
@@ -188,11 +194,19 @@ impl Simulator {
                     let v = eval_const_expr(val, &globals);
                     globals.insert(name.clone(), v);
                 }
-                Decl::Var { name, init, .. } => {
+                Decl::Var { name, ty, init, .. } => {
                     let v = init.as_ref()
                         .map(|e| eval_const_expr(e, &globals))
                         .unwrap_or(Value::Int(0));
                     globals.insert(name.clone(), v);
+                    // Pre-register servo variables so method-style calls (s.Attach/Write)
+                    // are recognised before the first s.Attach() executes.
+                    // var s Servo.Servo → Type::Named("Servo.Servo")
+                    if let Some(crate::parser::ast::Type::Named(type_name)) = ty {
+                        if type_name.to_ascii_lowercase().contains("servo") {
+                            servo_vars.push(name.clone());
+                        }
+                    }
                 }
                 Decl::Func { name, sig, body: Some(body), recv: None, .. } => {
                     let params: Vec<String> = sig.params.iter()
@@ -204,12 +218,21 @@ impl Simulator {
             }
         }
 
+        // Pre-populate servo_pins for all detected Servo.Servo variables.
+        // usize::MAX means "declared but not yet attached to a pin".
+        let mut servo_pins_init: HashMap<String, usize> = HashMap::new();
+        for var_name in servo_vars {
+            servo_pins_init.insert(var_name, usize::MAX);
+        }
+
         Ok(Simulator {
             globals,
             functions,
             pins: PinState::default(),
             virtual_ms: 0.0,
             setup_done: false,
+            servo_pins: servo_pins_init,
+            tone_pins:  HashMap::new(),
         })
     }
 
@@ -339,6 +362,92 @@ impl Simulator {
             return self.math_builtin(m, args);
         }
 
+        // Servo library — three calling conventions from tsuki Go:
+        //
+        //   Package-style:  Servo.Attach(myServo, pin)
+        //     pkg="Servo", sub="",       args=[0(servo_zero_val), pin]
+        //     → ao=1 to skip the dummy servo value
+        //
+        //   Method-style A: s.Attach(pin)   (s is var s Servo.Servo)
+        //     pkg="s",      sub="",       args=[pin]
+        //     → ao=0, detected via servo_pins pre-population
+        //
+        //   Method-style B: s.Attach(pin) via double-select (rare)
+        //     pkg="s",      sub="Servo",  args=[pin]
+        //     → ao=0
+        //
+        // The key insight: pkg=="Servo" means package-style → ao=1.
+        // Any other pkg that is in servo_pins means method-style → ao=0.
+        let pkg_lower = pkg.to_ascii_lowercase();
+        let sub_lower = sub.to_ascii_lowercase();
+        let is_pkg_servo  = pkg_lower == "servo";
+        let is_sub_servo  = sub_lower == "servo";
+        let is_known_servo_var = self.servo_pins.contains_key(pkg);
+        if is_pkg_servo || is_sub_servo || is_known_servo_var {
+            // Variable name: for pkg-style it is encoded in args[0] name (unknown here),
+            // so we use pkg as key when pkg!="Servo", otherwise use sub.
+            let var_name = if is_pkg_servo && !is_sub_servo {
+                // Package-style: Servo.Attach(myServo, pin)
+                // We don't know the actual variable name from here, use a canonical key.
+                // If sub is empty this is top-level Servo.X(var, ...) — use "Servo" as key.
+                if sub.is_empty() { "Servo".to_string() } else { sub.to_string() }
+            } else if is_sub_servo {
+                // Double-select: s.Servo.Attach — pkg is the var name
+                pkg.to_string()
+            } else {
+                // Method-style: s.Attach — pkg is the var name
+                pkg.to_string()
+            };
+            // Arg offset: package-style (pkg=="Servo") passes the servo instance as args[0]
+            let ao: usize = if is_pkg_servo { 1 } else { 0 };
+            match m {
+                "attach" => {
+                    let pin = args.get(ao).map(|v| v.as_int() as usize).unwrap_or(0);
+                    self.servo_pins.insert(var_name, pin);
+                    return Value::Nil;
+                }
+                "write" => {
+                    let angle = args.get(ao).map(|v| v.as_f64()).unwrap_or(0.0)
+                        .clamp(0.0, 180.0) as u16;
+                    if let Some(&pin) = self.servo_pins.get(&var_name) {
+                        self.pins.set_value(pin, angle);
+                        events.push(SimEvent {
+                            t_ms: self.virtual_ms,
+                            kind: "aw".into(),
+                            pin:  Some(pin as u8),
+                            val:  Some(angle),
+                            msg:  None,
+                        });
+                    }
+                    return Value::Nil;
+                }
+                "read" => {
+                    if let Some(&pin) = self.servo_pins.get(&var_name) {
+                        return Value::Int(self.pins.get_value(pin) as i64);
+                    }
+                    return Value::Int(0);
+                }
+                "writeMicroseconds" | "writemicroseconds" => {
+                    // Map microseconds (500-2500) to angle (0-180)
+                    let us = args.get(ao).map(|v| v.as_f64()).unwrap_or(1500.0)
+                        .clamp(500.0, 2500.0);
+                    let angle = ((us - 500.0) / 2000.0 * 180.0) as u16;
+                    if let Some(&pin) = self.servo_pins.get(&var_name) {
+                        self.pins.set_value(pin, angle);
+                        events.push(SimEvent {
+                            t_ms: self.virtual_ms,
+                            kind: "aw".into(),
+                            pin:  Some(pin as u8),
+                            val:  Some(angle),
+                            msg:  None,
+                        });
+                    }
+                    return Value::Nil;
+                }
+                _ => return Value::Nil,
+            }
+        }
+
         // Unknown — try as user function
         if !pkg.is_empty() && sub.is_empty() {
             // Could be a user-defined function named `method` in package `pkg`
@@ -422,7 +531,29 @@ impl Simulator {
             "sqrt" => { let v = args.get(0).map(|v| v.as_f64()).unwrap_or(0.0); Value::Float(v.sqrt()) }
             "pow"  => { let b = args.get(0).map(|v| v.as_f64()).unwrap_or(0.0); let e = args.get(1).map(|v| v.as_f64()).unwrap_or(0.0); Value::Float(b.powf(e)) }
             "random" => { let hi = args.get(0).map(|v| v.as_int()).unwrap_or(100); Value::Int(hi / 3) }
-            "tone" | "notone" | "attachinterrupt" | "detachinterrupt" | "interrupts" | "nointerrupts" => Value::Nil,
+            "tone" => {
+                let pin  = args.get(0).map(|v| v.as_int() as usize).unwrap_or(0);
+                let freq = args.get(1).map(|v| v.as_int() as u32).unwrap_or(1000).max(1);
+                // Clamp to u16 range; the IDE interprets values >1 as frequency Hz
+                let val  = freq.min(65535) as u16;
+                self.tone_pins.insert(pin, freq);
+                self.pins.set_value(pin, val);
+                events.push(SimEvent {
+                    t_ms: self.virtual_ms, kind: "aw".into(),
+                    pin: Some(pin as u8), val: Some(val), msg: None,
+                });
+                Value::Nil
+            }
+            "notone" => {
+                let pin = args.get(0).map(|v| v.as_int() as usize).unwrap_or(0);
+                self.tone_pins.remove(&pin);
+                self.pins.set_value(pin, 0);
+                events.push(SimEvent {
+                    t_ms: self.virtual_ms, kind: "dw".into(),
+                    pin: Some(pin as u8), val: Some(0), msg: None,
+                });
+                Value::Nil
+            }
             "serial" => Value::Nil, // arduino.Serial accessed as object — handled by double-select
             _ => Value::Nil,
         }

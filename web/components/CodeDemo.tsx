@@ -389,16 +389,16 @@ function PkgLCD() {
 }
 
 const PKGS = [
-  { imp: '"arduino"', accent: "var(--accent)",  tag: "Hardware",   title: "GPIO & peripherals",   visual: <PkgArduino />,  note: "pinMode, digitalWrite, analogRead, interrupts…" },
-  { imp: '"fmt"',     accent: "var(--ok)",      tag: "Serial IO",  title: "Serial print",          visual: <PkgFmt />,      note: "Maps to Serial.print / Serial.println" },
-  { imp: '"time"',    accent: "var(--accent2)", tag: "Timing",     title: "Delay & timing",        visual: <PkgTime />,     note: "delay(), millis(), micros()" },
-  { imp: '"math"',    accent: "#82aaff",        tag: "Math",       title: "Math functions",        visual: <PkgMath />,     note: "<math.h>: sin, cos, sqrt, pow, abs…" },
-  { imp: '"wire"',    accent: "#89ddff",        tag: "I2C",        title: "Wire / I2C",            visual: <PkgWire />,     note: "Wire.begin(), .write(), .read(), .endTransmission()" },
-  { imp: '"serial"',  accent: "var(--ok)",      tag: "UART",       title: "Serial port",           visual: <PkgSerial />,   note: "Serial.Begin(), .Print(), .Println(), .Available()" },
-  { imp: '"strconv"', accent: "#f1fa8c",        tag: "Strings",    title: "Type conversions",      visual: <PkgStrconv />,  note: "String ↔ int/float, Atoi, Itoa, ParseFloat" },
-  { imp: '"spi"',     accent: "var(--accent2)", tag: "SPI",        title: "SPI bus",               visual: <PkgSPI />,      note: "SPI.begin(), .transfer(), .setBitOrder()…" },
-  { imp: '"servo"',   accent: "var(--accent)",  tag: "Actuator",   title: "Servo motor",           visual: <PkgServo />,    note: "Servo.attach(), .write(), .read(), .detach()" },
-  { imp: '"lcd"',     accent: "#4ade80",        tag: "Display",    title: "LiquidCrystal",         visual: <PkgLCD />,      note: "LiquidCrystal.begin(), .print(), .setCursor()" },
+  { imp: '"arduino"', accent: "var(--accent)",  tag: "Hardware",   title: "GPIO & peripherals",   Visual: PkgArduino,  note: "pinMode, digitalWrite, analogRead, interrupts…" },
+  { imp: '"fmt"',     accent: "var(--ok)",      tag: "Serial IO",  title: "Serial print",          Visual: PkgFmt,      note: "Maps to Serial.print / Serial.println" },
+  { imp: '"time"',    accent: "var(--accent2)", tag: "Timing",     title: "Delay & timing",        Visual: PkgTime,     note: "delay(), millis(), micros()" },
+  { imp: '"math"',    accent: "#82aaff",        tag: "Math",       title: "Math functions",        Visual: PkgMath,     note: "<math.h>: sin, cos, sqrt, pow, abs…" },
+  { imp: '"wire"',    accent: "#89ddff",        tag: "I2C",        title: "Wire / I2C",            Visual: PkgWire,     note: "Wire.begin(), .write(), .read(), .endTransmission()" },
+  { imp: '"serial"',  accent: "var(--ok)",      tag: "UART",       title: "Serial port",           Visual: PkgSerial,   note: "Serial.Begin(), .Print(), .Println(), .Available()" },
+  { imp: '"strconv"', accent: "#f1fa8c",        tag: "Strings",    title: "Type conversions",      Visual: PkgStrconv,  note: "String ↔ int/float, Atoi, Itoa, ParseFloat" },
+  { imp: '"spi"',     accent: "var(--accent2)", tag: "SPI",        title: "SPI bus",               Visual: PkgSPI,      note: "SPI.begin(), .transfer(), .setBitOrder()…" },
+  { imp: '"servo"',   accent: "var(--accent)",  tag: "Actuator",   title: "Servo motor",           Visual: PkgServo,    note: "Servo.attach(), .write(), .read(), .detach()" },
+  { imp: '"lcd"',     accent: "#4ade80",        tag: "Display",    title: "LiquidCrystal",         Visual: PkgLCD,      note: "LiquidCrystal.begin(), .print(), .setCursor()" },
 ];
 
 /* ── dep graph ── */
@@ -488,12 +488,12 @@ export default function CodeDemo() {
         {/* ── TRANSPILE ── */}
         {mode === "transpile" && (
           <>
-            <div className="reveal" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            <div className="reveal visible" style={{ display: "flex", gap: 6, marginBottom: 14 }}>
               {EXAMPLES.map((e,i) => (
                 <button key={e.tab} onClick={() => setTab(i)} style={{ padding: "5px 14px", background: tab===i ? "rgba(255,255,255,0.07)" : "transparent", border: "1px solid", borderColor: tab===i ? "var(--edge2)" : "var(--border-s)", borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 11, color: tab===i ? "var(--fg)" : "var(--fg-f)", cursor: "pointer", transition: "all .15s" }}>{e.tab}</button>
               ))}
             </div>
-            <div className="reveal" style={{ display: "grid", gridTemplateColumns: "1fr 40px 1fr" }}>
+            <div className="reveal visible" style={{ display: "grid", gridTemplateColumns: "1fr 40px 1fr" }}>
               <div style={{ background: "var(--s0)", border: "1px solid var(--edge)", borderRight: "none", borderRadius: "8px 0 0 8px", overflow: "hidden" }}>
                 <div style={{ padding: "8px 14px", background: "#060608", borderBottom: "1px solid var(--edge)", display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--ok)" }} />
@@ -516,7 +516,7 @@ export default function CodeDemo() {
             </div>
 
             {/* ── BUILT-IN PACKAGES as feature cards ── */}
-            <div className="reveal" style={{ marginTop: 32 }}>
+            <div className="reveal visible" style={{ marginTop: 32 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
                 <h3 style={{ fontFamily: "var(--f-sans)", fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em" }}>Built-in Go packages</h3>
                 <span className="t-label">— zero config, no installs</span>
@@ -533,7 +533,7 @@ export default function CodeDemo() {
                       <code style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: p.accent }}>{p.imp}</code>
                       <span style={{ fontFamily: "var(--f-mono)", fontSize: 9, color: p.accent, opacity: .5, letterSpacing: "0.06em" }}>{p.tag}</span>
                     </div>
-                    {p.visual}
+                    <p.Visual />
                     <div style={{ fontFamily: "var(--f-sans)", fontSize: 12, fontWeight: 600, letterSpacing: "-0.02em", color: "var(--fg)", margin: "10px 0 4px" }}>{p.title}</div>
                     <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-f)", lineHeight: 1.6 }}>{p.note}</div>
                   </div>
@@ -545,7 +545,7 @@ export default function CodeDemo() {
 
         {/* ── DEPENDENCY FLOW ── */}
         {mode === "deps" && (
-          <div className="reveal">
+          <div className="reveal visible">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
               <div className="card" style={{ padding: "24px" }}>
                 <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-f)", marginBottom: 20, letterSpacing: "0.06em" }}>
@@ -570,7 +570,7 @@ export default function CodeDemo() {
                   {animating && <div style={{ color: "var(--fg-f)", opacity: .5 }}><span className="cursor-blink">_</span></div>}
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={runDepFlow} disabled={animating} style={{ flex: 1, padding: "10px", background: animating ? "var(--s2)" : "rgba(0,229,176,0.1)", border: `1px solid ${animating ? "var(--border)" : "rgba(0,229,176,0.3)"}`, borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 12, color: animating ? "var(--fg-f)" : "var(--accent)", cursor: animating ? "not-allowed" : "pointer", transition: "all .2s", letterSpacing: "0.04em" }}>
+                  <button onClick={runDepFlow} disabled={animating} style={{ flex: 1, padding: "10px", background: animating ? "var(--s2)" : "rgba(220,20,60,0.1)", border: `1px solid ${animating ? "var(--border)" : "rgba(220,20,60,0.3)"}`, borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 12, color: animating ? "var(--fg-f)" : "var(--accent)", cursor: animating ? "not-allowed" : "pointer", transition: "all .2s", letterSpacing: "0.04em" }}>
                     {animating ? "Running…" : "▶ Run pipeline"}
                   </button>
                   <button onClick={() => { setDepStep(0); setAnimating(false); if (timerRef.current) clearTimeout(timerRef.current); }} style={{ padding: "10px 16px", background: "transparent", border: "1px solid var(--border)", borderRadius: 6, fontFamily: "var(--f-mono)", fontSize: 12, color: "var(--fg-f)", cursor: "pointer" }}>Reset</button>

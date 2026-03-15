@@ -21,12 +21,18 @@ export default function Page() {
 
   // Load persisted settings
   useEffect(() => {
-    import('@/lib/tauri').then(async ({ loadSettings }) => {
+    import('@/lib/tauri').then(async ({ loadSettings, installDebugLogger }) => {
       try {
         const raw = await loadSettings()
         const saved = JSON.parse(raw)
         if (saved && typeof saved === 'object' && Object.keys(saved).length > 0) {
           useStore.setState(s => ({ settings: { ...s.settings, ...saved } }))
+          // Install the console patch immediately if debug mode was saved as ON.
+          // Must happen right after settings are loaded — not in a later effect —
+          // so subsequent console calls are captured from the earliest possible point.
+          if (saved.debugMode === true) {
+            installDebugLogger()
+          }
         }
       } catch { /* ignore parse errors — use defaults */ }
     })

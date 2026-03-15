@@ -1,8 +1,8 @@
 'use client'
-import { useRef } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import {
   Play, Square, RotateCcw, AlertCircle, CheckCircle2,
-  Activity, Gauge, Crosshair, X,
+  Activity, Gauge, Maximize2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '@/lib/store'
@@ -17,6 +17,185 @@ import {
 } from '../SandboxDefs'
 import { CompShape } from '../SandboxShapes'
 import type { SimStatus } from '../hooks/useSimRunner'
+
+// ── SimMiniCanvas — pannable/zoomable circuit view with auto-fit ───────────────
+
+interface MiniCanvasProps {
+  circuit: TsukiCircuit
+  simPinValues: Record<string, number>
+  showCurrentFlow: boolean
+  probes: WireProbe[]
+  pressedComps: Set<string>
+  toggledComps: Record<string, boolean>
+  onButtonPress: (id: string) => void
+  onButtonRelease: (id: string) => void
+  onSwitchToggle: (id: string) => void
+}
+
+function SimMiniCanvas({
+  circuit, simPinValues, showCurrentFlow, probes,
+  pressedComps, toggledComps,
+  onButtonPress, onButtonRelease, onSwitchToggle,
+}: MiniCanvasProps) {
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [pan,  setPan]  = useState({ x: 20, y: 20 })
+  const [zoom, setZoom] = useState(0.75)
+  const [panning, setPanning] = useState<{ sx: number; sy: number; px: number; py: number } | null>(null)
+  const spaceRef = useRef(false)
+
+  // Auto-fit on circuit or first mount
+  const fitAll = useCallback(() => {
+    if (!svgRef.current || circuit.components.length === 0) return
+    const MARGIN = 20
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const comp of circuit.components) {
+      const def = COMP_DEFS[comp.type]
+      if (!def) continue
+      minX = Math.min(minX, comp.x - 8)
+      minY = Math.min(minY, comp.y - 8)
+      maxX = Math.max(maxX, comp.x + def.w + 8)
+      maxY = Math.max(maxY, comp.y + def.h + 24)
+    }
+    const svgW = svgRef.current.clientWidth  || 400
+    const svgH = svgRef.current.clientHeight || 300
+    const cW   = maxX - minX
+    const cH   = maxY - minY
+    const newZ = Math.min(2, Math.max(0.1, Math.min(
+      (svgW - MARGIN * 2) / cW,
+      (svgH - MARGIN * 2) / cH,
+    )))
+    setZoom(newZ)
+    setPan({
+      x: (svgW  - cW * newZ) / 2 - minX * newZ,
+      y: (svgH - cH * newZ) / 2 - minY * newZ,
+    })
+  }, [circuit.components])
+
+  // Auto-fit when components change (covers circuit load)
+  useEffect(() => { fitAll() }, [circuit.components.length, fitAll]) // eslint-disable-line
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.code === 'Space') spaceRef.current = true }
+    const up   = (e: KeyboardEvent) => { if (e.code === 'Space') spaceRef.current = false }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup',   up)
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
+  }, [])
+
+  function onPointerDown(e: React.PointerEvent) {
+    if (e.button === 1 || (e.button === 0 && (e.altKey || spaceRef.current))) {
+      setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
+      e.currentTarget.setPointerCapture(e.pointerId)
+    }
+  }
+  function onPointerMove(e: React.PointerEvent) {
+    if (panning) setPan({ x: panning.px + e.clientX - panning.sx, y: panning.py + e.clientY - panning.sy })
+  }
+  function onPointerUp() { setPanning(null) }
+
+  return (
+    <svg
+      ref={svgRef} className="w-full h-full"
+      style={{ cursor: panning ? 'grabbing' : 'default' }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onWheel={e => {
+        e.preventDefault()
+        const rect  = svgRef.current!.getBoundingClientRect()
+        const mx    = e.clientX - rect.left
+        const my    = e.clientY - rect.top
+        const factor = e.deltaY < 0 ? 1.1 : 0.91
+        const nz    = Math.max(0.1, Math.min(3, zoom * factor))
+        setZoom(nz)
+        setPan(p => ({
+          x: mx - (mx - p.x) * (nz / zoom),
+          y: my - (my - p.y) * (nz / zoom),
+        }))
+      }}
+    >
+      <defs>
+        <pattern id="simgrid" x={pan.x % (20 * zoom)} y={pan.y % (20 * zoom)}
+          width={20 * zoom} height={20 * zoom} patternUnits="userSpaceOnUse">
+          <circle cx={0} cy={0} r={0.8} fill="var(--border)" opacity={0.35} />
+        </pattern>
+      </defs>
+      <style>{`
+        @keyframes flowDash { from { stroke-dashoffset: 0 } to { stroke-dashoffset: -20 } }
+        .flow-active { animation: flowDash 0.45s linear infinite; }
+      `}</style>
+      <rect width="100%" height="100%" fill="url(#simgrid)" />
+
+      <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+        {circuit.components.map(comp => {
+          const def = COMP_DEFS[comp.type]
+          if (!def) return null
+          const augComp = comp.type === 'slide_switch'
+            ? { ...comp, props: { ...comp.props, toggled: toggledComps[comp.id] ? 1 : 0 } }
+            : comp
+          return (
+            <CompShape key={comp.id} comp={augComp} selected={false}
+              simPinValues={simPinValues} wireMode={false}
+              pressed={pressedComps.has(comp.id)}
+              onInteractStart={() => {
+                if (comp.type === 'button')            onButtonPress(comp.id)
+                else if (comp.type === 'slide_switch') onSwitchToggle(comp.id)
+              }}
+              onInteractEnd={() => { if (comp.type === 'button') onButtonRelease(comp.id) }}
+              onPointerDown={() => {}} onPinClick={() => {}}
+            />
+          )
+        })}
+        {circuit.wires.map(wire => {
+          const fc = circuit.components.find(c => c.id === wire.fromComp)
+          const tc = circuit.components.find(c => c.id === wire.toComp)
+          if (!fc || !tc) return null
+          const fdef = COMP_DEFS[fc.type]; const tdef = COMP_DEFS[tc.type]
+          if (!fdef || !tdef) return null
+          const fp = fdef.pins.find(p => p.id === wire.fromPin)
+          const tp = tdef.pins.find(p => p.id === wire.toPin)
+          if (!fp || !tp) return null
+          const fa  = getPinAbsPos(fc, fp); const ta = getPinAbsPos(tc, tp)
+          const key = `${wire.toComp}:${wire.toPin}`
+          const val = simPinValues[key] ?? 0
+          const isActive = val > 0
+          const isProbed = probes.some(p => p.wireId === wire.id)
+          const d   = makeOrthogonalPath(fa.x, fa.y, ta.x, ta.y, wire.waypoints)
+          return (
+            <g key={wire.id}>
+              {isProbed && <path d={d} stroke="#facc15" strokeWidth={5} fill="none" strokeLinecap="square" opacity={0.3} />}
+              <path d={d}
+                stroke={isActive ? wire.color : wire.color + '44'}
+                strokeWidth={isActive ? 2.5 : 1.5}
+                fill="none" strokeLinecap="square"
+              />
+              {showCurrentFlow && isActive && (
+                <path d={d} stroke="rgba(255,255,255,0.7)" strokeWidth={1.5} fill="none"
+                  strokeLinecap="square"
+                  strokeDasharray={`4 ${Math.max(8, 14 - Math.round(val * 6))}`}
+                  className="flow-active" />
+              )}
+            </g>
+          )
+        })}
+      </g>
+
+      {circuit.components.length === 0 && (
+        <text x="50%" y="50%" textAnchor="middle" fontSize={11}
+          fill="var(--fg-faint)" fontFamily="var(--font-sans)">
+          Build a circuit on the Canvas first
+        </text>
+      )}
+
+      {/* Fit button overlay */}
+      <g onClick={fitAll} style={{ cursor: 'pointer' }}>
+        <rect x={4} y={4} width={20} height={20} rx={3} fill="var(--surface-2)" opacity={0.85} />
+        <text x={14} y={16.5} textAnchor="middle" fontSize={10} fill="var(--fg-faint)">⊞</text>
+      </g>
+    </svg>
+  )
+}
+
 
 interface SimViewProps {
   circuit: TsukiCircuit
@@ -40,10 +219,6 @@ interface SimViewProps {
   sigGenFreq: number
   setSigGenFreq: React.Dispatch<React.SetStateAction<number>>
   sigGenRunning: boolean
-  waveformPins: number[]
-  setWaveformPins: React.Dispatch<React.SetStateAction<number[]>>
-  pinHistoryRef: React.MutableRefObject<Map<number, number[]>>
-  waveformVersion: number
   serialSend: string
   setSerialSend: React.Dispatch<React.SetStateAction<string>>
   simHandleRef: React.MutableRefObject<any>
@@ -64,7 +239,6 @@ export default function SimView(props: SimViewProps) {
     analogInputs, setAnalogInputs, digitalInputs, setDigitalInputs,
     pressedComps, toggledComps,
     sigGenPin, setSigGenPin, sigGenFreq, setSigGenFreq, sigGenRunning,
-    waveformPins, setWaveformPins, pinHistoryRef, waveformVersion,
     serialSend, setSerialSend, simHandleRef,
     handleRun, handleStop, handleReset,
     onButtonPress, onButtonRelease, onSwitchToggle,
@@ -144,81 +318,17 @@ export default function SimView(props: SimViewProps) {
 
           {/* Mini circuit canvas */}
           <div className="flex-1 overflow-hidden relative bg-[var(--surface)]">
-            <svg className="w-full h-full">
-              <defs>
-                <pattern id="simgrid" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
-                  <circle cx="0" cy="0" r="0.8" fill="var(--border)" opacity="0.4" />
-                </pattern>
-              </defs>
-              <style>{`
-                @keyframes flowDash { from { stroke-dashoffset: 0 } to { stroke-dashoffset: -20 } }
-                .flow-active { animation: flowDash 0.45s linear infinite; }
-              `}</style>
-              <rect width="100%" height="100%" fill="url(#simgrid)" />
-              <g transform="translate(20,20) scale(0.75)">
-                {/* Components first, wires on top */}
-                {circuit.components.map(comp => {
-                  const def = COMP_DEFS[comp.type]
-                  if (!def) return null
-                  const augComp = comp.type === 'slide_switch'
-                    ? { ...comp, props: { ...comp.props, toggled: toggledComps[comp.id] ? 1 : 0 } }
-                    : comp
-                  return (
-                    <CompShape key={comp.id} comp={augComp} selected={false}
-                      simPinValues={simPinValues} wireMode={false}
-                      pressed={pressedComps.has(comp.id)}
-                      onInteractStart={() => {
-                        if (comp.type === 'button')       onButtonPress(comp.id)
-                        else if (comp.type === 'slide_switch') onSwitchToggle(comp.id)
-                      }}
-                      onInteractEnd={() => { if (comp.type === 'button') onButtonRelease(comp.id) }}
-                      onPointerDown={() => {}} onPinClick={() => {}}
-                    />
-                  )
-                })}
-                {/* Wires on top */}
-                {circuit.wires.map(wire => {
-                  const fc   = circuit.components.find(c => c.id === wire.fromComp)
-                  const tc   = circuit.components.find(c => c.id === wire.toComp)
-                  if (!fc || !tc) return null
-                  const fdef = COMP_DEFS[fc.type]; const tdef = COMP_DEFS[tc.type]
-                  if (!fdef || !tdef) return null
-                  const fp   = fdef.pins.find(p => p.id === wire.fromPin)
-                  const tp   = tdef.pins.find(p => p.id === wire.toPin)
-                  if (!fp || !tp) return null
-                  const fa   = getPinAbsPos(fc, fp); const ta = getPinAbsPos(tc, tp)
-                  const key  = `${wire.toComp}:${wire.toPin}`
-                  const val  = simPinValues[key] ?? 0
-                  const isActive = val > 0
-                  const isProbed = probes.some(p => p.wireId === wire.id)
-                  const d    = makeOrthogonalPath(fa.x, fa.y, ta.x, ta.y, wire.waypoints)
-                  return (
-                    <g key={wire.id}>
-                      {isProbed && <path d={d} stroke="#facc15" strokeWidth={5} fill="none" strokeLinecap="square" opacity={0.3} />}
-                      <path d={d}
-                        stroke={isActive ? wire.color : wire.color + '44'}
-                        strokeWidth={isActive ? 2.5 : 1.5}
-                        fill="none" strokeLinecap="square"
-                      />
-                      {showCurrentFlow && isActive && (
-                        <path d={d}
-                          stroke="rgba(255,255,255,0.7)" strokeWidth={1.5} fill="none"
-                          strokeLinecap="square"
-                          strokeDasharray={`4 ${Math.max(8, 14 - Math.round(val * 6))}`}
-                          className="flow-active"
-                        />
-                      )}
-                    </g>
-                  )
-                })}
-              </g>
-            </svg>
-            {circuit.components.length === 0 && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
-                <Activity size={22} className="text-[var(--fg-faint)]" />
-                <p className="text-xs text-[var(--fg-faint)]">Build a circuit on the Canvas first</p>
-              </div>
-            )}
+            <SimMiniCanvas
+              circuit={circuit}
+              simPinValues={simPinValues}
+              showCurrentFlow={showCurrentFlow}
+              probes={probes}
+              pressedComps={pressedComps}
+              toggledComps={toggledComps}
+              onButtonPress={onButtonPress}
+              onButtonRelease={onButtonRelease}
+              onSwitchToggle={onSwitchToggle}
+            />
           </div>
 
           {/* External inputs */}
@@ -410,71 +520,6 @@ export default function SimView(props: SimViewProps) {
                 {sigGenRunning ? '⏹ Stop' : '▶ SQW'}
               </button>
             </div>
-          </div>
-
-          {/* Logic Analyzer */}
-          <div className="border-t border-[var(--border)] px-2 py-1.5 flex-shrink-0">
-            <div className="text-[9px] font-semibold uppercase tracking-widest text-[var(--fg-faint)] mb-1.5 flex items-center gap-1">
-              <Crosshair size={8} /> Logic Analyzer
-            </div>
-            <div className="flex flex-wrap gap-1 mb-1.5">
-              {[2,3,4,5,6,7,8,9,10,11,12,13].map(pin => {
-                const tracked = waveformPins.includes(pin)
-                return (
-                  <button key={pin}
-                    onClick={() => setWaveformPins(prev =>
-                      tracked ? prev.filter(p => p !== pin) : [...prev, pin].slice(-6),
-                    )}
-                    className={clsx(
-                      'w-6 h-5 text-[9px] rounded border-0 cursor-pointer font-mono',
-                      tracked ? 'bg-[var(--active)] text-[var(--fg)]' : 'bg-[var(--surface-2)] text-[var(--fg-faint)] hover:text-[var(--fg)]',
-                    )}
-                  >
-                    {pin}
-                  </button>
-                )
-              })}
-            </div>
-            {waveformPins.length > 0 && (
-              <div className="rounded border border-[var(--border)] bg-[var(--surface)] p-1 overflow-hidden">
-                {waveformPins.map((pin, pi) => {
-                  const hist    = pinHistoryRef.current.get(pin) ?? []
-                  const W       = 184, rowH = 18
-                  const samples = hist.slice(-60)
-                  if (samples.length < 2) return (
-                    <div key={pin} className="flex items-center gap-1 mb-0.5">
-                      <span className="text-[8px] font-mono text-[var(--fg-faint)] w-5">D{pin}</span>
-                      <span className="text-[8px] text-[var(--fg-faint)]">waiting…</span>
-                    </div>
-                  )
-                  const pts: string[] = []
-                  const stepW = (W - 24) / (samples.length - 1)
-                  samples.forEach((v, i) => {
-                    const x = 24 + i * stepW
-                    const y = v > 0 ? 3 : rowH - 3
-                    if (i === 0) pts.push(`M ${x},${y}`)
-                    else {
-                      const prevY = samples[i-1] > 0 ? 3 : rowH - 3
-                      if (prevY !== y) pts.push(`H ${x} V ${y}`)
-                      else pts.push(`H ${x}`)
-                    }
-                  })
-                  const COLORS = ['#3b82f6','#22c55e','#f97316','#a855f7','#ec4899','#06b6d4']
-                  const c   = COLORS[pi % COLORS.length]
-                  const cur = samples[samples.length - 1]
-                  return (
-                    <svg key={pin} width={W} height={rowH} className="block mb-0.5 overflow-visible">
-                      <text x={0} y={rowH*0.65} fontSize={7} fill={c} fontFamily="monospace">D{pin}</text>
-                      <path d={pts.join(' ')} fill="none" stroke={c} strokeWidth={1.2} />
-                      <rect x={W-8} y={cur>0?2:rowH-6} width={6} height={4} rx={1} fill={c} opacity={0.8} />
-                    </svg>
-                  )
-                })}
-              </div>
-            )}
-            {waveformPins.length === 0 && (
-              <p className="text-[9px] text-[var(--fg-faint)]">Select pins above to monitor</p>
-            )}
           </div>
 
           {/* Status dot */}

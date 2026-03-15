@@ -42,8 +42,20 @@ case "\$ARCH" in
   x86_64|amd64) ARCH_TYPE="amd64" ;;
   arm64|aarch64) ARCH_TYPE="arm64" ;;
   armv7l) ARCH_TYPE="armv7" ;;
+  i386|i486|i586|i686) print_err "32-bit x86 is not supported — please use a 64-bit system." ;;
   *) print_err "Unsupported architecture: \$ARCH" ;;
 esac
+
+# On macOS, uname -m returns x86_64 even on Apple Silicon when the shell is
+# running under Rosetta 2. Detect the native CPU via sysctl and switch to arm64
+# so the correct native binary is installed instead of the amd64 one.
+if [ "\$OS_TYPE" = "darwin" ] && [ "\$ARCH_TYPE" = "amd64" ]; then
+  NATIVE_ARM64="\$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)"
+  if [ "\$NATIVE_ARM64" = "1" ]; then
+    ARCH_TYPE="arm64"
+    print_step "Apple Silicon detected (Rosetta session — switching to arm64 binary)"
+  fi
+fi
 
 print_step "Detected platform: \$OS_TYPE/\$ARCH_TYPE"
 

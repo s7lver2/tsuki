@@ -1,7 +1,8 @@
 'use client'
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
-  Trash2, ZoomIn, ZoomOut, MousePointer, Zap, Gauge, Cpu, FlaskConical,
+  Trash2, ZoomIn, ZoomOut, MousePointer, Zap, Gauge, Cpu, FlaskConical, Maximize2,
+  Tag, Ruler, Activity,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -11,16 +12,25 @@ import {
   type Tool,
   type WireInProgress,
   type WireProbe,
+  type WireStyleId,
+  type VoltmeterPin,
+  type AmmeterWire,
+  type CanvasLabel,
+  type RulerMeasure,
   COMP_DEFS,
   WIRE_COLOR_HEX,
+  WIRE_PALETTES,
   getPinAbsPos,
   makeOrthogonalPath,
+  makeWirePath,
   snapGrid,
+  getWireMeasurements,
 } from '../SandboxDefs'
 import { CompShape, SvgGlobalDefs } from '../SandboxShapes'
 import PropertiesPanel from '../components/PropertiesPanel'
 import MeasurementsPanel from '../components/MeasurementsPanel'
 import type { SimStatus } from '../hooks/useSimRunner'
+import { useStore } from '@/lib/store'
 
 // ── Category list ──────────────────────────────────────────────────────────────
 
@@ -62,8 +72,33 @@ export default function CanvasView({
 }: CanvasViewProps) {
 
   // ── Local state ────────────────────────────────────────────────────────────
+  const { settings } = useStore()
+
+  // ── Resolve active wire palette ───────────────────────────────────────────
+  const activePalette = (() => {
+    const p = settings.sandboxWirePalette ?? 'classic'
+    if (p === 'custom') return settings.sandboxWireCustomColors ?? WIRE_PALETTES.classic.colors
+    return WIRE_PALETTES[p]?.colors ?? WIRE_PALETTES.classic.colors
+  })()
+
+  const wireStyle = (settings.sandboxWireStyle ?? 'orthogonal') as WireStyleId
+
+  // Determine auto-color for a pin based on its type (VCC / GND)
+  function autoColorForPin(compId: string, pinId: string): string | null {
+    const comp = circuit.components.find(c => c.id === compId)
+    if (!comp) return null
+    const def  = COMP_DEFS[comp.type]
+    const pin  = def?.pins.find(p => p.id === pinId)
+    if (!pin) return null
+    if (settings.sandboxAutoColorVcc && (pin.type === 'power' || pinId === 'vcc' || pinId === '5v' || pinId === '3v3' || pinId === 'vdd'))
+      return settings.sandboxVccColor ?? '#ef4444'
+    if (settings.sandboxAutoColorGnd && (pin.type === 'gnd' || pinId === 'gnd' || pinId === 'neg'))
+      return settings.sandboxGndColor ?? '#1a1a1a'
+    return null
+  }
+
   const [tool, setTool]               = useState<Tool>('select')
-  const [wireColor, setWireColor]     = useState(WIRE_COLOR_HEX[4])
+  const [wireColor, setWireColor]     = useState(activePalette[4] ?? '#3b82f6')
   const [zoom, setZoom]               = useState(1)
   const [pan, setPan]                 = useState({ x: 40, y: 40 })
   const [selectedId, setSelectedId]   = useState<string | null>(null)
@@ -74,11 +109,67 @@ export default function CanvasView({
   const [hoveredWireId, setHoveredWireId] = useState<string | null>(null)
   const [showMeasurements, setShowMeasurements] = useState(false)
 
+  // ── New canvas tool overlay state ──────────────────────────────────────────
+  const [voltmeters, setVoltmeters]   = useState<VoltmeterPin[]>([])
+  const [ammeters, setAmmeters]       = useState<AmmeterWire[]>([])
+  const [labels, setLabels]           = useState<CanvasLabel[]>([])
+  const [rulers, setRulers]           = useState<RulerMeasure[]>([])
+  // Ruler in-progress: first click sets start, second completes
+  const [rulerWip, setRulerWip]       = useState<{ x1: number; y1: number } | null>(null)
+  // Editing a label
+  const [editingLabel, setEditingLabel] = useState<string | null>(null)
+  const spaceDownRef = useRef(false)   // space = pan-override key
+
   const svgRef = useRef<SVGSVGElement>(null)
 
-  // Cancel WIP on Escape — registered via ref trick to avoid stale closure
   const wipRef = useRef(wip)
   wipRef.current = wip
+
+  // ── Space key: hold to pan regardless of what's under the cursor ──────────
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && e.target === document.body) {
+        e.preventDefault()
+        spaceDownRef.current = true
+      }
+      if (e.key === 'Escape') setWip(null)
+    }
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spaceDownRef.current = false
+    }
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup',   onUp)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup',   onUp)
+    }
+  }, [])
+
+  // ── Fit-all: zoom + pan to show all components ────────────────────────────
+  const fitAll = useCallback(() => {
+    if (!svgRef.current || circuit.components.length === 0) return
+    const MARGIN = 40
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const comp of circuit.components) {
+      const def = COMP_DEFS[comp.type]
+      if (!def) continue
+      minX = Math.min(minX, comp.x - 10)
+      minY = Math.min(minY, comp.y - 10)
+      maxX = Math.max(maxX, comp.x + def.w + 10)
+      maxY = Math.max(maxY, comp.y + def.h + 30)  // +30 for label
+    }
+    const svgW = svgRef.current.clientWidth  || 600
+    const svgH = svgRef.current.clientHeight || 400
+    const contentW = maxX - minX
+    const contentH = maxY - minY
+    const newZoom = Math.min(2.5, Math.max(0.15,
+      Math.min((svgW - MARGIN * 2) / contentW, (svgH - MARGIN * 2) / contentH)
+    ))
+    const newPanX = (svgW  - contentW * newZoom) / 2 - minX * newZoom
+    const newPanY = (svgH - contentH * newZoom) / 2 - minY * newZoom
+    setZoom(newZoom)
+    setPan({ x: newPanX, y: newPanY })
+  }, [circuit.components])
 
   // ── Canvas helpers ─────────────────────────────────────────────────────────
 
@@ -121,28 +212,47 @@ export default function CanvasView({
 
   // ── Pointer handlers ───────────────────────────────────────────────────────
 
+  function startPan(e: React.PointerEvent) {
+    setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  /** Returns true if this click should start a pan (middle btn, alt, or space) */
+  function isPanTrigger(e: React.PointerEvent) {
+    return e.button === 1 || (e.button === 0 && (e.altKey || spaceDownRef.current))
+  }
+
+  function isBackgroundTarget(e: React.PointerEvent) {
+    const el = e.target as SVGElement
+    // Background rect has fill url(#sbgrid) — check with startsWith to handle
+    // browsers that resolve to full URL (url("http://...#sbgrid"))
+    const fill = el.getAttribute('fill') ?? ''
+    return el.tagName === 'rect' && (fill === 'url(#sbgrid)' || fill.includes('#sbgrid'))
+  }
+
   function onSvgPointerDown(e: React.PointerEvent) {
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
-      e.currentTarget.setPointerCapture(e.pointerId)
+    // Pan: middle button, alt+left, or space+left — anywhere on canvas
+    if (isPanTrigger(e)) {
+      startPan(e)
       return
     }
     // Wire mode: click on background to add waypoint
     if (tool === 'wire' && wip && e.button === 0) {
-      const target = e.target as SVGElement
-      const isBg = target.tagName === 'rect' && target.getAttribute('fill')?.startsWith('url(#sbgrid')
-      if (isBg) {
+      if (isBackgroundTarget(e)) {
         const pt = svgPoint(e)
-        setWip(w => w ? { ...w, waypoints: [...w.waypoints, { x: snapGrid(pt.x), y: snapGrid(pt.y) }], mouseX: snapGrid(pt.x), mouseY: snapGrid(pt.y) } : null)
+        setWip(w => w ? { ...w,
+          waypoints: [...w.waypoints, { x: snapGrid(pt.x), y: snapGrid(pt.y) }],
+          mouseX: snapGrid(pt.x), mouseY: snapGrid(pt.y),
+        } : null)
         return
       }
     }
-    // Left-click on background → pan (unless in wire mode)
-    if (e.button === 0 && (e.target as SVGElement).tagName === 'rect' && (e.target as SVGElement).getAttribute('fill') === 'url(#sbgrid)') {
+    // Left-click on background → pan (select tool) or deselect
+    if (e.button === 0 && isBackgroundTarget(e)) {
       if (tool !== 'wire') {
-        setPanning({ sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y })
-        e.currentTarget.setPointerCapture(e.pointerId)
+        startPan(e)
       }
+      if (tool === 'select') { setSelectedComp(null); setWip(null) }
       return
     }
     if (tool === 'select') { setSelectedComp(null); setWip(null) }
@@ -174,6 +284,11 @@ export default function CanvasView({
   }
 
   function onCompPointerDown(e: React.PointerEvent, compId: string) {
+    // Space/alt/middle → pan, even over components
+    if (isPanTrigger(e)) {
+      startPan(e)
+      return
+    }
     if (tool === 'delete') {
       e.stopPropagation()
       setCircuit(c => ({
@@ -200,14 +315,20 @@ export default function CanvasView({
     const pos  = getPinAbsPos(comp, pin)
 
     if (!wip) {
-      setWip({ fromComp: compId, fromPin: pinId, fromX: pos.x, fromY: pos.y, mouseX: pos.x, mouseY: pos.y, color: wireColor, waypoints: [] })
+      // Determine color: auto-color from pin type > current wireColor
+      const ac = autoColorForPin(compId, pinId)
+      setWip({ fromComp: compId, fromPin: pinId, fromX: pos.x, fromY: pos.y, mouseX: pos.x, mouseY: pos.y, color: ac ?? wireColor, waypoints: [] })
     } else {
       if (wip.fromComp === compId && wip.fromPin === pinId) { setWip(null); return }
+      // Auto-color: check both endpoints, prefer from > to
+      const acFrom = autoColorForPin(wip.fromComp, wip.fromPin)
+      const acTo   = autoColorForPin(compId, pinId)
+      const finalColor = acFrom ?? acTo ?? wip.color
       const wire: CircuitWire = {
         id: `wire_${Date.now()}`,
         fromComp: wip.fromComp, fromPin: wip.fromPin,
         toComp: compId,         toPin: pinId,
-        color: wip.color,
+        color: finalColor,
         waypoints: wip.waypoints,
       }
       setCircuit(c => ({ ...c, wires: [...c.wires, wire] }))
@@ -240,6 +361,7 @@ export default function CanvasView({
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const selComp = selectedComp ? circuit.components.find(c => c.id === selectedComp) ?? null : null
+  const isSpacePan = spaceDownRef.current
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -253,9 +375,9 @@ export default function CanvasView({
           <div className="flex gap-1">
             {([
               { id: 'select', icon: <MousePointer size={11} />, title: 'Select / Move' },
-              { id: 'wire',   icon: <Zap size={11} />,          title: 'Draw Wire (click empty canvas to add bends)' },
+              { id: 'wire',   icon: <Zap size={11} />,          title: 'Draw Wire' },
               { id: 'delete', icon: <Trash2 size={11} />,       title: 'Delete' },
-              { id: 'probe',  icon: <Gauge size={11} />,        title: 'Probe: click wire to measure V/I/P' },
+              { id: 'probe',  icon: <Gauge size={11} />,        title: 'Probe wire' },
             ] as const).map(t => (
               <button
                 key={t.id} title={t.title} onClick={() => setTool(t.id)}
@@ -289,7 +411,7 @@ export default function CanvasView({
           {/* Wire color picker */}
           {tool === 'wire' && (
             <div className="flex flex-wrap gap-0.5 px-0.5">
-              {WIRE_COLOR_HEX.map(c => (
+              {activePalette.map(c => (
                 <button
                   key={c} onClick={() => setWireColor(c)} title={c}
                   className="w-4 h-4 rounded-full border-0 cursor-pointer flex-shrink-0 transition-transform hover:scale-110"
@@ -306,7 +428,7 @@ export default function CanvasView({
           {/* Hints */}
           {tool === 'wire' && wip && (
             <div className="text-[9px] text-[var(--fg-faint)] px-0.5 leading-tight">
-              Click empty canvas to add bend · click pin to finish · ESC to cancel
+              Click canvas to add bend · click pin to finish · ESC cancel
             </div>
           )}
           {tool === 'probe' && (
@@ -315,10 +437,11 @@ export default function CanvasView({
             </div>
           )}
 
-          {/* Zoom controls */}
+          {/* Zoom + fit */}
           <div className="flex items-center gap-1">
             <button
               onClick={() => setZoom(z => Math.max(0.3, z - 0.1))}
+              title="Zoom out"
               className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer"
             >
               <ZoomOut size={10} />
@@ -328,17 +451,30 @@ export default function CanvasView({
             </span>
             <button
               onClick={() => setZoom(z => Math.min(2.5, z + 0.1))}
+              title="Zoom in"
               className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer"
             >
               <ZoomIn size={10} />
             </button>
+            <button
+              onClick={fitAll}
+              title="Fit all components"
+              className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer"
+            >
+              <Maximize2 size={10} />
+            </button>
+          </div>
+
+          {/* Pan hint */}
+          <div className="text-[9px] text-[var(--fg-faint)] px-0.5 leading-tight opacity-60">
+            Space / Alt + drag: pan · scroll: zoom
           </div>
         </div>
 
         {/* Component library */}
         <div className="py-1">
           {CATEGORIES.map(cat => {
-            const items = Object.values(COMP_DEFS).filter(d => d.category === cat.id)
+            const items = Object.values(COMP_DEFS).filter(d => d.category === cat.id && !d.hidden)
             if (!items.length) return null
             return (
               <div key={cat.id}>
@@ -369,16 +505,32 @@ export default function CanvasView({
           className="w-full h-full"
           style={{
             background: 'var(--surface)',
-            cursor: panning ? 'grabbing' : tool === 'wire' ? 'crosshair' : tool === 'delete' ? 'not-allowed' : tool === 'probe' ? 'cell' : 'grab',
+            cursor: panning
+              ? 'grabbing'
+              : isSpacePan
+                ? 'grab'
+                : tool === 'wire' ? 'crosshair'
+                : tool === 'delete' ? 'not-allowed'
+                : tool === 'probe' ? 'cell'
+                : 'default',
           }}
           onPointerDown={onSvgPointerDown}
           onPointerMove={onSvgPointerMove}
           onPointerUp={onSvgPointerUp}
           onWheel={e => {
             e.preventDefault()
-            setZoom(z => Math.max(0.3, Math.min(2.5, z - e.deltaY * 0.001)))
+            const svgRect = svgRef.current!.getBoundingClientRect()
+            const mx = e.clientX - svgRect.left
+            const my = e.clientY - svgRect.top
+            const factor = e.deltaY < 0 ? 1.08 : 0.93
+            const newZoom = Math.max(0.15, Math.min(2.5, zoom * factor))
+            // Zoom toward cursor
+            setPan(p => ({
+              x: mx - (mx - p.x) * (newZoom / zoom),
+              y: my - (my - p.y) * (newZoom / zoom),
+            }))
+            setZoom(newZoom)
           }}
-          onKeyDown={e => { if (e.key === 'Escape') setWip(null) }}
           tabIndex={0}
         >
           <defs>
@@ -396,7 +548,7 @@ export default function CanvasView({
 
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
 
-            {/* ── Components (rendered first so wires draw on top) ── */}
+            {/* ── Components ── */}
             {circuit.components.map(comp => {
               const def = COMP_DEFS[comp.type]
               if (!def) return null
@@ -413,7 +565,7 @@ export default function CanvasView({
                   wireMode={tool === 'wire'}
                   pressed={pressedComps.has(comp.id)}
                   onInteractStart={() => {
-                    if (comp.type === 'button')       onButtonPress(comp.id)
+                    if (comp.type === 'button')           onButtonPress(comp.id)
                     else if (comp.type === 'slide_switch') onSwitchToggle(comp.id)
                   }}
                   onInteractEnd={() => {
@@ -425,7 +577,7 @@ export default function CanvasView({
               )
             })}
 
-            {/* ── Wires (on top of components) ── */}
+            {/* ── Wires ── */}
             {circuit.wires.map(wire => {
               const fc   = circuit.components.find(c => c.id === wire.fromComp)
               const tc   = circuit.components.find(c => c.id === wire.toComp)
@@ -436,13 +588,12 @@ export default function CanvasView({
               const tp   = tdef.pins.find(p => p.id === wire.toPin)
               if (!fp || !tp) return null
               const fa   = getPinAbsPos(fc, fp); const ta = getPinAbsPos(tc, tp)
-              const d    = makeOrthogonalPath(fa.x, fa.y, ta.x, ta.y, wire.waypoints)
+              const d    = makeWirePath(fa.x, fa.y, ta.x, ta.y, wire.waypoints, wireStyle)
               const isSelected = selectedId === wire.id
               const isHovered  = hoveredWireId === wire.id
               const isProbed   = probes.some(p => p.wireId === wire.id)
               return (
                 <g key={wire.id}>
-                  {/* Fat invisible hit target */}
                   <path
                     d={d} stroke="transparent" strokeWidth={12} fill="none"
                     style={{ cursor: tool === 'delete' ? 'not-allowed' : tool === 'probe' ? 'cell' : 'pointer' }}
@@ -457,11 +608,11 @@ export default function CanvasView({
                     d={d}
                     stroke={wire.color || '#3b82f6'}
                     strokeWidth={isSelected || isHovered ? 2.8 : 2}
-                    fill="none" strokeLinecap="square"
+                    fill="none" strokeLinecap={wireStyle === 'orthogonal' ? 'square' : 'round'}
                     opacity={isSelected || isHovered ? 1 : 0.9}
                   />
                   {(isSelected || isHovered) && (
-                    <path d={d} stroke="rgba(255,255,255,0.25)" strokeWidth={1} fill="none" strokeLinecap="square" strokeDasharray="4 4" />
+                    <path d={d} stroke="rgba(255,255,255,0.25)" strokeWidth={1} fill="none" strokeLinecap={wireStyle === 'orthogonal' ? 'square' : 'round'} strokeDasharray="4 4" />
                   )}
                   {isProbed && (() => {
                     const mx = (fa.x + ta.x) / 2
@@ -485,9 +636,9 @@ export default function CanvasView({
             {wip && (
               <g>
                 <path
-                  d={makeOrthogonalPath(wip.fromX, wip.fromY, wip.mouseX, wip.mouseY, wip.waypoints)}
+                  d={makeWirePath(wip.fromX, wip.fromY, wip.mouseX, wip.mouseY, wip.waypoints, wireStyle)}
                   stroke={wip.color} strokeWidth={2} fill="none"
-                  strokeDasharray="6 3" strokeLinecap="square" opacity={0.8}
+                  strokeDasharray="6 3" strokeLinecap="round" opacity={0.8}
                 />
                 {wip.waypoints.map((wp, i) => (
                   <g key={i}>
@@ -518,7 +669,14 @@ export default function CanvasView({
           <span>{circuit.components.length} comp</span>
           <span>{circuit.wires.length} wires</span>
           <span className="flex-1" />
-          <span>alt+drag: pan · scroll: zoom · ESC: cancel wire</span>
+          <button
+            onClick={fitAll}
+            className="text-[9px] text-[var(--fg-faint)] hover:text-[var(--fg)] bg-transparent border-0 cursor-pointer px-1"
+            title="Fit all"
+          >
+            fit ⊞
+          </button>
+          <span className="opacity-50">Space/alt+drag: pan · scroll: zoom</span>
         </div>
       </div>
 

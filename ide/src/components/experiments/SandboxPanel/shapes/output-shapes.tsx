@@ -71,21 +71,51 @@ export function RgbLedBody({ w, h, r, gr, b, g }: {
 
 // ── Buzzer ─────────────────────────────────────────────────────────────────────
 export function BuzzerBody({ w, h, active }: { w: number; h: number; active: boolean }) {
+  const cx = w / 2, cy = h / 2
+  const r  = Math.min(w, h) / 2 - 2
   return (
     <>
-      <circle cx={w/2} cy={h/2} r={w/2-1} fill="#1a1a1a" stroke="#444" strokeWidth={1} />
-      {[0.35, 0.55, 0.72].map((r, i) => (
-        <circle key={i} cx={w/2} cy={h/2} r={w*r/2}
-          fill="none" stroke={active ? "#a0a0a0" : "#333"} strokeWidth={0.8} />
-      ))}
-      <circle cx={w/2} cy={h/2} r={w*0.12} fill={active ? "#e0e0e0" : "#444"} />
+      {/* Outer glow when active */}
       {active && (
-        <circle cx={w/2} cy={h/2} r={w/2-1} fill="#f97316" opacity={0.05}>
-          <animate attributeName="r" from={w*0.1} to={w/2-1} dur="0.2s" repeatCount="indefinite" />
-          <animate attributeName="opacity" from={0.15} to={0} dur="0.2s" repeatCount="indefinite" />
-        </circle>
+        <circle cx={cx} cy={cy} r={r + 4} fill="#f97316" opacity={0.12} />
       )}
-      <text x={w/2+1} y={h*0.22} textAnchor="middle" fontSize={5} fill="#888" fontFamily="monospace">+</text>
+
+      {/* Main body — black cylinder top-view */}
+      <circle cx={cx} cy={cy} r={r}
+        fill={active ? '#222' : '#1a1a1a'}
+        stroke={active ? '#f97316' : '#555'} strokeWidth={active ? 1.5 : 1} />
+
+      {/* Slight highlight arc top-left */}
+      <path
+        d={`M ${cx - r*0.6} ${cy - r*0.5} A ${r} ${r} 0 0 1 ${cx + r*0.3} ${cy - r*0.8}`}
+        fill="none" stroke="rgba(255,255,255,0.09)" strokeWidth={2} strokeLinecap="round" />
+
+      {/* Concentric rings — the piezo disc */}
+      {[0.65, 0.42, 0.22].map((ratio, i) => (
+        <circle key={i} cx={cx} cy={cy} r={r * ratio}
+          fill="none"
+          stroke={active ? `rgba(249,115,22,${0.55 - i * 0.12})` : `rgba(120,100,60,${0.45 - i * 0.1})`}
+          strokeWidth={0.9} />
+      ))}
+
+      {/* Center contact dot */}
+      <circle cx={cx} cy={cy} r={r * 0.10}
+        fill={active ? '#f97316' : '#4a3a1a'} />
+
+      {/* + pin marker */}
+      <text x={cx - r * 0.52} y={cy - r * 0.68}
+        textAnchor="middle" fontSize={Math.max(5, r * 0.30)}
+        fill={active ? '#f97316' : '#666'} fontFamily="monospace" fontWeight="700">+</text>
+
+      {/* Active sound-wave arcs */}
+      {active && (
+        <>
+          <path d={`M ${cx + r*1.05} ${cy - r*0.3} Q ${cx + r*1.35} ${cy} ${cx + r*1.05} ${cy + r*0.3}`}
+            fill="none" stroke="#f97316" strokeWidth={1.2} strokeLinecap="round" opacity={0.5} />
+          <path d={`M ${cx + r*1.25} ${cy - r*0.55} Q ${cx + r*1.7} ${cy} ${cx + r*1.25} ${cy + r*0.55}`}
+            fill="none" stroke="#f97316" strokeWidth={1} strokeLinecap="round" opacity={0.3} />
+        </>
+      )}
     </>
   )
 }

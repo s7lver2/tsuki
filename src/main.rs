@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::path::PathBuf;
-use tsuki_core::{Pipeline, PipelineOptions, TranspileConfig, Board};
+use tsuki_core::{Pipeline, PipelineOptions, PythonPipeline, TranspileConfig, Board};
 use tsuki_core::pkg_manager;
 use tsuki_core::pkg_manager::default_libs_dir;
 
@@ -56,6 +56,13 @@ fn main() {
     let check_only = args.iter().any(|a| a == "--check");
     let emit_sim   = flag_value(&args, "--emit-sim"); // path for .sim.json bundle
 
+    // Language selection: infer from file extension or explicit --lang flag
+    let lang = flag_value(&args, "--lang")
+        .unwrap_or_else(|| {
+            let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("go");
+            ext.to_owned()
+        });
+
     // External library flags
     let libs_dir   = flag_value(&args, "--libs-dir").map(PathBuf::from);
     let pkg_names: Vec<String> = flag_value(&args, "--packages")
@@ -80,15 +87,28 @@ fn main() {
     let filename = input.to_string_lossy().into_owned();
 
     // ── Build pipeline with optional external libs ────────────────────────────
-    let pipeline = Pipeline::new(cfg)
-        .with_options(PipelineOptions {
-            libs_dir:  libs_dir,
-            pkg_names: pkg_names,
-        });
+    let opts = PipelineOptions {
+        libs_dir:  libs_dir,
+        pkg_names: pkg_names,
+    };
+
+    // Dispatch to the appropriate pipeline based on language
+    let run_pipeline = |source: &str, filename: &str| -> tsuki_core::Result<String> {
+        match lang.as_str() {
+            "py" | "python" => PythonPipeline::new(cfg.clone()).with_options(PipelineOptions {
+                libs_dir:  opts.libs_dir.clone(),
+                pkg_names: opts.pkg_names.clone(),
+            }).run(source, filename),
+            _ => Pipeline::new(cfg.clone()).with_options(PipelineOptions {
+                libs_dir:  opts.libs_dir.clone(),
+                pkg_names: opts.pkg_names.clone(),
+            }).run(source, filename),
+        }
+    };
 
     // ── Run (check-only or full transpile) ────────────────────────────────────
     if check_only {
-        match pipeline.run(&source, &filename) {
+        match run_pipeline(&source, &filename) {
             Ok(_)  => {
                 eprintln!("ok  {} — no errors", input.display());
                 std::process::exit(0);
@@ -100,7 +120,7 @@ fn main() {
         }
     }
 
-    match pipeline.run(&source, &filename) {
+    match run_pipeline(&source, &filename) {
         Ok(cpp) => {
             // ── Emit .sim.json bundle if requested ────────────────────────────
             if let Some(ref sim_path) = emit_sim {

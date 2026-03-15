@@ -7,9 +7,9 @@ const BENCHMARKS = [
     id: "transpile",  label: "Transpile",
     description: "Go source → Arduino C++",
     note: "tsuki-core (Rust). Others require manual authoring.",
-    speed:   { tsuki: 97, cli: 0,  ide: 0  },   // relative speed score 0-100
-    ram:     { tsuki: 8,  cli: 42, ide: 110 },   // MB
-    cpu:     { tsuki: 12, cli: 0,  ide: 0  },    // % peak
+    speed:   { tsuki: 97, cli: 0,  ide: 0  },
+    ram:     { tsuki: 8,  cli: 42, ide: 110 },
+    cpu:     { tsuki: 12, cli: 0,  ide: 0  },
     time:    { tsuki: "11 ms", cli: "—", ide: "—" },
   },
   {
@@ -60,47 +60,33 @@ const BENCHMARKS = [
 ];
 
 const TOOLS = [
-  { id: "tsuki", label: "tsuki",       color: "var(--accent)",  hex: "#00e5b0" },
+  { id: "tsuki", label: "tsuki",       color: "var(--accent)",  hex: "#dc143c" },
   { id: "cli",   label: "arduino-cli", color: "var(--accent2)", hex: "#6ba4e0" },
   { id: "ide",   label: "Arduino IDE", color: "#52525b",        hex: "#52525b" },
 ];
 
-/* ── Speedometer gauge SVG ── */
-function Gauge({ value, color, label, size = 80 }: { value: number; color: string; label: string; size?: number }) {
-  const r = size * 0.38;
-  const cx = size / 2, cy = size / 2 + 6;
-  const startAngle = -210, sweep = 240;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const arcPath = (pct: number) => {
-    const angle = startAngle + sweep * (pct / 100);
-    const x = cx + r * Math.cos(toRad(angle));
-    const y = cy + r * Math.sin(toRad(angle));
-    const la = sweep * (pct / 100) > 180 ? 1 : 0;
-    const sx = cx + r * Math.cos(toRad(startAngle));
-    const sy = cy + r * Math.sin(toRad(startAngle));
-    return `M ${sx} ${sy} A ${r} ${r} 0 ${la} 1 ${x} ${y}`;
-  };
-  const needleAngle = startAngle + sweep * (value / 100);
-  const nr = r * 0.75;
-  const nx = cx + nr * Math.cos(toRad(needleAngle));
-  const ny = cy + nr * Math.sin(toRad(needleAngle));
-
+/* ── Speed line bar ── */
+function SpeedLine({ label, value, color, animate }: { label: string; value: number; color: string; animate: boolean }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-      <svg width={size} height={size * 0.78} viewBox={`0 0 ${size} ${size * 0.78}`}>
-        {/* track */}
-        <path d={arcPath(100)} fill="none" stroke="var(--s3)" strokeWidth={size * 0.07} strokeLinecap="round" />
-        {/* fill */}
-        <path d={arcPath(value)} fill="none" stroke={color} strokeWidth={size * 0.07} strokeLinecap="round"
-          style={{ transition: "stroke-dasharray 1s ease, d 1s cubic-bezier(0.16,1,0.3,1)" }} />
-        {/* needle */}
-        <line x1={cx} y1={cy} x2={nx} y2={ny} stroke={color} strokeWidth={size * 0.025} strokeLinecap="round"
-          style={{ transition: "all 1s cubic-bezier(0.16,1,0.3,1)" }} />
-        <circle cx={cx} cy={cy} r={size * 0.04} fill={color} />
-        {/* value */}
-        <text x={cx} y={cy - r * 0.1} textAnchor="middle" fontSize={size * 0.2} fontFamily="var(--f-mono)" fill={color} fontWeight="600">{value}</text>
-      </svg>
-      <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--fg-f)", letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</span>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--fg-m)" }}>{label}</span>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 600, color, letterSpacing: "-0.02em" }}>
+          {value}<span style={{ fontSize: 9, opacity: 0.6, marginLeft: 2 }}>/100</span>
+        </span>
+      </div>
+      <div style={{ height: 6, background: "var(--s3)", borderRadius: 3, overflow: "hidden", position: "relative" }}>
+        {/* tick marks */}
+        {[25, 50, 75].map(t => (
+          <div key={t} style={{ position: "absolute", left: `${t}%`, top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.04)" }} />
+        ))}
+        <div style={{
+          height: "100%", borderRadius: 3, background: color,
+          width: animate ? `${value}%` : "0%",
+          transition: "width 1.1s cubic-bezier(0.16,1,0.3,1)",
+          boxShadow: animate ? `0 0 8px ${color}55` : "none",
+        }} />
+      </div>
     </div>
   );
 }
@@ -156,8 +142,8 @@ export default function Benchmark() {
 
   const b = BENCHMARKS[active];
 
-  const ramVals  = TOOLS.map(t => ({ label: t.label, val: (b.ram  as any)[t.id] as number, color: t.hex }));
-  const cpuVals  = TOOLS.map(t => ({ label: t.label, val: (b.cpu  as any)[t.id] as number, color: t.hex }));
+  const ramVals   = TOOLS.map(t => ({ label: t.label, val: (b.ram  as any)[t.id] as number, color: t.hex }));
+  const cpuVals   = TOOLS.map(t => ({ label: t.label, val: (b.cpu  as any)[t.id] as number, color: t.hex }));
   const speedVals = TOOLS.map(t => ({ label: t.label, val: (b.speed as any)[t.id] as number, color: t.hex }));
 
   return (
@@ -205,15 +191,21 @@ export default function Benchmark() {
             </div>
           </div>
 
-          {/* body: gauges + bars */}
+          {/* body: speed lines + resource bars */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
 
-            {/* left: speed gauges */}
+            {/* left: speed lines */}
             <div style={{ padding: "28px", borderRight: "1px solid var(--border)" }}>
-              <div className="t-label" style={{ marginBottom: 24 }}>Speed score (higher = faster)</div>
-              <div style={{ display: "flex", gap: 12, justifyContent: "space-around" }}>
-                {speedVals.map((v, i) => (
-                  <Gauge key={v.label} value={animate ? v.val : 0} color={v.color} label={v.label} size={88} />
+              <div className="t-label" style={{ marginBottom: 22 }}>Speed score — higher is faster</div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {speedVals.map(v => (
+                  <SpeedLine key={v.label} label={v.label} value={v.val} color={v.color} animate={animate} />
+                ))}
+              </div>
+              {/* scale labels */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+                {["0", "25", "50", "75", "100"].map(n => (
+                  <span key={n} style={{ fontFamily: "var(--f-mono)", fontSize: 9, color: "var(--s4)" }}>{n}</span>
                 ))}
               </div>
             </div>

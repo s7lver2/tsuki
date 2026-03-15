@@ -18,7 +18,7 @@ import { clsx } from 'clsx'
 import TsukiLogo from '@/components/shared/TsukiLogo'
 import { showContextMenu } from '@/components/shared/ContextMenu'
 import { useT } from '@/lib/i18n'
-import ExeWarningModal from '@/components/other/ExeWarningModal'
+
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
@@ -37,7 +37,7 @@ export default function IdeScreen() {
   const t = useT()
   const [showNewProjectModal, setShowNewProjectModal] = useState(false)
   const [sandboxOpen, setSandboxOpen] = useState(false)
-  const [exeWarning, setExeWarning] = useState<{ command: string; action: () => void } | null>(null)
+
   const [sandboxWidth, setSandboxWidth] = useState(480)
   const [resizingSandbox, setResizingSandbox] = useState(false)
   const [resizingSidebar, setResizingSidebar] = useState(false)
@@ -67,46 +67,24 @@ export default function IdeScreen() {
     return args
   }
 
-  /** If the tsuki path is a .exe, intercept and show the warning modal instead of dispatching directly. */
-  function guardExe(commandStr: string, action: () => void) {
-    if (tsuki.toLowerCase().endsWith('.exe')) setExeWarning({ command: commandStr, action })
-    else action()
-  }
-
   function dispatch(args: string[]) {
     setBottomTab('terminal')
     dispatchCommand(tsuki, args, cwd)
   }
 
-  function handleCheck() {
-    const args = makeArgs('check')
-    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
-  }
-
-  function handleBuild() {
-    const args = makeArgs('build', '--compile')
-    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
-  }
-
-  function handleFlash() {
-    const args = makeArgs('upload')
-    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
-  }
+  function handleCheck()   { dispatch(makeArgs('check')) }
+  function handleBuild()   { dispatch(makeArgs('build', '--compile')) }
+  function handleFlash()   { dispatch(makeArgs('upload')) }
 
   function handleRun() {
-    const buildArgs = makeArgs('build', '--compile')
-    const flashArgs = makeArgs('upload')
-    const cmd = [tsuki, ...buildArgs].join(' ') + ' && ' + [tsuki, ...flashArgs].join(' ')
-    guardExe(cmd, () => {
-      setBottomTab('terminal')
-      dispatchCommand(tsuki, buildArgs, cwd, flashArgs)
-    })
+    setBottomTab('terminal')
+    dispatchCommand(tsuki, makeArgs('build', '--compile'), cwd, makeArgs('upload'))
   }
 
   function handleMonitor() {
     const args = makeArgs('monitor')
     if (settings.defaultBaud && settings.defaultBaud !== '9600') args.push('--baud', settings.defaultBaud)
-    guardExe([tsuki, ...args].join(' '), () => dispatch(args))
+    dispatch(args)
   }
 
   useEffect(() => {
@@ -426,17 +404,6 @@ export default function IdeScreen() {
         <NewProjectModal onClose={() => setShowNewProjectModal(false)} />
       )}
 
-      {exeWarning && (
-        <ExeWarningModal
-          command={exeWarning.command}
-          onCancel={() => setExeWarning(null)}
-          onTryAnyway={() => {
-            const action = exeWarning.action
-            setExeWarning(null)
-            action()
-          }}
-        />
-      )}
     </div>
   )
 }

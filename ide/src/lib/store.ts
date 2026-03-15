@@ -109,6 +109,14 @@ export interface SettingsState {
   uiScale: number       // 0.80 – 1.25, default 1
   iconPack: string      // id from ICON_PACKS
   showCurrentFlow: boolean  // show current-flow animation on active wires
+  // ── Sandbox wire settings ─────────────────────────────────────────────────
+  sandboxWireStyle: 'orthogonal' | 'smooth' | 'flexible' | 'direct'
+  sandboxWirePalette: 'classic' | 'monochrome' | 'pastel' | 'custom'
+  sandboxWireCustomColors: string[]   // custom palette (up to 9 colors)
+  sandboxAutoColorVcc: boolean        // auto-color wires connected to VCC
+  sandboxAutoColorGnd: boolean        // auto-color wires connected to GND
+  sandboxVccColor: string             // color to use for VCC wires
+  sandboxGndColor: string             // color to use for GND wires
   // ── Layout ────────────────────────────────────────────────────────────────
   ideLayout: 'default' | 'focused' | 'wide-editor' | 'minimal' | 'custom'
   sidebarWidth: number          // px, 140–480
@@ -151,6 +159,19 @@ export interface SettingsState {
   lspIgnoredLibs: string[]      // libs the user has clicked "don't ask again" for
   // ── Windows ──────────────────────────────────────────────────────────────
   winSpawnMethod: 'shell' | 'direct' | 'detached'
+  // ── Debug / Logging ───────────────────────────────────────────────────────
+  // Requires app restart to take effect (logging starts at process init).
+  debugMode: boolean
+  debugLogFormat: 'flat' | 'structured'
+  debugLogCategories: {
+    spawn:    boolean   // spawn_process / spawn_shell calls
+    pty:      boolean   // pty_create / pty_write / pty_resize / pty_kill lifecycle
+    resolve:  boolean   // normalise_cmd / resolve_cmd path resolution
+    settings: boolean   // settings read/write, path detection
+    shell:    boolean   // shell list detection, shell spawn
+    process:  boolean   // process exit codes, write_stdin, kill_process
+    frontend: boolean   // console.log/warn/error forwarded from the renderer
+  }
 }
 
 interface AppState {
@@ -300,6 +321,14 @@ const DEFAULT_SETTINGS: SettingsState = {
   uiScale: 1,
   iconPack: 'minimal',
   showCurrentFlow: false,
+  // sandbox wire settings
+  sandboxWireStyle: 'orthogonal',
+  sandboxWirePalette: 'classic',
+  sandboxWireCustomColors: ['#ef4444','#3b82f6','#22c55e','#f97316','#a855f7','#eab308','#ec4899','#e2e2e2','#1a1a1a'],
+  sandboxAutoColorVcc: true,
+  sandboxAutoColorGnd: true,
+  sandboxVccColor: '#ef4444',
+  sandboxGndColor: '#1a1a1a',
   // layout
   ideLayout: 'default',
   sidebarWidth: 224,
@@ -333,6 +362,12 @@ const DEFAULT_SETTINGS: SettingsState = {
   lspShowLibPrompt: true,
   lspIgnoredLibs: [],
   winSpawnMethod: 'shell',
+  debugMode: false,
+  debugLogFormat: 'flat',
+  debugLogCategories: {
+    spawn: true, pty: true, resolve: true,
+    settings: true, shell: true, process: true, frontend: true,
+  },
   language: 'en',
   docsLang: 'en',
   fontRendering: 'auto',

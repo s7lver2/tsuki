@@ -183,9 +183,12 @@ export function applyStepResult(
 // brightness can reflect the actual current limiting (Vcc=5V, LED Vf≈2V):
 //   I = (Vcc - Vf) / R  →  mA = 3000 / ohms
 
+// power_rail is intentionally excluded — it has separate 5V/GND buses that
+// must NOT cross-contaminate, so it's handled via its own bus logic below.
+// vcc_node / gnd_node are single-pin stubs; their signal comes from pre-seeding.
 const PASSIVE_TYPES = new Set([
   'resistor', 'capacitor', 'diode', 'transistor_npn', 'mosfet_n',
-  'power_rail', 'vcc_node', 'gnd_node',
+  'vcc_node', 'gnd_node',
 ])
 
 // Breadboard internal bus logic
@@ -214,6 +217,113 @@ export function getBreadboardBusPeers(pinId: string, allPins: readonly { id: str
   return allPins.filter(p => p.id !== pinId && bus.has(p.id[0]) && p.id.slice(1) === row).map(p => p.id)
 }
 
+// ── BFS runner (extracted so relay post-processing can reuse it) ──────────────
+function bfsFrom(
+  startSeeds: Array<{ key: string; val: number; mA: number }>,
+  pinValues: Record<string, number>,
+  seen: Set<string>,
+  adj: Map<string, Array<{ compId: string; pinId: string }>>,
+  compById: Map<string, { id: string; type: string; props: Record<string, string | number> }>,
+): void {
+  const queue = [...startSeeds]
+
+  while (queue.length > 0) {
+    const { key, val, mA } = queue.shift()!
+    const colonIdx = key.indexOf(':')
+    const compId   = key.slice(0, colonIdx)
+    const pinId    = key.slice(colonIdx + 1)
+    const comp     = compById.get(compId)
+    if (!comp) continue
+    const def = COMP_DEFS[comp.type]
+    if (!def) continue
+
+    // ── Passive: broadcast through all pins ──
+    if (PASSIVE_TYPES.has(def.type)) {
+      let outMa = mA
+      if (def.type === 'resistor') {
+        const ohms = Number(comp.props?.ohms ?? 1000)
+        outMa = ohms > 0 ? Math.round(3000 / ohms * 10) / 10 : mA
+      }
+      for (const otherPin of def.pins) {
+        if (otherPin.id === pinId) continue
+        const otherKey = `${compId}:${otherPin.id}`
+        if (seen.has(otherKey)) continue
+        seen.add(otherKey)
+        if (!pinValues[otherKey]) pinValues[otherKey] = val
+        pinValues[`${otherKey}:mA`] = outMa
+        queue.push({ key: otherKey, val, mA: outMa })
+      }
+    }
+
+    // ── Power rail: 5V↔5V only; GND↔GND only (never cross) ──
+    if (def.type === 'power_rail') {
+      const isVcc = pinId.startsWith('5v')
+      const isGnd = pinId.startsWith('gnd')
+      for (const otherPin of def.pins) {
+        if (otherPin.id === pinId) continue
+        if (isVcc && !otherPin.id.startsWith('5v'))  continue
+        if (isGnd && !otherPin.id.startsWith('gnd')) continue
+        const otherKey = `${compId}:${otherPin.id}`
+        if (seen.has(otherKey)) continue
+        seen.add(otherKey)
+        if (!pinValues[otherKey]) pinValues[otherKey] = val
+        if (!pinValues[`${otherKey}:mA`]) pinValues[`${otherKey}:mA`] = mA
+        queue.push({ key: otherKey, val, mA })
+      }
+    }
+
+    // ── Relay: signal passes IN→coil; COM routes to NO (active) or NC (inactive) ──
+    if (def.type === 'relay') {
+      const inActive = (pinValues[`${compId}:in`] ?? 0) > 0
+      // COM↔NO when active; COM↔NC when inactive
+      const switchedPins = inActive
+        ? new Set(['com', 'no'])
+        : new Set(['com', 'nc'])
+      if (switchedPins.has(pinId)) {
+        for (const otherPin of def.pins) {
+          if (otherPin.id === pinId || !switchedPins.has(otherPin.id)) continue
+          const otherKey = `${compId}:${otherPin.id}`
+          if (seen.has(otherKey)) continue
+          seen.add(otherKey)
+          if (!pinValues[otherKey]) pinValues[otherKey] = val
+          if (!pinValues[`${otherKey}:mA`]) pinValues[`${otherKey}:mA`] = mA
+          queue.push({ key: otherKey, val, mA })
+        }
+      }
+    }
+
+    // ── Breadboard: propagate within row-side bus ──
+    if (def.type === 'breadboard' || def.type === 'breadboard_830') {
+      for (const peerId of getBreadboardBusPeers(pinId, def.pins)) {
+        const peerKey = `${compId}:${peerId}`
+        if (!seen.has(peerKey)) {
+          seen.add(peerKey)
+          if (!pinValues[peerKey]) pinValues[peerKey] = val
+          if (!pinValues[`${peerKey}:mA`]) pinValues[`${peerKey}:mA`] = mA
+          queue.push({ key: peerKey, val, mA })
+        }
+      }
+    }
+
+    // ── Walk wires to neighbors ──
+    for (const nb of adj.get(key) ?? []) {
+      const nbKey = `${nb.compId}:${nb.pinId}`
+      if (seen.has(nbKey)) continue
+      const nbComp = compById.get(nb.compId)
+      if (!nbComp) continue
+      const nbDef = COMP_DEFS[nbComp.type]
+      if (!nbDef) continue
+      // MCU pins are ground-truth — never overwrite them
+      if (nbDef.category === 'mcu') continue
+
+      seen.add(nbKey)
+      if (!pinValues[nbKey]) pinValues[nbKey] = val
+      if (!pinValues[`${nbKey}:mA`]) pinValues[`${nbKey}:mA`] = mA
+      queue.push({ key: nbKey, val, mA })
+    }
+  }
+}
+
 function propagateNetSignals(
   pinValues: Record<string, number>,
   circuit: TsukiCircuit,
@@ -231,86 +341,87 @@ function propagateNetSignals(
     addEdge(`${wire.toComp}:${wire.toPin}`,     { compId: wire.fromComp, pinId: wire.fromPin })
   }
 
-  const compById = new Map(circuit.components.map(c => [c.id, c]))
+  const compById = new Map(circuit.components.map(c => [c.id, c])) as Map<
+    string,
+    { id: string; type: string; props: Record<string, string | number> }
+  >
 
-  // ── Seed: every pin that already carries a signal ──
-  // Collect (key, signal mA) pairs — use mA=20 as default when no energy data
   type Seed = { key: string; val: number; mA: number }
   const seeds: Seed[] = []
   const seen  = new Set<string>()
 
+  // ── Pre-seed always-on power sources ──────────────────────────────────────
+  // Three sources are unconditionally live:
+  //   1. vcc_node components
+  //   2. power_rail 5V ports
+  //   3. MCU power pins (type='power') — covers Arduino 5V/3V3 and Xiao 5V pass-through
+  //
+  // Note: the BFS already prevents signal from propagating INTO MCU signal pins
+  // (category='mcu' guard in bfsFrom), so seeding these power pins unconditionally
+  // won't cause phantom signals on MCU-driven signal pins.
+  for (const comp of circuit.components) {
+    // Dedicated VCC node
+    if (comp.type === 'vcc_node') {
+      const key = `${comp.id}:5v`
+      if (!pinValues[key]) pinValues[key] = 1
+      if (!seen.has(key)) { seen.add(key); seeds.push({ key, val: 1, mA: 500 }) }
+    }
+    // Power rail — 5V ports only (GND ports are 0V, don't seed)
+    if (comp.type === 'power_rail') {
+      for (let i = 1; i <= 5; i++) {
+        const key = `${comp.id}:5v_${i}`
+        if (!pinValues[key]) pinValues[key] = 1
+        if (!seen.has(key)) { seen.add(key); seeds.push({ key, val: 1, mA: 500 }) }
+      }
+    }
+    // MCU power pins (5V, 3V3 outputs — also Xiao's 5V pass-through even if 'in')
+    const def = COMP_DEFS[comp.type]
+    if (def?.category === 'mcu') {
+      for (const pin of def.pins) {
+        if (pin.type === 'power') {
+          const key = `${comp.id}:${pin.id}`
+          if (!pinValues[key]) pinValues[key] = 1
+          if (!seen.has(key)) { seen.add(key); seeds.push({ key, val: 1, mA: 500 }) }
+        }
+      }
+    }
+  }
+
+  // ── Seed from MCU-driven pins that already carry a signal ──────────────────
   for (const [rawKey, v] of Object.entries(pinValues)) {
     if (rawKey.endsWith(':mA') || v <= 0) continue
+    if (seen.has(rawKey)) continue
     const mA = pinValues[`${rawKey}:mA`] ?? 20
     seeds.push({ key: rawKey, val: v, mA })
     seen.add(rawKey)
   }
 
-  // ── BFS ──
-  const queue: Seed[] = [...seeds]
+  // ── Main BFS pass ──────────────────────────────────────────────────────────
+  bfsFrom(seeds, pinValues, seen, adj, compById)
 
-  while (queue.length > 0) {
-    const { key, val, mA } = queue.shift()!
-    const colonIdx = key.indexOf(':')
-    const compId   = key.slice(0, colonIdx)
-    const pinId    = key.slice(colonIdx + 1)
-    const comp     = compById.get(compId)
-    if (!comp) continue
-    const def = COMP_DEFS[comp.type]
-    if (!def) continue
-
-    // If this component is a passive, broadcast signal to ALL its other pins
-    // (i.e., the signal travels through the component body).
-    if (PASSIVE_TYPES.has(def.type)) {
-      // Compute outgoing mA (resistor limits current)
-      let outMa = mA
-      if (def.type === 'resistor') {
-        const ohms = Number(comp.props?.ohms ?? 1000)
-        outMa = ohms > 0 ? Math.round(3000 / ohms * 10) / 10 : mA
-      }
-
-      for (const otherPin of def.pins) {
-        if (otherPin.id === pinId) continue
-        const otherKey = `${compId}:${otherPin.id}`
-        if (seen.has(otherKey)) continue
-        seen.add(otherKey)
-        // Write signal + mA through the passive
-        if (!pinValues[otherKey]) pinValues[otherKey] = val
-        pinValues[`${otherKey}:mA`] = outMa
-        queue.push({ key: otherKey, val, mA: outMa })
-      }
+  // ── Relay second pass ──────────────────────────────────────────────────────
+  // After the main BFS we know which relay IN pins are active. Re-evaluate
+  // relays whose switched output wasn't visited yet (e.g. COM had signal but
+  // IN was still 0 during its BFS visit, or vice-versa).
+  const relaySeeds: Seed[] = []
+  for (const comp of circuit.components) {
+    if (comp.type !== 'relay') continue
+    const inActive = (pinValues[`${comp.id}:in`] ?? 0) > 0
+    const comKey   = `${comp.id}:com`
+    const comVal   = pinValues[comKey] ?? 0
+    const comMa    = pinValues[`${comKey}:mA`] ?? 0
+    if (comVal <= 0) continue
+    const outPin = inActive ? 'no' : 'nc'
+    const outKey = `${comp.id}:${outPin}`
+    if (!pinValues[outKey] && !seen.has(outKey)) {
+      seen.add(outKey)
+      pinValues[outKey] = comVal
+      pinValues[`${outKey}:mA`] = comMa
+      relaySeeds.push({ key: outKey, val: comVal, mA: comMa })
     }
-
-    // Breadboard: propagate signal to all holes in the same row-side bus
-    if (def.type === 'breadboard' || def.type === 'breadboard_830') {
-      for (const peerId of getBreadboardBusPeers(pinId, def.pins)) {
-        const peerKey = `${compId}:${peerId}`
-        if (!seen.has(peerKey)) {
-          seen.add(peerKey)
-          if (!pinValues[peerKey]) pinValues[peerKey] = val
-          if (!pinValues[`${peerKey}:mA`]) pinValues[`${peerKey}:mA`] = mA
-          queue.push({ key: peerKey, val, mA })
-        }
-      }
-    }
-
-    // Walk wires from this pin to neighbors
-    for (const nb of adj.get(key) ?? []) {
-      const nbKey = `${nb.compId}:${nb.pinId}`
-      if (seen.has(nbKey)) continue
-      const nbComp = compById.get(nb.compId)
-      if (!nbComp) continue
-      const nbDef = COMP_DEFS[nbComp.type]
-      if (!nbDef) continue
-      // Don't overwrite MCU pins — those are ground-truth from the simulator
-      if (nbDef.category === 'mcu') continue
-
-      seen.add(nbKey)
-      if (!pinValues[nbKey]) pinValues[nbKey] = val
-      // Preserve an existing :mA value set by energy data
-      if (!pinValues[`${nbKey}:mA`]) pinValues[`${nbKey}:mA`] = mA
-      queue.push({ key: nbKey, val, mA })
-    }
+  }
+  if (relaySeeds.length > 0) {
+    bfsFrom(relaySeeds, pinValues, seen, adj, compById)
   }
 }
 

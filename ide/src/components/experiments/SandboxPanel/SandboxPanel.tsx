@@ -1,9 +1,9 @@
 'use client'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Trash2, Upload, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '@/lib/store'
-import { DEFAULT_CIRCUIT, circuitToText, textToCircuit, type WireProbe } from './SandboxDefs'
+import { DEFAULT_CIRCUIT, circuitToText, textToCircuit, type WireProbe, COMP_DEFS } from './SandboxDefs'
 import { useCircuit }    from './hooks/useCircuit'
 import { useSimRunner }  from './hooks/useSimRunner'
 import CanvasView        from './views/CanvasView'
@@ -11,6 +11,123 @@ import TextView          from './views/TextView'
 import SimView           from './views/SimView'
 
 type View = 'canvas' | 'text' | 'sim'
+
+// ── Buzzer audio hook ──────────────────────────────────────────────────────────
+// Uses Web Audio API to play a square-wave tone for each active buzzer component.
+// The pin value from tsuki-sim is the tone() frequency (if > 1) or just HIGH/LOW.
+//
+// IMPORTANT: Web Audio requires a user gesture to start. The AudioContext is
+// unlocked explicitly via `unlockAudio()` which must be called from a click
+// handler (e.g. the Run button). Without this, ctx.state stays 'suspended' on
+// most browsers and the oscillator produces no sound.
+function useBuzzerAudio(
+  circuit: ReturnType<typeof useCircuit>['circuit'],
+  simPinValues: Record<string, number>,
+  simRunning: boolean,
+) {
+  const ctxRef   = useRef<AudioContext | null>(null)
+  const nodesRef = useRef<Map<string, { osc: OscillatorNode; gain: GainNode }>>(new Map())
+
+  // ── Unlock must be called from a user-gesture click handler ──────────────
+  const unlockAudio = () => {
+    if (!ctxRef.current) {
+      try { ctxRef.current = new AudioContext() } catch { return }
+    }
+    if (ctxRef.current.state === 'suspended') {
+      ctxRef.current.resume().catch(() => {})
+    }
+  }
+
+  // ── Stop all buzzer nodes ─────────────────────────────────────────────────
+  function stopAll() {
+    const ctx = ctxRef.current
+    nodesRef.current.forEach(({ osc, gain }) => {
+      try {
+        if (ctx) gain.gain.setTargetAtTime(0, ctx.currentTime, 0.015)
+        setTimeout(() => { try { osc.stop() } catch { /* already stopped */ } }, 80)
+      } catch { /* ignore */ }
+    })
+    nodesRef.current.clear()
+  }
+
+  useEffect(() => {
+    if (!simRunning) { stopAll(); return }
+
+    const buzzers = circuit.components.filter(c => c.type === 'buzzer')
+
+    for (const buzzer of buzzers) {
+      const pinVal   = simPinValues[`${buzzer.id}:pos`] ?? 0
+      const isActive = pinVal > 0
+      // tsuki-sim emits tone frequency as the pin value when tone() is called.
+      // For plain digitalWrite HIGH it emits 1; use a default buzz frequency.
+      const freq = pinVal > 1 ? Math.min(20000, Math.max(20, pinVal)) : 2000
+
+      if (isActive) {
+        // Ensure AudioContext exists and is running — create it if needed.
+        // Note: if unlockAudio() was already called on Run click, this will
+        // find the existing ctx in 'running' state.
+        if (!ctxRef.current) {
+          try { ctxRef.current = new AudioContext() } catch { continue }
+        }
+        const ctx = ctxRef.current
+        // Resume asynchronously — if it was already running this is a no-op.
+        if (ctx.state === 'suspended') {
+          ctx.resume().then(() => {
+            // Re-trigger the effect after the context is running so the
+            // oscillator actually starts producing sound.
+          }).catch(() => {})
+        }
+
+        if (nodesRef.current.has(buzzer.id)) {
+          // Update frequency in-place if changed
+          const { osc } = nodesRef.current.get(buzzer.id)!
+          osc.frequency.setTargetAtTime(freq, ctx.currentTime, 0.005)
+        } else {
+          const osc  = ctx.createOscillator()
+          const gain = ctx.createGain()
+          osc.connect(gain)
+          gain.connect(ctx.destination)
+          osc.type            = 'square'
+          osc.frequency.value = freq
+          // Ramp in gently to avoid click artefact
+          gain.gain.setValueAtTime(0, ctx.currentTime)
+          gain.gain.setTargetAtTime(0.07, ctx.currentTime, 0.01)
+          osc.start()
+          nodesRef.current.set(buzzer.id, { osc, gain })
+        }
+      } else {
+        if (nodesRef.current.has(buzzer.id)) {
+          const { osc, gain } = nodesRef.current.get(buzzer.id)!
+          const ctx = ctxRef.current
+          if (ctx) gain.gain.setTargetAtTime(0, ctx.currentTime, 0.015)
+          setTimeout(() => { try { osc.stop() } catch { /* ignore */ } }, 80)
+          nodesRef.current.delete(buzzer.id)
+        }
+      }
+    }
+
+    // Clean up nodes for buzzers that were removed from circuit
+    const buzzerIds = new Set(buzzers.map(b => b.id))
+    nodesRef.current.forEach((nodes, id) => {
+      if (!buzzerIds.has(id)) {
+        const ctx = ctxRef.current
+        try {
+          if (ctx) nodes.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.015)
+          setTimeout(() => { try { nodes.osc.stop() } catch { /* ignore */ } }, 80)
+        } catch { /* ignore */ }
+        nodesRef.current.delete(id)
+      }
+    })
+  }, [simRunning, simPinValues, circuit.components]) // eslint-disable-line
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    stopAll()
+    ctxRef.current?.close().catch(() => {})
+  }, []) // eslint-disable-line
+
+  return { unlockAudio }
+}
 
 export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
   const { board } = useStore()
@@ -23,6 +140,17 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
   const { circuit, setCircuit } = useCircuit(board || 'uno')
 
   const sim = useSimRunner(circuit, setCircuit)
+
+  // ── Buzzer audio ────────────────────────────────────────────────────────────
+  const { unlockAudio } = useBuzzerAudio(circuit, sim.simPinValues, sim.simRunning)
+
+  // Wrap handleRun to unlock the AudioContext during the user gesture (click).
+  // Without this, browsers keep the AudioContext suspended and the buzzer
+  // produces no sound even when the simulation is running.
+  const handleRunWithAudio = (code: string, boardName: string) => {
+    unlockAudio()
+    return sim.handleRun(code, boardName)
+  }
 
   // ── Import / Export / Clear ────────────────────────────────────────────────
 
@@ -165,14 +293,10 @@ export default function SandboxPanel({ onClose }: { onClose?: () => void }) {
           sigGenFreq={sim.sigGenFreq}
           setSigGenFreq={sim.setSigGenFreq}
           sigGenRunning={sim.sigGenRunning}
-          waveformPins={sim.waveformPins}
-          setWaveformPins={sim.setWaveformPins}
-          pinHistoryRef={sim.pinHistoryRef}
-          waveformVersion={sim.waveformVersion}
           serialSend={sim.serialSend}
           setSerialSend={sim.setSerialSend}
           simHandleRef={sim.simHandleRef}
-          handleRun={sim.handleRun}
+          handleRun={handleRunWithAudio}
           handleStop={sim.handleStop}
           handleReset={sim.handleReset}
           onButtonPress={sim.onButtonPress}

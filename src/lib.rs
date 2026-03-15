@@ -7,6 +7,7 @@ pub mod lexer;
 pub mod parser;
 pub mod runtime;
 pub mod transpiler;
+pub mod python;
 
 pub use error::{TsukiError, Result, Span};
 pub use transpiler::TranspileConfig;
@@ -91,6 +92,67 @@ impl Pipeline {
 
         // 3. Generate
         let mut gen = transpiler::Transpiler::with_runtime(self.cfg.clone(), rt);
+        gen.generate(&prog)
+    }
+}
+
+// ── PythonPipeline ─────────────────────────────────────────────────────────────
+
+/// One-shot: Python source text → Arduino C++ source text.
+///
+/// # Example
+/// ```no_run
+/// use tsuki_core::{PythonPipeline, TranspileConfig};
+///
+/// let source = r#"
+/// import arduino
+/// import time
+///
+/// def setup():
+///     arduino.pinMode(13, arduino.OUTPUT)
+///
+/// def loop():
+///     arduino.digitalWrite(13, arduino.HIGH)
+///     time.sleep(1.0)
+///     arduino.digitalWrite(13, arduino.LOW)
+///     time.sleep(1.0)
+/// "#;
+///
+/// let cpp = PythonPipeline::new(TranspileConfig::default())
+///     .run(source, "main.py")
+///     .unwrap();
+/// ```
+pub struct PythonPipeline {
+    cfg:  TranspileConfig,
+    opts: PipelineOptions,
+}
+
+impl PythonPipeline {
+    pub fn new(cfg: TranspileConfig) -> Self {
+        Self { cfg, opts: PipelineOptions::default() }
+    }
+
+    pub fn with_options(mut self, opts: PipelineOptions) -> Self {
+        self.opts = opts;
+        self
+    }
+
+    pub fn run(&self, source: &str, filename: &str) -> Result<String> {
+        // Build runtime (same as Go pipeline — reuses all tsukilib packages)
+        let rt = match &self.opts.libs_dir {
+            None      => Runtime::new(),
+            Some(dir) if self.opts.pkg_names.is_empty() => Runtime::with_libs(dir),
+            Some(dir) => Runtime::with_selected_libs(dir, &self.opts.pkg_names),
+        };
+
+        // 1. Lex
+        let tokens = python::lexer::PyLexer::new(source, filename).tokenize()?;
+
+        // 2. Parse
+        let prog = python::parser::PyParser::new(tokens).parse_program()?;
+
+        // 3. Generate
+        let mut gen = python::transpiler::PyTranspiler::new(self.cfg.clone(), rt);
         gen.generate(&prog)
     }
 }

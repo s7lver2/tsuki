@@ -73,36 +73,15 @@ def step(msg):  print(f"\n{BOLD}{CYAN}▶ {msg}{RESET}")
 def warn(msg):  print(f"{YELLOW}⚠  {msg}{RESET}")
 def error(msg): print(f"{RED}✗ {msg}{RESET}")
 
-def run(cmd, cwd=None, env=None, check=True, tail_lines=12):
-    """Ejecuta un comando mostrando los argumentos.
-
-    - En éxito: muestra las últimas `tail_lines` líneas de output.
-    - En fallo: muestra TODAS las líneas (para que el error de cargo/npm sea visible)
-      y relanza CalledProcessError.
-    """
+def run(cmd, cwd=None, env=None, check=True):
+    """Ejecuta un comando mostrando los argumentos."""
     display = " ".join(str(c) for c in cmd)
     print(f"  $ {display}")
-    result = subprocess.run(cmd, cwd=cwd, env=env, check=False,
+    result = subprocess.run(cmd, cwd=cwd, env=env, check=check,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    output = result.stdout or ""
-    lines  = output.strip().splitlines()
-
-    if result.returncode != 0:
-        # Mostrar TODO el output — el mensaje de error puede estar en cualquier línea
-        print()
-        print(f"{RED}{'─'*60}")
-        print(f"  FALLO (exit={result.returncode}): {display}")
-        print(f"{'─'*60}{RESET}")
-        for line in lines:
+    if result.stdout.strip():
+        for line in result.stdout.strip().splitlines()[-8:]:
             print(f"    {line}")
-        print()
-        if check:
-            raise subprocess.CalledProcessError(result.returncode, cmd, output)
-    else:
-        if lines:
-            for line in lines[-tail_lines:]:
-                print(f"    {line}")
-
     return result
 
 def check_tool(name, *args):
@@ -147,69 +126,24 @@ def get_version(forced=None):
     d = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return v, c, d
 
-def _rmtree_force(path):
-    """rmtree que maneja PermissionError en Windows.
-
-    Windows bloquea archivos (.dll, .exe, .pdb) cargados por procesos en
-    ejecucion. La estrategia:
-      1. Intentar borrar normalmente.
-      2. Si falla con PermissionError, marcar como writable y reintentar.
-      3. Si sigue fallando, avisar pero continuar (no abortar el build).
-    """
-    skipped = []
-
-    def on_error(func, path, exc_info):
-        import stat
-        exc = exc_info[1]
-        if isinstance(exc, PermissionError):
-            try:
-                os.chmod(path, stat.S_IWRITE)
-                func(path)
-                return
-            except Exception:
-                pass
-        skipped.append(path)
-
-    shutil.rmtree(path, onexc=on_error)
-
-    if skipped:
-        warn(f"  {len(skipped)} archivo(s) bloqueados por Windows (proceso en uso) — se omitieron:")
-        for p in skipped[:5]:
-            warn(f"    {p}")
-        if len(skipped) > 5:
-            warn(f"    ... y {len(skipped) - 5} más")
-        warn("  Cierra todos los procesos de tsuki/IDE y ejecuta clean de nuevo si necesitas borrarlos.")
-
-
-def clean(deep=False):
-    """Limpia artefactos de build.
-
-    deep=False  ->  solo dist/ y releases/  (rapido)
-    deep=True   ->  tambien target/, cargo clean, etc.
-    """
+def clean():
     step("Limpiando directorios de build")
-
-    for d in [BUILD_DIR, RELEASE_DIR]:
+    question = input("Do you want to remove all cache dirs? N/y")
+    if question == "y" or question == "y":
+      # Normal Directory Cleaning process
+      for d in [BUILD_DIR, RELEASE_DIR]:
         if os.path.exists(d):
-            _rmtree_force(d)
-            info(f"Eliminado {d}")
-
-    if deep:
-        for d in OTHER_RESIDUAL_DIRS:
-            if os.path.exists(d):
-                _rmtree_force(d)
-                info(f"Eliminado {d}")
-        result = subprocess.run(
-            ["cargo", "clean"], cwd=PROJECT_ROOT,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
-        if result.returncode == 0:
-            info("cargo clean completado")
-        else:
-            warn("cargo clean fallo (cargo disponible?)")
-
-    os.makedirs(BUILD_DIR, exist_ok=True)
-    os.makedirs(RELEASE_DIR, exist_ok=True)
+            shutil.rmtree(d)
+      # Second Search Phase
+      for d in OTHER_RESIDUAL_DIRS:
+        if os.path.exists(d):
+          shutil.rmtree(d)
+      subprocess.run(["cargo", "clean"], text=True)
+    else:
+      for d in [BUILD_DIR, RELEASE_DIR]:
+        if os.path.exists(d):
+            shutil.rmtree(d)
+    os.makedirs(d)
     info("Directorios limpios")
 
 # ─────────────────────────────────────────────
@@ -298,29 +232,8 @@ def build_tauri(platform_key, version):
     if not npm:
         raise FileNotFoundError("npm no encontrado en el PATH")
 
-    # npm install — errores aquí son raros pero se muestran completos
-    try:
-        run([npm, "install"], cwd=IDE_DIR)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            f"npm install falló (exit={e.returncode}).\n"
-            f"Revisa la salida de arriba para ver el error exacto."
-        ) from e
-
-    # tauri build — el error más común es un fallo de cargo (mostrado completo por run())
-    try:
-        run([npm, "run", "tauri", "build", "--", "--target", rust_target], cwd=IDE_DIR)
-    except subprocess.CalledProcessError as e:
-        # Intentar extraer el resumen de error de cargo de la salida capturada
-        output_lines = (e.output or "").splitlines()
-        cargo_errors = [l for l in output_lines if "error[" in l or "error:" in l]
-        summary = "\n".join(cargo_errors[-10:]) if cargo_errors else "(sin resumen disponible)"
-        raise RuntimeError(
-            f"Tauri build falló (exit={e.returncode}).\n"
-            f"─── Errores de cargo/Rust ───\n{summary}\n"
-            f"────────────────────────────\n"
-            f"El output completo está arriba."
-        ) from e
+    run([npm, "install"], cwd=IDE_DIR)
+    run([npm, "run", "tauri", "build", "--", "--target", rust_target], cwd=IDE_DIR)
 
     # Buscar el ejecutable compilado (no el instalador del bundle)
     release_dir = os.path.join(IDE_DIR, "src-tauri", "target", rust_target, "release")
@@ -1360,282 +1273,95 @@ def check_dependencies(skip_go, skip_rust, skip_ide):
     info("Todas las dependencias están disponibles")
 
 
-
-# ─────────────────────────────────────────────
-#  AUTO-RUN INSTALLER (modo dev)
-# ─────────────────────────────────────────────
-def _find_tauri_exe(platform_key):
-    """Devuelve la ruta al ejecutable Tauri compilado (debug o release).
-
-    Orden de busqueda (primero encontrado gana):
-      1. target/{rust_target}/debug/   ← cargo build / tauri build --debug --target
-      2. target/debug/                 ← cargo build sin --target
-      3. target/{rust_target}/release/ ← tauri build --target
-      4. target/release/               ← tauri build sin --target
-    """
-    plat        = PLATFORMS[platform_key]
-    rust_target = plat["rust_target"]
-    ext         = ".exe" if plat["goos"] == "windows" else ""
-
-    search_dirs = [
-        os.path.join(IDE_DIR, "src-tauri", "target", rust_target, "debug"),
-        os.path.join(IDE_DIR, "src-tauri", "target", "debug"),
-        os.path.join(IDE_DIR, "src-tauri", "target", rust_target, "release"),
-        os.path.join(IDE_DIR, "src-tauri", "target", "release"),
-    ]
-    candidates_names = ["tsuki-ide", APP_NAME]
-    for d in search_dirs:
-        if not os.path.isdir(d):
-            continue
-        for name in candidates_names:
-            p = os.path.join(d, f"{name}{ext}")
-            if os.path.isfile(p):
-                info(f"  exe encontrado en: {p}")
-                return p
-        # Fallback: cualquier exe que no sea instalador/bundle
-        for f in os.listdir(d):
-            if f.endswith(ext) and ext and not any(x in f.lower() for x in ["setup", "msi", "bundle"]):
-                p = os.path.join(d, f)
-                info(f"  exe (fallback) encontrado en: {p}")
-                return p
-    return None
-
-
-def _kill_tsuki_ide():
-    """Mata cualquier proceso tsuki-ide corriendo para liberar el exe antes de copiarlo."""
-    if platform.system().lower() != "windows":
-        return
-    try:
-        result = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq tsuki-ide.exe", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True
-        )
-        if "tsuki-ide.exe" in result.stdout:
-            subprocess.run(["taskkill", "/F", "/IM", "tsuki-ide.exe"],
-                           capture_output=True)
-            import time; time.sleep(1)  # esperar a que el proceso libere el archivo
-            info("  proceso tsuki-ide anterior terminado")
-    except Exception:
-        pass  # si falla, el usuario tendrá que cerrarlo manualmente
-
-
-def install_ide_direct(platform_key):
-    """
-    Copia el exe compilado a todos los posibles directorios de instalacion.
-    Retorna la ruta del exe copiado (para lanzarlo), o None si falla.
-    """
-    if platform.system().lower() != "windows":
-        return None
-
-    exe_src = _find_tauri_exe(platform_key)
-    if not exe_src:
-        warn("No se encontro el ejecutable de la IDE compilada.")
-        warn("Directorios buscados:")
-        plat = PLATFORMS[platform_key]
-        for d in [
-            os.path.join(IDE_DIR, "src-tauri", "target", plat["rust_target"], "debug"),
-            os.path.join(IDE_DIR, "src-tauri", "target", "debug"),
-            os.path.join(IDE_DIR, "src-tauri", "target", plat["rust_target"], "release"),
-        ]:
-            warn(f"  {d}  (existe={os.path.isdir(d)})")
-        return None
-
-    import datetime as _dt
-    src_ts = _dt.datetime.fromtimestamp(os.path.getmtime(exe_src)).strftime("%H:%M:%S")
-    info(f"  exe compilado: {exe_src}  (build: {src_ts})")
-
-    # Posibles directorios de instalacion — Inno Setup usa {autopf}	suki\ide    # {autopf} = C:\Program Files en admin o %LOCALAPPDATA%\Programs en usuario
-    lappdata = os.environ.get("LOCALAPPDATA", "")
-    pf       = os.environ.get("PROGRAMFILES", r"C:\Program Files")
-    exe_name = os.path.basename(exe_src)
-
-    install_candidates = [
-        os.path.join(lappdata, "Programs", "tsuki", "ide"),          # Inno user-mode
-        os.path.join(pf,       "tsuki", "ide"),                      # Inno admin-mode
-        os.path.join(lappdata, "Programs", "tsuki-ide"),             # fallback anterior
-    ]
-
-    _kill_tsuki_ide()
-
-    copied_to = None
-    for d in install_candidates:
-        if os.path.isdir(d):
-            dst = os.path.join(d, exe_name)
-            try:
-                shutil.copy2(exe_src, dst)
-                dst_ts = _dt.datetime.fromtimestamp(os.path.getmtime(dst)).strftime("%H:%M:%S")
-                info(f"  copiado → {dst}  (timestamp: {dst_ts})")
-                if copied_to is None:
-                    copied_to = dst
-            except Exception as e:
-                warn(f"  no se pudo copiar a {dst}: {e}")
-
-    if copied_to is None:
-        # Ningún directorio de instalacion existia — crear el de Inno user-mode
-        d = install_candidates[0]
-        os.makedirs(d, exist_ok=True)
-        dst = os.path.join(d, exe_name)
-        shutil.copy2(exe_src, dst)
-        info(f"  creado y copiado → {dst}")
-        copied_to = dst
-
-    return copied_to
-
-
-def run_installer():
-    """
-    Ejecuta el instalador generado para el host actual.
-    En Windows: lanza el wizard de Inno Setup y ESPERA a que termine.
-    """
-    host = platform.system().lower()
-
-    if host == "windows":
-        candidates = [
-            f for f in os.listdir(RELEASE_DIR)
-            if f.endswith(".exe") and "setup" in f.lower()
-        ]
-        if not candidates:
-            warn("No se encontro el instalador .exe en releases/.")
-            warn("Ejecutalo manualmente desde: " + RELEASE_DIR)
-            return
-        installer = os.path.join(RELEASE_DIR, sorted(candidates)[-1])
-        info(f"Lanzando instalador → {os.path.basename(installer)}")
-        info("  (esperando a que el wizard termine...)")
-        # subprocess.run espera — a diferencia del Popen anterior que no esperaba
-        # y dejaba el binario viejo instalado si el usuario cerraba el wizard.
-        result = subprocess.run([installer])
-        if result.returncode == 0:
-            info("Instalador completado correctamente.")
-        else:
-            warn(f"El instalador termino con codigo {result.returncode}.")
-
-    else:
-        suffix = f"{HOST_PLATFORM}.tar.gz"
-        candidates = [
-            f for f in os.listdir(RELEASE_DIR)
-            if f.endswith(suffix)
-        ]
-        if not candidates:
-            warn(f"No se encontro .tar.gz para {HOST_PLATFORM}.")
-            return
-        archive     = os.path.join(RELEASE_DIR, sorted(candidates)[-1])
-        extract_dir = os.path.join(BUILD_DIR, "install_tmp")
-        os.makedirs(extract_dir, exist_ok=True)
-        run(["tar", "xzf", archive, "-C", extract_dir])
-        install_sh = os.path.join(extract_dir, "install.sh")
-        if not os.path.isfile(install_sh):
-            warn("No se encontro install.sh dentro del tar.gz.")
-            return
-        os.chmod(install_sh, 0o755)
-        info("Ejecutando install.sh...")
-        subprocess.run(["/bin/bash", install_sh], cwd=extract_dir)
-
-
 # ─────────────────────────────────────────────
 #  MAIN
 # ─────────────────────────────────────────────
-USAGE = """
-  python tools/build.py               Build de desarrollo (host) + instalar via wizard
-  python tools/build.py --quick       Build dev + copia el exe directamente (sin wizard)
-  python tools/build.py clean         Limpia dist/ y releases/
-  python tools/build.py clean --deep  Limpia todo (incluyendo target/ y cargo)
-  python tools/build.py release       Build para todas las plataformas
-  python tools/build.py release --version X.Y.Z   Con version forzada
-"""
+def parse_args():
+    p = argparse.ArgumentParser(description=f"Build system de {APP_NAME}")
+    p.add_argument("--platform", choices=list(PLATFORMS.keys()),
+                   help="Compilar solo para esta plataforma")
+    p.add_argument("--skip-go",   action="store_true", help="Omitir build Go")
+    p.add_argument("--skip-rust", action="store_true", help="Omitir build Rust")
+    p.add_argument("--skip-ide",  action="store_true", help="Omitir build Tauri IDE")
+    p.add_argument("--no-clean",  action="store_true", help="No limpiar dist/")
+    p.add_argument("--version",   help="Forzar versión (e.g. 1.2.3)")
+    return p.parse_args()
 
 
-def parse_command():
-    raw = sys.argv[1:]
-
-    forced_version = None
-    deep_clean     = False
-    quick          = False   # --quick: tauri dev en vez de tauri build + installer
-
-    filtered = []
-    i = 0
-    while i < len(raw):
-        if raw[i] == "--version" and i + 1 < len(raw):
-            forced_version = raw[i + 1]
-            i += 2
-        elif raw[i] == "--deep":
-            deep_clean = True
-            i += 1
-        elif raw[i] == "--quick":
-            quick = True
-            i += 1
-        elif raw[i].startswith("--"):
-            error(f"Flag desconocido: {raw[i]}")
-            print(USAGE)
-            sys.exit(1)
-        else:
-            filtered.append(raw[i])
-            i += 1
-
-    command = filtered[0].lower() if filtered else "dev"
-
-    if len(filtered) > 1 or command not in ("dev", "clean", "release"):
-        error(f"Comando no valido: {' '.join(filtered)!r}")
-        print(USAGE)
-        sys.exit(1)
-
-    return command, forced_version, deep_clean, quick
-
-
-def _print_header(subtitle=""):
+def main():
+    args = parse_args()
     print(f"\n{BOLD}{CYAN}{'═'*55}")
-    print(f"  {APP_NAME} Build System  {subtitle}")
+    print(f"  {APP_NAME} Build System")
     print(f"{'═'*55}{RESET}\n")
 
+    check_dependencies(args.skip_go, args.skip_rust, args.skip_ide)
 
-def _build_platforms(target_platforms, version, commit, date,
-                     skip_ide=False, host_key=None):
-    """
-    Compila Go + Rust + Tauri para cada plataforma y crea los instaladores.
-    Devuelve el dict de resultados.
-    """
-    if host_key is None:
-        h = platform.system().lower()
-        ha = "amd64" if platform.machine() in ("x86_64", "AMD64") else "arm64"
-        host_key = f"{'windows' if h == 'windows' else 'darwin' if h == 'darwin' else 'linux'}-{ha}"
+    if not args.no_clean:
+        clean()
+    else:
+        os.makedirs(BUILD_DIR, exist_ok=True)
+        os.makedirs(RELEASE_DIR, exist_ok=True)
 
-    results = {}
+    version, commit, date = get_version(args.version)
+    # versión visible (git)
+    text_version = version            # ej: 2fb67f7-dirty
+    numeric_version = "1.0.0.0"       # O algo automático
+    print(f"\n  Versión : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}\n")
+
+    target_platforms = [args.platform] if args.platform else list(PLATFORMS.keys())
+
+    # Detectar plataforma host para Tauri (solo se puede compilar nativamente)
+    host = platform.system().lower()
+    host_arch = "amd64" if platform.machine() in ("x86_64", "AMD64") else "arm64"
+    if host == "darwin":
+        host_key = f"darwin-{host_arch}"
+    elif host == "linux":
+        host_key = f"linux-{host_arch}"
+    else:
+        host_key = f"windows-{host_arch}"
+
+    results = {}  # platform_key → {go, core, flash}
 
     for pk in target_platforms:
         print(f"\n{BOLD}{'─'*55}\n  Plataforma: {pk}\n{'─'*55}{RESET}")
 
         try:
-            go_bin = build_go(pk, version, commit, date)
+            go_bin      = None if args.skip_go   else build_go(pk, version, commit, date)
+            core_bin, flash_bin = (None, None) if args.skip_rust else build_rust(pk)
+            results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin}
         except subprocess.CalledProcessError as e:
-            error(f"Go build fallo para {pk}: {e}")
+            error(f"Build fallido para {pk}: {e}")
             continue
 
-        core_bin, flash_bin = build_rust(pk)
-        results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin}
+        # Tauri IDE: solo para la plataforma host
+        ide_bundle = None
+        ide_exe_name = None  # <-- añadir
+        if not args.skip_ide:
+            if pk == host_key:
+                try:
+                    ide_bundle, ide_exe_name = build_tauri(pk, version)  # <-- desempaquetar tuple
+                except Exception as e:
+                    warn(f"Tauri IDE build falló: {e}")
 
-        # Tauri solo en host
-        ide_bundle = ide_exe_name = None
-        if not skip_ide and pk == host_key:
-            try:
-                ide_bundle, ide_exe_name = build_tauri(pk, version)
-            except Exception as e:
-                warn(f"Tauri IDE build fallo: {e}")
-
+        # Crear instalador.
+        # Si Rust no compiló para esta plataforma (cross-compile omitido),
+        # el instalador se crea igual pero sin los binarios Rust — se avisa al usuario.
         r = results[pk]
         missing_rust = r["core"] is None or r["flash"] is None
-
-        if missing_rust:
+        if missing_rust and not args.skip_rust:
             warn(
-                f"Instalador para {pk} sin binarios Rust "
-                f"(requieren cross-compilacion)."
+                f"El instalador para {pk} no incluirá los binarios Rust "
+                f"(tsuki-core, tsuki-flash) porque requieren cross-compilación. "
+                f"Cópialos manualmente al directorio de instalación si los necesitas."
             )
 
         if r["go"] is None and r["core"] is None:
-            warn(f"Sin binarios para {pk}, saltando instalador.")
+            warn(f"No hay ningún binario para {pk}, saltando instalador.")
             continue
 
-        numeric_version = "1.0.0.0"
-
         if "windows" in pk:
+            # Para Windows solo creamos el instalador si tenemos los binarios Rust
+            # (son necesarios para el funcionamiento de la app).
             if missing_rust:
                 warn(f"Instalador Windows omitido para {pk}: faltan binarios Rust.")
             else:
@@ -1645,10 +1371,12 @@ def _build_platforms(target_platforms, version, commit, date,
                     flash_bin=r["flash"],
                     version=version,
                     ide_bundle_dir=ide_bundle,
-                    ide_exe_name=ide_exe_name,
+                    ide_exe_name=ide_exe_name,   # <-- añadir
                     numeric_version=numeric_version,
                 )
         else:
+            if missing_rust:
+                warn(f"Instalador Linux/macOS para {pk}: se creará sin tsuki-core/tsuki-flash.")
             create_unix_installer(pk,
                 go_bin=r["go"],
                 core_bin=r["core"],
@@ -1656,200 +1384,16 @@ def _build_platforms(target_platforms, version, commit, date,
                 version=version,
             )
 
-    return results
-
-
-def _print_summary(version):
+    # ── Resumen final ──────────────────────────────────────────────
     print(f"\n{BOLD}{GREEN}{'═'*55}")
-    print(f"  Build completo — {APP_NAME} v{version}")
+    print(f"  ✓  Build completo — {APP_NAME} v{version}")
     print(f"{'═'*55}{RESET}\n")
-    if os.path.isdir(RELEASE_DIR) and os.listdir(RELEASE_DIR):
-        print(f"  Instaladores en: {BOLD}{RELEASE_DIR}{RESET}\n")
-        for f in sorted(os.listdir(RELEASE_DIR)):
-            fp = os.path.join(RELEASE_DIR, f)
-            size = os.path.getsize(fp)
-            size_str = f"{size/1024/1024:.1f} MB" if size > 1024*1024 else f"{size/1024:.0f} KB"
-            print(f"    📦  {f:55s} {size_str}")
+    print(f"  Instaladores en: {BOLD}{RELEASE_DIR}{RESET}\n")
+    for f in sorted(os.listdir(RELEASE_DIR)):
+        size = os.path.getsize(os.path.join(RELEASE_DIR, f))
+        size_str = f"{size/1024/1024:.1f} MB" if size > 1024*1024 else f"{size/1024:.0f} KB"
+        print(f"    📦  {f:55s} {size_str}")
     print()
-
-
-# ── Comandos ─────────────────────────────────
-
-def cmd_clean(deep):
-    _print_header("→ clean")
-    msg = "Esto eliminara dist/, releases/ y los caches de Rust/Go." if deep else "Esto eliminara dist/ y releases/."
-    warn(msg)
-    confirm = input("  ¿Continuar? [s/N] ").strip().lower()
-    if confirm not in ("s", "si", "y", "yes"):
-        print("  Cancelado.")
-        sys.exit(0)
-    clean(deep=deep)
-
-
-def cmd_dev(forced_version, quick=False):
-    _print_header("→ dev" + (" [--quick]" if quick else ""))
-
-    h  = platform.system().lower()
-    ha = "amd64" if platform.machine() in ("x86_64", "AMD64") else "arm64"
-    host_key = f"{'windows' if h == 'windows' else 'darwin' if h == 'darwin' else 'linux'}-{ha}"
-
-    info(f"Host detectado: {host_key}")
-
-    if quick:
-        # ── Modo rapido ───────────────────────────────────────────────────────
-        # Tauri embebe el frontend (ide/out/) en el binario Rust en compile time.
-        # Si ide/out/ ya existe (build anterior), solo recompilamos Rust con
-        # cargo build — mucho mas rapido (~30s en caliente).
-        # Si ide/out/ no existe, hay que hacer npm run build primero (~60s extra).
-        step("Modo --quick: build de la IDE")
-        cargo = shutil.which("cargo")
-        npm   = shutil.which("npm")
-        if not cargo:
-            error("cargo no encontrado.")
-            sys.exit(1)
-
-        out_dir    = os.path.join(IDE_DIR, "out")
-        tauri_src  = os.path.join(IDE_DIR, "src-tauri")
-        needs_npm  = not os.path.isdir(out_dir) or not os.listdir(out_dir)
-
-        if not npm:
-            error("npm no encontrado.")
-            sys.exit(1)
-
-        # npm install si no existe node_modules
-        if not os.path.isdir(os.path.join(IDE_DIR, "node_modules")):
-            step("node_modules no existe → npm install")
-            try:
-                run([npm, "install"], cwd=IDE_DIR)
-            except subprocess.CalledProcessError as e:
-                error(f"npm install fallido (exit={e.returncode}).")
-                sys.exit(1)
-        else:
-            info("node_modules existe — saltando npm install")
-
-        # ── Gestión del cache de Next.js ──────────────────────────────────────
-        # tauri build ejecuta `beforeBuildCommand: npm run build` automáticamente,
-        # así que no necesitamos detectar cambios ni llamar a npm manualmente.
-        # Borramos .next/ entero (no solo cache/) para que Next.js no reutilice
-        # chunks ni páginas previas y haga siempre una recompilación completa.
-        # Borrar .next/ Y out/ para forzar reconstruccion completa.
-        # out/ contiene el export estatico que Tauri embebe en el binario.
-        # Si out/ no se borra, Next.js puede omitir paginas "sin cambios"
-        # y Tauri embebe el bundle viejo con el BottomPanel.tsx anterior.
-        for cleanup_dir, label in [
-            (os.path.join(IDE_DIR, ".next"), ".next/"),
-            (os.path.join(IDE_DIR, "out"),   "out/"),
-        ]:
-            if os.path.isdir(cleanup_dir):
-                shutil.rmtree(cleanup_dir, ignore_errors=True)
-                info(f"{label} eliminado -- Next.js reconstruira desde cero")
-            else:
-                info(f"{label} no existe -- primera build")
-
-        # Matar el proceso tsuki-ide PRIMERO, antes de tocar cualquier archivo.
-        # En Windows, os.remove() y el linker fallan con PermissionError/LNK1104
-        # si el exe sigue bloqueado por el proceso en ejecucion.
-        step("Cerrando IDE anterior (libera el exe para el linker)")
-        _kill_tsuki_ide()
-
-        # ── Forzar recompilacion Rust borrando target/debug/ directamente ──────────
-        # cargo clean -p puede fallar silenciosamente o limpiar el
-        # directorio equivocado. Borrar target/<rust_target>/debug/ entero
-        # es la unica forma garantizada de que Cargo recompile todo.
-        step("Borrando target debug para forzar recompilacion completa")
-        rust_target_clean = PLATFORMS[host_key]["rust_target"]
-        debug_dir = os.path.join(IDE_DIR, "src-tauri", "target", rust_target_clean, "debug")
-        if os.path.isdir(debug_dir):
-            _rmtree_force(debug_dir)
-            info(f"  {debug_dir} eliminado -- Cargo recompilara todo desde cero")
-        else:
-            info("  directorio debug no existe -- primera build")
-
-                # tauri build --debug: compila Rust en debug + embebe ide/out/ (distDir).
-        # Mas rapido que release (~40s en caliente) y produce un binario funcional.
-        # NO usar cargo build directamente — ese usa devPath (localhost:3000).
-        step("Compilando IDE con tauri build --debug")
-        try:
-            run([npm, "run", "tauri", "build", "--",
-                 "--debug",
-                 "--target", PLATFORMS[host_key]["rust_target"]],
-                cwd=IDE_DIR)
-        except subprocess.CalledProcessError as e:
-            error(f"tauri build fallido (exit={e.returncode}). Revisa la salida de arriba.")
-            sys.exit(1)
-
-        step("Instalando exe directamente (sin wizard)...")
-        exe_dst = install_ide_direct(host_key)
-        if not exe_dst:
-            warn("No se pudo instalar el exe.")
-
-        _print_summary("dev-quick")
-
-        # ── Lanzar directamente desde el directorio de build ─────────────────
-        # Más fiable que lanzar desde el directorio instalado — garantiza que
-        # estamos ejecutando el binario recién compilado.
-        exe_built = _find_tauri_exe(host_key)
-        launch_exe = exe_built or exe_dst
-
-        if launch_exe and os.path.isfile(launch_exe):
-            import datetime as _dt
-            age_secs = _dt.datetime.now().timestamp() - os.path.getmtime(launch_exe)
-            ts       = _dt.datetime.fromtimestamp(os.path.getmtime(launch_exe)).strftime("%H:%M:%S")
-            if age_secs > 300:
-                warn(f"El exe tiene {int(age_secs)}s de antigüedad ({ts}) — puede no ser el recién compilado.")
-                warn("Ejecuta: python tools/build.py clean --deep  y luego --quick de nuevo.")
-            else:
-                info(f"  exe: {launch_exe}  (build: {ts}, hace {int(age_secs)}s) ✓")
-            step(f"Lanzando IDE → {os.path.basename(launch_exe)}")
-            subprocess.Popen([launch_exe])
-            info("IDE lanzada.")
-        else:
-            warn("No se pudo lanzar el IDE. Abrelo manualmente.")
-        return
-
-    # ── Modo normal: build completo + wizard ──────────────────────────────────
-    check_dependencies(skip_go=False, skip_rust=False, skip_ide=False)
-    clean(deep=False)
-
-    version, commit, date = get_version(forced_version)
-    print(f"\n  Version : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}\n")
-
-    _build_platforms([host_key], version, commit, date, host_key=host_key)
-    _print_summary(version)
-
-    step("Lanzando instalador...")
-    run_installer()
-
-
-def cmd_release(forced_version):
-    _print_header("→ release")
-
-    warn("Esto intentara compilar para TODAS las plataformas.")
-    warn("Rust solo compilara para el host (cross-compile omitido).")
-    confirm = input("  ¿Continuar? [s/N] ").strip().lower()
-    if confirm not in ("s", "si", "y", "yes"):
-        print("  Cancelado.")
-        sys.exit(0)
-
-    check_dependencies(skip_go=False, skip_rust=False, skip_ide=False)
-    clean(deep=False)
-
-    version, commit, date = get_version(forced_version)
-    print(f"\n  Version : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}\n")
-
-    _build_platforms(list(PLATFORMS.keys()), version, commit, date)
-    _print_summary(version)
-
-
-def main():
-    command, forced_version, deep_clean, quick = parse_command()
-
-    if command == "clean":
-        cmd_clean(deep=deep_clean)
-    elif command == "release":
-        cmd_release(forced_version)
-    else:
-        cmd_dev(forced_version, quick=quick)
 
 
 if __name__ == "__main__":

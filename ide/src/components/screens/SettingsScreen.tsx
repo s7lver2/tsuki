@@ -6,9 +6,10 @@ import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/shared/
 import {
   ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
-  Beaker, ToggleLeft, GitBranch, Languages,
+  Beaker, ToggleLeft, GitBranch, Languages, Bug, FileText,
+  Trash2, ExternalLink, AlertTriangle, RotateCcw,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { clsx } from 'clsx'
 import { useT, AVAILABLE_LANGS, LANG_META, LangCode } from '@/lib/i18n'
 
@@ -493,20 +494,10 @@ function SandboxTab() {
         </div>
       </div>
 
-      <GroupHeader title="Settings" />
+      <GroupHeader title="Simulation" />
       <SettingsField
         name="Current flow animation"
         desc="Animated dots on active wires during simulation. Disable for a cleaner look."
-      >
-        <Toggle
-          on={settings.showCurrentFlow}
-          onToggle={() => updateSetting('showCurrentFlow', !settings.showCurrentFlow)}
-        />
-      </SettingsField>
-
-      <SettingsField
-        name="Energy flow visualisation"
-        desc="When enabled, tsuki-sim computes per-pin voltage and current. Requires showCurrentFlow to be active for wire animation."
       >
         <Toggle
           on={settings.showCurrentFlow}
@@ -525,6 +516,150 @@ function SandboxTab() {
             placeholder="auto (tsuki-sim)"
             className="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--fg)] outline-none font-mono"
           />
+        </div>
+      </SettingsField>
+
+      <GroupHeader title="Wire style" />
+      <SettingsField
+        name="Routing style"
+        desc="How wires are drawn between pins."
+      >
+        <div className="flex gap-1 flex-wrap">
+          {([
+            { id: 'orthogonal', label: 'Tinkercad', preview: 'M0,8 H12 V0 H24' },
+            { id: 'smooth',     label: 'Smooth',    preview: 'M0,8 C8,8 16,0 24,0' },
+            { id: 'flexible',   label: 'Flexible',  preview: 'M0,0 Q12,18 24,0' },
+            { id: 'direct',     label: 'Direct',    preview: 'M0,8 L24,0' },
+          ] as const).map(s => (
+            <button
+              key={s.id}
+              onClick={() => updateSetting('sandboxWireStyle' as any, s.id)}
+              className="flex flex-col items-center gap-1 px-2 py-1.5 rounded border cursor-pointer transition-colors"
+              style={{
+                borderColor: settings.sandboxWireStyle === s.id ? 'var(--active-border)' : 'var(--border)',
+                background:  settings.sandboxWireStyle === s.id ? 'var(--active)'         : 'var(--surface-1)',
+              }}
+            >
+              <svg width={24} height={18} viewBox="0 0 24 18">
+                <path d={s.preview} fill="none" stroke="var(--fg-muted)" strokeWidth={1.8} strokeLinecap="round"/>
+              </svg>
+              <span className="text-[9px] text-[var(--fg-muted)]">{s.label}</span>
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+
+      <GroupHeader title="Wire palette" />
+      <SettingsField
+        name="Colour palette"
+        desc="Colour set shown in the wire tool picker."
+      >
+        <div className="flex gap-2 flex-wrap">
+          {(['classic','monochrome','pastel','custom'] as const).map(pid => {
+            const PALETTE_COLORS: Record<string, string[]> = {
+              classic:     ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899','#e2e2e2','#1a1a1a'],
+              monochrome:  ['#ffffff','#d4d4d4','#a3a3a3','#737373','#525252','#404040','#2a2a2a','#1c1c1c','#0a0a0a'],
+              pastel:      ['#fca5a5','#fdba74','#fde68a','#86efac','#93c5fd','#c4b5fd','#f9a8d4','#e5e7eb','#6b7280'],
+              custom:      settings.sandboxWireCustomColors ?? ['#ef4444','#3b82f6','#22c55e','#f97316','#a855f7'],
+            }
+            const active = (settings.sandboxWirePalette ?? 'classic') === pid
+            return (
+              <button
+                key={pid}
+                onClick={() => updateSetting('sandboxWirePalette' as any, pid)}
+                className="flex flex-col items-center gap-1.5 px-2 py-1.5 rounded border cursor-pointer transition-colors"
+                style={{
+                  borderColor: active ? 'var(--active-border)' : 'var(--border)',
+                  background:  active ? 'var(--active)'        : 'var(--surface-1)',
+                }}
+              >
+                <div className="flex gap-0.5">
+                  {PALETTE_COLORS[pid].slice(0, 5).map((c, i) => (
+                    <span key={i} className="w-3 h-3 rounded-full inline-block border border-[rgba(0,0,0,0.2)]" style={{ background: c }} />
+                  ))}
+                </div>
+                <span className="text-[9px] text-[var(--fg-muted)] capitalize">{pid}</span>
+              </button>
+            )
+          })}
+        </div>
+      </SettingsField>
+
+      {(settings.sandboxWirePalette ?? 'classic') === 'custom' && (
+        <SettingsField name="Custom colours" desc="Click a swatch to edit. 9 slots.">
+          <div className="flex gap-1 flex-wrap">
+            {(settings.sandboxWireCustomColors ?? ['#ef4444','#3b82f6','#22c55e','#f97316','#a855f7','#eab308','#ec4899','#e2e2e2','#1a1a1a']).map((c, i) => (
+              <label key={i} title={`Slot ${i + 1}`} className="relative cursor-pointer">
+                <span
+                  className="w-6 h-6 rounded-full block border-2"
+                  style={{ background: c, borderColor: 'var(--border)' }}
+                />
+                <input
+                  type="color"
+                  value={c}
+                  onChange={e => {
+                    const next = [...(settings.sandboxWireCustomColors ?? [])]
+                    next[i] = e.target.value
+                    updateSetting('sandboxWireCustomColors' as any, next)
+                  }}
+                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                />
+              </label>
+            ))}
+          </div>
+        </SettingsField>
+      )}
+
+      <GroupHeader title="Auto-colour wires" />
+      <SettingsField
+        name="Auto-colour VCC wires"
+        desc="Wires starting or ending at a power pin are automatically coloured."
+      >
+        <div className="flex items-center gap-2">
+          <Toggle
+            on={settings.sandboxAutoColorVcc ?? true}
+            onToggle={() => updateSetting('sandboxAutoColorVcc' as any, !(settings.sandboxAutoColorVcc ?? true))}
+          />
+          {(settings.sandboxAutoColorVcc ?? true) && (
+            <label className="relative cursor-pointer">
+              <span
+                className="w-6 h-6 rounded-full block border-2"
+                style={{ background: settings.sandboxVccColor ?? '#ef4444', borderColor: 'var(--border)' }}
+              />
+              <input
+                type="color"
+                value={settings.sandboxVccColor ?? '#ef4444'}
+                onChange={e => updateSetting('sandboxVccColor' as any, e.target.value)}
+                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+              />
+            </label>
+          )}
+        </div>
+      </SettingsField>
+
+      <SettingsField
+        name="Auto-colour GND wires"
+        desc="Wires starting or ending at a GND pin are automatically coloured."
+      >
+        <div className="flex items-center gap-2">
+          <Toggle
+            on={settings.sandboxAutoColorGnd ?? true}
+            onToggle={() => updateSetting('sandboxAutoColorGnd' as any, !(settings.sandboxAutoColorGnd ?? true))}
+          />
+          {(settings.sandboxAutoColorGnd ?? true) && (
+            <label className="relative cursor-pointer">
+              <span
+                className="w-6 h-6 rounded-full block border-2"
+                style={{ background: settings.sandboxGndColor ?? '#1a1a1a', borderColor: 'var(--border)' }}
+              />
+              <input
+                type="color"
+                value={settings.sandboxGndColor ?? '#1a1a1a'}
+                onChange={e => updateSetting('sandboxGndColor' as any, e.target.value)}
+                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+              />
+            </label>
+          )}
         </div>
       </SettingsField>
 
@@ -1586,6 +1721,51 @@ function LspExpTab() {
   )
 }
 
+// ── Log category metadata ─────────────────────────────────────────────────────
+
+const DEFAULT_CATS = {
+  spawn: true, pty: true, resolve: true,
+  settings: true, shell: true, process: true, frontend: true,
+}
+
+const LOG_CATEGORIES: { key: string; desc: string; examples: string }[] = [
+  {
+    key: 'spawn',
+    desc: 'spawn_process calls — toolbar buttons (Build, Flash, Check)',
+    examples: '[spawn_process] cmd pid exit',
+  },
+  {
+    key: 'pty',
+    desc: 'PTY / terminal lifecycle — shell open, resize, kill, exit',
+    examples: '[pty_create] [pty_exit] [pty_kill] [pty_resize]',
+  },
+  {
+    key: 'resolve',
+    desc: 'Path resolution — normalise_cmd, resolve_cmd, which lookups',
+    examples: '[normalise_cmd] [resolve_cmd] [pty_resolve]',
+  },
+  {
+    key: 'settings',
+    desc: 'Settings read/write, tool-path detection at startup',
+    examples: '[main] settings parsed debugMode=',
+  },
+  {
+    key: 'shell',
+    desc: 'Shell detection (list_shells) and spawn_shell calls',
+    examples: '[spawn_shell] shell_id shell_path',
+  },
+  {
+    key: 'process',
+    desc: 'Process exit codes, write_stdin, kill_process',
+    examples: '[process_exit] pid= exit_code=',
+  },
+  {
+    key: 'frontend',
+    desc: 'console.log/warn/error forwarded from the renderer',
+    examples: '[frontend:log] [frontend:warn] [frontend:error]',
+  },
+]
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Developer tab
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1594,6 +1774,93 @@ function DeveloperTab() {
   const { goBack, settings, updateSetting } = useStore()
   const [resetting, setResetting] = useState(false)
   const [resetDone, setResetDone] = useState(false)
+
+  // ── Debug mode state ───────────────────────────────────────────────────────
+  const [logPath,       setLogPath      ] = useState<string>('')
+  const [logLines,      setLogLines     ] = useState<string>('')
+  const [logLoading,    setLogLoading   ] = useState(false)
+  const [clearing,      setClearing     ] = useState(false)
+  const [clearDone,     setClearDone    ] = useState(false)
+  const [showRestart,   setShowRestart  ] = useState(false)
+  const [diagReport,    setDiagReport   ] = useState<string>('')
+  const [diagLoading,   setDiagLoading  ] = useState(false)
+  const logRef = useRef<HTMLPreElement>(null)
+
+  // Fetch the log file path once on mount
+  useEffect(() => {
+    import('@/lib/tauri').then(({ getDebugLogPath }) => {
+      getDebugLogPath().then(p => setLogPath(p)).catch(() => {})
+    })
+  }, [])
+
+  // Auto-scroll log viewer to bottom
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [logLines])
+
+  async function refreshLog() {
+    setLogLoading(true)
+    try {
+      const { tailDebugLog } = await import('@/lib/tauri')
+      const lines = await tailDebugLog(300)
+      setLogLines(lines)
+    } catch { setLogLines('(error reading log)') }
+    setLogLoading(false)
+  }
+
+  async function clearLog() {
+    setClearing(true)
+    try {
+      const { clearDebugLog } = await import('@/lib/tauri')
+      await clearDebugLog()
+      setLogLines('')
+      setClearDone(true)
+      setTimeout(() => setClearDone(false), 2500)
+    } catch {}
+    setClearing(false)
+  }
+
+  async function openLog() {
+    try {
+      const { openDebugLog } = await import('@/lib/tauri')
+      await openDebugLog()
+    } catch {}
+  }
+
+  async function runDiag() {
+    setDiagLoading(true)
+    try {
+      const { runDiagnostics } = await import('@/lib/tauri')
+      const report = await runDiagnostics()
+      setDiagReport(report)
+    } catch (e) {
+      setDiagReport(`Error running diagnostics: ${e}`)
+    }
+    setDiagLoading(false)
+  }
+
+  function toggleDebugMode() {
+    const next = !settings.debugMode
+    updateSetting('debugMode', next)
+    setShowRestart(true)
+  }
+
+  function toggleCategory(key: string, on: boolean) {
+    const next = { ...(settings.debugLogCategories ?? DEFAULT_CATS), [key]: on }
+    updateSetting('debugLogCategories', next)
+    // Push to Rust live — no restart needed for category changes
+    import('@/lib/tauri').then(({ setLogCategories }) => {
+      setLogCategories(next).catch(() => {})
+    })
+  }
+
+  function toggleAllCategories(on: boolean) {
+    const next = Object.fromEntries(LOG_CATEGORIES.map(c => [c.key, on])) as typeof DEFAULT_CATS
+    updateSetting('debugLogCategories', next)
+    import('@/lib/tauri').then(({ setLogCategories }) => {
+      setLogCategories(next).catch(() => {})
+    })
+  }
 
   function handleResetOnboarding() {
     setResetting(true)
@@ -1628,6 +1895,307 @@ function DeveloperTab() {
         </div>
       </div>
 
+      {/* ── Debug & Logging ───────────────────────────────────────────────── */}
+      <GroupHeader title="Debug & Logging" />
+
+      {/* Restart-required banner */}
+      {showRestart && (
+        <div className="mb-4 flex items-center gap-3 px-3 py-2.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
+          <AlertTriangle size={13} className="text-amber-400 flex-shrink-0" />
+          <p className="text-xs text-[var(--fg-muted)] flex-1 leading-relaxed">
+            <strong className="text-[var(--fg)]">Restart required.</strong>{' '}
+            The Rust process reads both settings at startup — changes take effect after a full restart.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-amber-400/40 bg-amber-400/10 text-amber-400 text-xs font-medium cursor-pointer hover:bg-amber-400/20 transition-colors"
+          >
+            <RotateCcw size={11} /> Restart now
+          </button>
+        </div>
+      )}
+
+      {/* Enable / disable */}
+      <SettingsField
+        name="Debug mode"
+        desc="Captures Rust + frontend logs to a file from the first millisecond of startup. Requires restart."
+      >
+        <div className="flex items-center gap-2">
+          <Toggle on={settings.debugMode} onToggle={toggleDebugMode} />
+          {settings.debugMode && (
+            <span className="flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">
+              <Bug size={10} /> active
+            </span>
+          )}
+        </div>
+      </SettingsField>
+
+      {/* Log format selector */}
+      <SettingsField
+        name="Log format"
+        desc="Flat is human-readable. Structured writes [key=value] tokens so you can grep -E precisely. Requires restart."
+      >
+        <div className="flex gap-2">
+          {(['flat', 'structured'] as const).map(fmt => (
+            <button
+              key={fmt}
+              onClick={() => { updateSetting('debugLogFormat', fmt); setShowRestart(true) }}
+              className={clsx(
+                'flex-1 flex flex-col gap-1 px-3 py-2 rounded border text-left cursor-pointer transition-colors',
+                settings.debugLogFormat === fmt
+                  ? 'border-amber-400/50 bg-amber-400/8 text-[var(--fg)]'
+                  : 'border-[var(--border)] bg-[var(--surface-1)] text-[var(--fg-muted)] hover:bg-[var(--hover)]',
+              )}
+            >
+              <span className="text-[11px] font-semibold capitalize">{fmt}</span>
+              <span className="text-[9px] text-[var(--fg-faint)] leading-tight">
+                {fmt === 'flat'
+                  ? '[1234.567] [spawn] cmd="tsuki.exe"'
+                  : '[ts=1234.567] [src=rust] [cat=spawn]'}
+              </span>
+            </button>
+          ))}
+        </div>
+      </SettingsField>
+
+      {/* Grep cheatsheet — only shown when structured is active */}
+      {settings.debugLogFormat === 'structured' && (
+        <div className="mt-1 mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+            <span className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-widest">grep cheatsheet</span>
+          </div>
+          <div className="px-3 py-2.5 flex flex-col gap-1.5">
+            {[
+              { expr: '[src=rust]',           desc: 'Rust-only entries'            },
+              { expr: '[src=frontend]',        desc: 'Frontend-only entries'        },
+              { expr: '[lvl=error]',           desc: 'Errors only'                  },
+              { expr: '[lvl=warn]',            desc: 'Warnings only'                },
+              { expr: '[cat=spawn_process]',   desc: 'Process spawn events'         },
+              { expr: '[cat=pty',              desc: 'All PTY / terminal events'    },
+              { expr: '[cat=pty_resolve]',     desc: 'PTY path resolution'          },
+              { expr: '[cat=resolve_cmd]',     desc: 'spawn_process path resolution'},
+              { expr: '[cat=normalise_cmd]',   desc: 'Path normalisation'           },
+              { expr: '[cat=main]',            desc: 'Startup sequence'             },
+              { expr: 'tsuki.exe',             desc: 'Any entry mentioning binary'  },
+            ].map(({ expr, desc }) => (
+              <div key={expr} className="flex items-center gap-3 py-0.5">
+                <code className="text-[10px] font-mono text-blue-400 bg-blue-400/8 px-1.5 py-0.5 rounded select-all flex-shrink-0">
+                  grep &quot;{expr}&quot;
+                </code>
+                <span className="text-[10px] text-[var(--fg-faint)]">{desc}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Log categories ─────────────────────────────────────────────────── */}
+      <div className="mt-4 mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+          <span className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-widest">
+            log categories
+          </span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => toggleAllCategories(true)}
+              className="px-2 py-0.5 rounded text-[9px] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors"
+            >
+              all on
+            </button>
+            <button
+              onClick={() => toggleAllCategories(false)}
+              className="px-2 py-0.5 rounded text-[9px] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors"
+            >
+              all off
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 divide-x divide-[var(--border-subtle)]">
+          {LOG_CATEGORIES.map((cat, i) => {
+            const cats = settings.debugLogCategories ?? DEFAULT_CATS
+            const on = cats[cat.key as keyof typeof cats] ?? true
+            return (
+              <button
+                key={cat.key}
+                onClick={() => toggleCategory(cat.key, !on)}
+                className={clsx(
+                  'flex items-start gap-2.5 px-3 py-2.5 text-left cursor-pointer border-0 bg-transparent transition-colors',
+                  i >= 2 && 'border-t border-[var(--border-subtle)]',
+                  on ? 'hover:bg-[var(--hover)]' : 'opacity-50 hover:opacity-75 hover:bg-[var(--hover)]',
+                )}
+              >
+                <div className={clsx(
+                  'mt-0.5 w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors',
+                  on
+                    ? 'bg-amber-400 border-amber-400'
+                    : 'bg-transparent border-[var(--fg-faint)]',
+                )}>
+                  {on && <Check size={8} className="text-black" />}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-mono font-semibold text-[var(--fg)] leading-tight">
+                    {cat.key}
+                  </div>
+                  <div className="text-[9px] text-[var(--fg-faint)] leading-relaxed mt-0.5">
+                    {cat.desc}
+                  </div>
+                  <div className="text-[9px] font-mono text-[var(--fg-faint)] opacity-60 mt-0.5 truncate">
+                    {cat.examples}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+        <div className="px-3 py-2 border-t border-[var(--border-subtle)] bg-[var(--surface)]">
+          <span className="text-[9px] text-[var(--fg-faint)]">
+            Category toggles take effect immediately — no restart needed.
+            The <code className="font-mono bg-[var(--surface-3)] px-0.5 rounded">pty_write</code> category
+            is very noisy (every keystroke) — enable only when debugging input issues.
+          </span>
+        </div>
+      </div>
+
+      {/* Log file path */}
+      <SettingsField
+        name="Log file path"
+        desc="Location on disk. Open in your editor to tail it live while reproducing the bug."
+      >
+        <div className="flex items-center gap-1.5 w-full">
+          <span className="flex-1 truncate text-[10px] font-mono text-[var(--fg-muted)] bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 select-all">
+            {logPath || '(loading…)'}
+          </span>
+          <button
+            onClick={openLog}
+            title="Open in editor"
+            className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-1)] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer transition-colors text-[10px]"
+          >
+            <ExternalLink size={10} />
+          </button>
+        </div>
+      </SettingsField>
+
+      {/* Log viewer */}
+      <div className="mt-3 mb-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border)] bg-[var(--surface-1)]">
+          <FileText size={11} className="text-[var(--fg-faint)]" />
+          <span className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-widest flex-1">
+            recent log — last 300 lines
+          </span>
+          <button
+            onClick={refreshLog}
+            disabled={logLoading}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors disabled:opacity-40"
+          >
+            <RefreshCw size={10} className={logLoading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+          <button
+            onClick={clearLog}
+            disabled={clearing}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-[var(--fg-muted)] hover:text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors disabled:opacity-40"
+          >
+            {clearDone
+              ? <><Check size={10} className="text-green-400" /> Cleared</>
+              : <><Trash2 size={10} /> Clear</>
+            }
+          </button>
+        </div>
+        <pre
+          ref={logRef}
+          className="px-3 py-2 text-[10px] font-mono leading-relaxed overflow-y-auto whitespace-pre-wrap break-all"
+          style={{ maxHeight: 280, minHeight: 80 }}
+        >
+          {logLines
+            ? logLines.split('\n').map((line, i) => {
+                // Flat:       [ts] [frontend:error] ...  [ts] [spawn_process] ...
+                // Structured: [lvl=error] ...  [cat=spawn_process] ...  [src=rust] ...
+                const isErr   = /\[frontend:error]|\[lvl=error]/.test(line)
+                const isWarn  = /\[frontend:warn]|\[lvl=warn]/.test(line)
+                const isSpawn = /\[spawn_process]|\[cat=spawn|\[cat=pty|\[cat=resolve/.test(line)
+                const isSystem = /\[system:|\[cat=main]|log-cleared/.test(line)
+                return (
+                  <span key={i} className={
+                    isErr    ? 'text-red-400 block'
+                    : isWarn   ? 'text-yellow-400 block'
+                    : isSpawn  ? 'text-blue-400 block'
+                    : isSystem ? 'text-[var(--fg-faint)] block'
+                    : 'text-[var(--fg-muted)] block'
+                  }>
+                    {line}
+                  </span>
+                )
+              })
+            : <span className="text-[var(--fg-faint)] italic">
+                {settings.debugMode
+                  ? 'Press Refresh to load the log — or Restart now and come back here.'
+                  : 'Enable debug mode and restart the app to start capturing logs.'}
+              </span>
+          }
+        </pre>
+      </div>
+
+      <div className="mb-6 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-[var(--surface-1)] border border-[var(--border)]">
+        <span className="text-[var(--fg-faint)] text-xs mt-0.5 flex-shrink-0">ℹ</span>
+        <p className="text-[10px] text-[var(--fg-faint)] leading-relaxed">
+          When debug mode is <strong className="text-[var(--fg)]">ON</strong>, the Rust backend
+          captures every spawn, path resolution, PTY event, and settings read from millisecond&nbsp;0.
+          The frontend patches{' '}
+          <code className="font-mono bg-[var(--surface-3)] px-0.5 rounded">console.log/warn/error</code>{' '}
+          and catches unhandled rejections. Clear periodically — the file grows unbounded.
+        </p>
+      </div>
+
+      {/* ── System Diagnostics ────────────────────────────────────────────── */}
+      <GroupHeader title="System Diagnostics" />
+      <div className="mb-6 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] overflow-hidden">
+        {/* header bar */}
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+          <Bug size={11} className="text-[var(--fg-faint)]" />
+          <span className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-widest flex-1">
+            environment snapshot
+          </span>
+          <button
+            onClick={runDiag}
+            disabled={diagLoading}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--surface)] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer transition-colors text-[10px] disabled:opacity-40"
+          >
+            <RefreshCw size={10} className={diagLoading ? 'animate-spin' : ''} />
+            {diagLoading ? 'Running…' : 'Run diagnostics'}
+          </button>
+        </div>
+
+        {/* report */}
+        {diagReport ? (
+          <pre
+            className="px-3 py-2.5 text-[10px] font-mono text-[var(--fg-muted)] leading-relaxed overflow-y-auto whitespace-pre-wrap break-all"
+            style={{ maxHeight: 340 }}
+          >
+            {diagReport.split('\n').map((line, i) => {
+              const isSection = line.startsWith('===') || line.startsWith('\n===')
+              const isMissing = line.includes('MISSING') || line.includes('NOT FOUND')
+              const isOk      = line.includes('EXISTS') || line.includes('✓')
+              return (
+                <span key={i} className={
+                  isSection ? 'text-amber-400 font-semibold block mt-1'
+                  : isMissing ? 'text-red-400 block'
+                  : isOk     ? 'text-green-400 block'
+                  : 'block'
+                }>
+                  {line}
+                </span>
+              )
+            })}
+          </pre>
+        ) : (
+          <div className="px-3 py-4 text-center text-[10px] text-[var(--fg-faint)]">
+            Click "Run diagnostics" to snapshot PATH entries, executable locations,
+            environment variables, and shell paths. Results are also written to the debug log.
+          </div>
+        )}
+      </div>
+
+      {/* ── Windows process spawn method ──────────────────────────────────── */}
       <GroupHeader title="Windows process spawn method" />
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
         <p className="text-xs text-[var(--fg-muted)] leading-relaxed">

@@ -20,6 +20,7 @@ export interface CircuitComponentDef {
   pins: CircuitPin[]
   category: 'mcu' | 'output' | 'input' | 'passive' | 'power' | 'sensor' | 'display' | 'actuator'
   description: string
+  hidden?: boolean
 }
 
 export interface PlacedComponent {
@@ -63,7 +64,7 @@ export interface TsukiCircuit {
 
 // ── Interaction types ──────────────────────────────────────────────────────────
 
-export type Tool = 'select' | 'wire' | 'delete' | 'probe'
+export type Tool = 'select' | 'wire' | 'delete' | 'probe' | 'voltmeter' | 'ammeter' | 'label' | 'ruler'
 
 export interface WireInProgress {
   fromComp: string
@@ -80,6 +81,37 @@ export interface WireProbe {
   id: string
   wireId: string
   label: string
+}
+
+/** A voltmeter pin indicator — shows live voltage at a specific comp:pin on the SVG */
+export interface VoltmeterPin {
+  id: string
+  compId: string
+  pinId: string
+  label: string   // e.g. "UNO.D9"
+}
+
+/** An ammeter overlay on a wire — shows live current inline */
+export interface AmmeterWire {
+  id: string
+  wireId: string
+  label: string
+}
+
+/** A sticky canvas label (text annotation) */
+export interface CanvasLabel {
+  id: string
+  x: number
+  y: number
+  text: string
+  color: string
+}
+
+/** A ruler measurement between two canvas points */
+export interface RulerMeasure {
+  id: string
+  x1: number; y1: number
+  x2: number; y2: number
 }
 
 // ── Pin color map ──────────────────────────────────────────────────────────────
@@ -210,6 +242,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'xiao_rp2040', label: 'Xiao RP2040', w: 90, h: 140,
     color: '#1c3a5e', borderColor: '#0f2236', category: 'mcu',
     description: 'Seeed Xiao RP2040 · RP2040 dual-core · 133 MHz · 14 GPIO · USB-C · tiny form factor',
+    hidden: true,
     pins: [
       { id: 'D0',  label: 'D0',        type: 'digital', rx: 0, ry: 0.07,  direction: 'inout', arduino: 0  },
       { id: 'D1',  label: 'D1',        type: 'digital', rx: 0, ry: 0.15,  direction: 'inout', arduino: 1  },
@@ -288,6 +321,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'potentiometer', label: 'Potentiometer', w: 48, h: 48,
     color: '#3a3a3a', borderColor: '#555', category: 'input',
     description: 'Rotary pot · 10kΩ · outputs 0–5V analog signal',
+    hidden: true,
     pins: [
       { id: 'vcc',   label: 'VCC',    type: 'power',  rx: 0,   ry: 0.2, direction: 'in'  },
       { id: 'gnd',   label: 'GND',    type: 'gnd',    rx: 0,   ry: 0.8, direction: 'in'  },
@@ -298,6 +332,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'slide_switch', label: 'Slide Switch', w: 44, h: 28,
     color: '#2a2a2a', borderColor: '#444', category: 'input',
     description: 'SPDT slide switch · 3 terminals · ON-ON',
+    hidden: true,
     pins: [
       { id: 'common', label: 'Common (C)', type: 'digital', rx: 0.5, ry: 1,   direction: 'inout' },
       { id: 'pos1',   label: 'Position 1', type: 'digital', rx: 0,   ry: 0.5, direction: 'out'   },
@@ -308,6 +343,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'rotary_encoder', label: 'Rot. Encoder', w: 46, h: 52,
     color: '#2a2a2a', borderColor: '#444', category: 'input',
     description: 'KY-040 rotary encoder · CLK / DT / SW · incremental',
+    hidden: true,
     pins: [
       { id: 'clk', label: 'CLK',  type: 'digital', rx: 0, ry: 0.14, direction: 'out' },
       { id: 'dt',  label: 'DT',   type: 'digital', rx: 0, ry: 0.34, direction: 'out' },
@@ -331,6 +367,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'capacitor', label: 'Capacitor', w: 28, h: 44,
     color: '#2a4a7a', borderColor: '#1a3060', category: 'passive',
     description: 'Electrolytic capacitor · polarized · default 100μF',
+    hidden: true,
     pins: [
       { id: 'pos', label: 'Anode (+)',   type: 'power',  rx: 0.5, ry: 0, direction: 'in' },
       { id: 'neg', label: 'Cathode (–)', type: 'gnd',    rx: 0.5, ry: 1, direction: 'in' },
@@ -340,6 +377,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'transistor_npn', label: 'NPN BJT', w: 36, h: 48,
     color: '#2a2a2a', borderColor: '#444', category: 'passive',
     description: 'NPN BJT (2N2222) · collector / base / emitter',
+    hidden: true,
     pins: [
       { id: 'collector', label: 'Collector', type: 'digital', rx: 0.5, ry: 0,    direction: 'in'  },
       { id: 'base',      label: 'Base',      type: 'digital', rx: 0,   ry: 0.55, direction: 'in'  },
@@ -360,119 +398,122 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'diode', label: 'Diode', w: 44, h: 22,
     color: '#1a1a1a', borderColor: '#333', category: 'passive',
     description: 'Rectifier diode 1N4007 · Anode → Cathode',
+    hidden: true,
     pins: [
       { id: 'anode',   label: 'Anode (+)',   type: 'power',   rx: 0, ry: 0.5, direction: 'in'  },
       { id: 'cathode', label: 'Cathode (−)', type: 'generic', rx: 1, ry: 0.5, direction: 'out' },
     ],
   },
   breadboard: {
-    type: 'breadboard', label: 'Breadboard', w: 180, h: 130,
+    type: 'breadboard', label: 'Breadboard', w: 270, h: 215,
     color: '#f0edd8', borderColor: '#c8c0a0', category: 'passive',
     description: 'Half-size solderless breadboard · 100 tie-points',
     pins: [
-      // Columns a-e = left side, f-j = right side
-      // Rows 1-5 = top half, 6-10 = bottom half
-      // rx/ry match the actual hole positions in BreadboardBody SVG
-      { id: 'a1',  label: 'a1',  type: 'generic', rx: 0.06,  ry: 0.09,   direction: 'inout' },
-      { id: 'b1',  label: 'b1',  type: 'generic', rx: 0.143, ry: 0.09,   direction: 'inout' },
-      { id: 'c1',  label: 'c1',  type: 'generic', rx: 0.226, ry: 0.09,   direction: 'inout' },
-      { id: 'd1',  label: 'd1',  type: 'generic', rx: 0.309, ry: 0.09,   direction: 'inout' },
-      { id: 'e1',  label: 'e1',  type: 'generic', rx: 0.392, ry: 0.09,   direction: 'inout' },
-      { id: 'f1',  label: 'f1',  type: 'generic', rx: 0.52,  ry: 0.09,   direction: 'inout' },
-      { id: 'g1',  label: 'g1',  type: 'generic', rx: 0.603, ry: 0.09,   direction: 'inout' },
-      { id: 'h1',  label: 'h1',  type: 'generic', rx: 0.686, ry: 0.09,   direction: 'inout' },
-      { id: 'i1',  label: 'i1',  type: 'generic', rx: 0.769, ry: 0.09,   direction: 'inout' },
-      { id: 'j1',  label: 'j1',  type: 'generic', rx: 0.852, ry: 0.09,   direction: 'inout' },
-      { id: 'a2',  label: 'a2',  type: 'generic', rx: 0.06,  ry: 0.1812, direction: 'inout' },
-      { id: 'b2',  label: 'b2',  type: 'generic', rx: 0.143, ry: 0.1812, direction: 'inout' },
-      { id: 'c2',  label: 'c2',  type: 'generic', rx: 0.226, ry: 0.1812, direction: 'inout' },
-      { id: 'd2',  label: 'd2',  type: 'generic', rx: 0.309, ry: 0.1812, direction: 'inout' },
-      { id: 'e2',  label: 'e2',  type: 'generic', rx: 0.392, ry: 0.1812, direction: 'inout' },
-      { id: 'f2',  label: 'f2',  type: 'generic', rx: 0.52,  ry: 0.1812, direction: 'inout' },
-      { id: 'g2',  label: 'g2',  type: 'generic', rx: 0.603, ry: 0.1812, direction: 'inout' },
-      { id: 'h2',  label: 'h2',  type: 'generic', rx: 0.686, ry: 0.1812, direction: 'inout' },
-      { id: 'i2',  label: 'i2',  type: 'generic', rx: 0.769, ry: 0.1812, direction: 'inout' },
-      { id: 'j2',  label: 'j2',  type: 'generic', rx: 0.852, ry: 0.1812, direction: 'inout' },
-      { id: 'a3',  label: 'a3',  type: 'generic', rx: 0.06,  ry: 0.2725, direction: 'inout' },
-      { id: 'b3',  label: 'b3',  type: 'generic', rx: 0.143, ry: 0.2725, direction: 'inout' },
-      { id: 'c3',  label: 'c3',  type: 'generic', rx: 0.226, ry: 0.2725, direction: 'inout' },
-      { id: 'd3',  label: 'd3',  type: 'generic', rx: 0.309, ry: 0.2725, direction: 'inout' },
-      { id: 'e3',  label: 'e3',  type: 'generic', rx: 0.392, ry: 0.2725, direction: 'inout' },
-      { id: 'f3',  label: 'f3',  type: 'generic', rx: 0.52,  ry: 0.2725, direction: 'inout' },
-      { id: 'g3',  label: 'g3',  type: 'generic', rx: 0.603, ry: 0.2725, direction: 'inout' },
-      { id: 'h3',  label: 'h3',  type: 'generic', rx: 0.686, ry: 0.2725, direction: 'inout' },
-      { id: 'i3',  label: 'i3',  type: 'generic', rx: 0.769, ry: 0.2725, direction: 'inout' },
-      { id: 'j3',  label: 'j3',  type: 'generic', rx: 0.852, ry: 0.2725, direction: 'inout' },
-      { id: 'a4',  label: 'a4',  type: 'generic', rx: 0.06,  ry: 0.3638, direction: 'inout' },
-      { id: 'b4',  label: 'b4',  type: 'generic', rx: 0.143, ry: 0.3638, direction: 'inout' },
-      { id: 'c4',  label: 'c4',  type: 'generic', rx: 0.226, ry: 0.3638, direction: 'inout' },
-      { id: 'd4',  label: 'd4',  type: 'generic', rx: 0.309, ry: 0.3638, direction: 'inout' },
-      { id: 'e4',  label: 'e4',  type: 'generic', rx: 0.392, ry: 0.3638, direction: 'inout' },
-      { id: 'f4',  label: 'f4',  type: 'generic', rx: 0.52,  ry: 0.3638, direction: 'inout' },
-      { id: 'g4',  label: 'g4',  type: 'generic', rx: 0.603, ry: 0.3638, direction: 'inout' },
-      { id: 'h4',  label: 'h4',  type: 'generic', rx: 0.686, ry: 0.3638, direction: 'inout' },
-      { id: 'i4',  label: 'i4',  type: 'generic', rx: 0.769, ry: 0.3638, direction: 'inout' },
-      { id: 'j4',  label: 'j4',  type: 'generic', rx: 0.852, ry: 0.3638, direction: 'inout' },
-      { id: 'a5',  label: 'a5',  type: 'generic', rx: 0.06,  ry: 0.455,  direction: 'inout' },
-      { id: 'b5',  label: 'b5',  type: 'generic', rx: 0.143, ry: 0.455,  direction: 'inout' },
-      { id: 'c5',  label: 'c5',  type: 'generic', rx: 0.226, ry: 0.455,  direction: 'inout' },
-      { id: 'd5',  label: 'd5',  type: 'generic', rx: 0.309, ry: 0.455,  direction: 'inout' },
-      { id: 'e5',  label: 'e5',  type: 'generic', rx: 0.392, ry: 0.455,  direction: 'inout' },
-      { id: 'f5',  label: 'f5',  type: 'generic', rx: 0.52,  ry: 0.455,  direction: 'inout' },
-      { id: 'g5',  label: 'g5',  type: 'generic', rx: 0.603, ry: 0.455,  direction: 'inout' },
-      { id: 'h5',  label: 'h5',  type: 'generic', rx: 0.686, ry: 0.455,  direction: 'inout' },
-      { id: 'i5',  label: 'i5',  type: 'generic', rx: 0.769, ry: 0.455,  direction: 'inout' },
-      { id: 'j5',  label: 'j5',  type: 'generic', rx: 0.852, ry: 0.455,  direction: 'inout' },
-      { id: 'a6',  label: 'a6',  type: 'generic', rx: 0.06,  ry: 0.525,  direction: 'inout' },
-      { id: 'b6',  label: 'b6',  type: 'generic', rx: 0.143, ry: 0.525,  direction: 'inout' },
-      { id: 'c6',  label: 'c6',  type: 'generic', rx: 0.226, ry: 0.525,  direction: 'inout' },
-      { id: 'd6',  label: 'd6',  type: 'generic', rx: 0.309, ry: 0.525,  direction: 'inout' },
-      { id: 'e6',  label: 'e6',  type: 'generic', rx: 0.392, ry: 0.525,  direction: 'inout' },
-      { id: 'f6',  label: 'f6',  type: 'generic', rx: 0.52,  ry: 0.525,  direction: 'inout' },
-      { id: 'g6',  label: 'g6',  type: 'generic', rx: 0.603, ry: 0.525,  direction: 'inout' },
-      { id: 'h6',  label: 'h6',  type: 'generic', rx: 0.686, ry: 0.525,  direction: 'inout' },
-      { id: 'i6',  label: 'i6',  type: 'generic', rx: 0.769, ry: 0.525,  direction: 'inout' },
-      { id: 'j6',  label: 'j6',  type: 'generic', rx: 0.852, ry: 0.525,  direction: 'inout' },
-      { id: 'a7',  label: 'a7',  type: 'generic', rx: 0.06,  ry: 0.6162, direction: 'inout' },
-      { id: 'b7',  label: 'b7',  type: 'generic', rx: 0.143, ry: 0.6162, direction: 'inout' },
-      { id: 'c7',  label: 'c7',  type: 'generic', rx: 0.226, ry: 0.6162, direction: 'inout' },
-      { id: 'd7',  label: 'd7',  type: 'generic', rx: 0.309, ry: 0.6162, direction: 'inout' },
-      { id: 'e7',  label: 'e7',  type: 'generic', rx: 0.392, ry: 0.6162, direction: 'inout' },
-      { id: 'f7',  label: 'f7',  type: 'generic', rx: 0.52,  ry: 0.6162, direction: 'inout' },
-      { id: 'g7',  label: 'g7',  type: 'generic', rx: 0.603, ry: 0.6162, direction: 'inout' },
-      { id: 'h7',  label: 'h7',  type: 'generic', rx: 0.686, ry: 0.6162, direction: 'inout' },
-      { id: 'i7',  label: 'i7',  type: 'generic', rx: 0.769, ry: 0.6162, direction: 'inout' },
-      { id: 'j7',  label: 'j7',  type: 'generic', rx: 0.852, ry: 0.6162, direction: 'inout' },
-      { id: 'a8',  label: 'a8',  type: 'generic', rx: 0.06,  ry: 0.7075, direction: 'inout' },
-      { id: 'b8',  label: 'b8',  type: 'generic', rx: 0.143, ry: 0.7075, direction: 'inout' },
-      { id: 'c8',  label: 'c8',  type: 'generic', rx: 0.226, ry: 0.7075, direction: 'inout' },
-      { id: 'd8',  label: 'd8',  type: 'generic', rx: 0.309, ry: 0.7075, direction: 'inout' },
-      { id: 'e8',  label: 'e8',  type: 'generic', rx: 0.392, ry: 0.7075, direction: 'inout' },
-      { id: 'f8',  label: 'f8',  type: 'generic', rx: 0.52,  ry: 0.7075, direction: 'inout' },
-      { id: 'g8',  label: 'g8',  type: 'generic', rx: 0.603, ry: 0.7075, direction: 'inout' },
-      { id: 'h8',  label: 'h8',  type: 'generic', rx: 0.686, ry: 0.7075, direction: 'inout' },
-      { id: 'i8',  label: 'i8',  type: 'generic', rx: 0.769, ry: 0.7075, direction: 'inout' },
-      { id: 'j8',  label: 'j8',  type: 'generic', rx: 0.852, ry: 0.7075, direction: 'inout' },
-      { id: 'a9',  label: 'a9',  type: 'generic', rx: 0.06,  ry: 0.7988, direction: 'inout' },
-      { id: 'b9',  label: 'b9',  type: 'generic', rx: 0.143, ry: 0.7988, direction: 'inout' },
-      { id: 'c9',  label: 'c9',  type: 'generic', rx: 0.226, ry: 0.7988, direction: 'inout' },
-      { id: 'd9',  label: 'd9',  type: 'generic', rx: 0.309, ry: 0.7988, direction: 'inout' },
-      { id: 'e9',  label: 'e9',  type: 'generic', rx: 0.392, ry: 0.7988, direction: 'inout' },
-      { id: 'f9',  label: 'f9',  type: 'generic', rx: 0.52,  ry: 0.7988, direction: 'inout' },
-      { id: 'g9',  label: 'g9',  type: 'generic', rx: 0.603, ry: 0.7988, direction: 'inout' },
-      { id: 'h9',  label: 'h9',  type: 'generic', rx: 0.686, ry: 0.7988, direction: 'inout' },
-      { id: 'i9',  label: 'i9',  type: 'generic', rx: 0.769, ry: 0.7988, direction: 'inout' },
-      { id: 'j9',  label: 'j9',  type: 'generic', rx: 0.852, ry: 0.7988, direction: 'inout' },
-      { id: 'a10', label: 'a10', type: 'generic', rx: 0.06,  ry: 0.89,   direction: 'inout' },
-      { id: 'b10', label: 'b10', type: 'generic', rx: 0.143, ry: 0.89,   direction: 'inout' },
-      { id: 'c10', label: 'c10', type: 'generic', rx: 0.226, ry: 0.89,   direction: 'inout' },
-      { id: 'd10', label: 'd10', type: 'generic', rx: 0.309, ry: 0.89,   direction: 'inout' },
-      { id: 'e10', label: 'e10', type: 'generic', rx: 0.392, ry: 0.89,   direction: 'inout' },
-      { id: 'f10', label: 'f10', type: 'generic', rx: 0.52,  ry: 0.89,   direction: 'inout' },
-      { id: 'g10', label: 'g10', type: 'generic', rx: 0.603, ry: 0.89,   direction: 'inout' },
-      { id: 'h10', label: 'h10', type: 'generic', rx: 0.686, ry: 0.89,   direction: 'inout' },
-      { id: 'i10', label: 'i10', type: 'generic', rx: 0.769, ry: 0.89,   direction: 'inout' },
-      { id: 'j10', label: 'j10', type: 'generic', rx: 0.852, ry: 0.89,   direction: 'inout' },
+      // ── Uniform pitch grid — pitch p=0.090, gap between e and f = 1p ──────
+      // Symmetry: margin = (1 − 9p) / 2 = 0.095
+      // Left  (a–e): 0.095, 0.185, 0.275, 0.365, 0.455  ← all uniform
+      // Right (f–j): 0.545, 0.635, 0.725, 0.815, 0.905  (gap = 0.090 = 1p)
+      // Rows  1–10 : 0.100, 0.190, 0.280, 0.370, 0.460, 0.550, 0.640, 0.730, 0.820, 0.910
+      { id: 'a1',  label: 'a1',  type: 'generic', rx: 0.095, ry: 0.100, direction: 'inout' },
+      { id: 'b1',  label: 'b1',  type: 'generic', rx: 0.185, ry: 0.100, direction: 'inout' },
+      { id: 'c1',  label: 'c1',  type: 'generic', rx: 0.275, ry: 0.100, direction: 'inout' },
+      { id: 'd1',  label: 'd1',  type: 'generic', rx: 0.365, ry: 0.100, direction: 'inout' },
+      { id: 'e1',  label: 'e1',  type: 'generic', rx: 0.455, ry: 0.100, direction: 'inout' },
+      { id: 'f1',  label: 'f1',  type: 'generic', rx: 0.545, ry: 0.100, direction: 'inout' },
+      { id: 'g1',  label: 'g1',  type: 'generic', rx: 0.635, ry: 0.100, direction: 'inout' },
+      { id: 'h1',  label: 'h1',  type: 'generic', rx: 0.725, ry: 0.100, direction: 'inout' },
+      { id: 'i1',  label: 'i1',  type: 'generic', rx: 0.815, ry: 0.100, direction: 'inout' },
+      { id: 'j1',  label: 'j1',  type: 'generic', rx: 0.905, ry: 0.100, direction: 'inout' },
+      { id: 'a2',  label: 'a2',  type: 'generic', rx: 0.095, ry: 0.190, direction: 'inout' },
+      { id: 'b2',  label: 'b2',  type: 'generic', rx: 0.185, ry: 0.190, direction: 'inout' },
+      { id: 'c2',  label: 'c2',  type: 'generic', rx: 0.275, ry: 0.190, direction: 'inout' },
+      { id: 'd2',  label: 'd2',  type: 'generic', rx: 0.365, ry: 0.190, direction: 'inout' },
+      { id: 'e2',  label: 'e2',  type: 'generic', rx: 0.455, ry: 0.190, direction: 'inout' },
+      { id: 'f2',  label: 'f2',  type: 'generic', rx: 0.545, ry: 0.190, direction: 'inout' },
+      { id: 'g2',  label: 'g2',  type: 'generic', rx: 0.635, ry: 0.190, direction: 'inout' },
+      { id: 'h2',  label: 'h2',  type: 'generic', rx: 0.725, ry: 0.190, direction: 'inout' },
+      { id: 'i2',  label: 'i2',  type: 'generic', rx: 0.815, ry: 0.190, direction: 'inout' },
+      { id: 'j2',  label: 'j2',  type: 'generic', rx: 0.905, ry: 0.190, direction: 'inout' },
+      { id: 'a3',  label: 'a3',  type: 'generic', rx: 0.095, ry: 0.280, direction: 'inout' },
+      { id: 'b3',  label: 'b3',  type: 'generic', rx: 0.185, ry: 0.280, direction: 'inout' },
+      { id: 'c3',  label: 'c3',  type: 'generic', rx: 0.275, ry: 0.280, direction: 'inout' },
+      { id: 'd3',  label: 'd3',  type: 'generic', rx: 0.365, ry: 0.280, direction: 'inout' },
+      { id: 'e3',  label: 'e3',  type: 'generic', rx: 0.455, ry: 0.280, direction: 'inout' },
+      { id: 'f3',  label: 'f3',  type: 'generic', rx: 0.545, ry: 0.280, direction: 'inout' },
+      { id: 'g3',  label: 'g3',  type: 'generic', rx: 0.635, ry: 0.280, direction: 'inout' },
+      { id: 'h3',  label: 'h3',  type: 'generic', rx: 0.725, ry: 0.280, direction: 'inout' },
+      { id: 'i3',  label: 'i3',  type: 'generic', rx: 0.815, ry: 0.280, direction: 'inout' },
+      { id: 'j3',  label: 'j3',  type: 'generic', rx: 0.905, ry: 0.280, direction: 'inout' },
+      { id: 'a4',  label: 'a4',  type: 'generic', rx: 0.095, ry: 0.370, direction: 'inout' },
+      { id: 'b4',  label: 'b4',  type: 'generic', rx: 0.185, ry: 0.370, direction: 'inout' },
+      { id: 'c4',  label: 'c4',  type: 'generic', rx: 0.275, ry: 0.370, direction: 'inout' },
+      { id: 'd4',  label: 'd4',  type: 'generic', rx: 0.365, ry: 0.370, direction: 'inout' },
+      { id: 'e4',  label: 'e4',  type: 'generic', rx: 0.455, ry: 0.370, direction: 'inout' },
+      { id: 'f4',  label: 'f4',  type: 'generic', rx: 0.545, ry: 0.370, direction: 'inout' },
+      { id: 'g4',  label: 'g4',  type: 'generic', rx: 0.635, ry: 0.370, direction: 'inout' },
+      { id: 'h4',  label: 'h4',  type: 'generic', rx: 0.725, ry: 0.370, direction: 'inout' },
+      { id: 'i4',  label: 'i4',  type: 'generic', rx: 0.815, ry: 0.370, direction: 'inout' },
+      { id: 'j4',  label: 'j4',  type: 'generic', rx: 0.905, ry: 0.370, direction: 'inout' },
+      { id: 'a5',  label: 'a5',  type: 'generic', rx: 0.095, ry: 0.460, direction: 'inout' },
+      { id: 'b5',  label: 'b5',  type: 'generic', rx: 0.185, ry: 0.460, direction: 'inout' },
+      { id: 'c5',  label: 'c5',  type: 'generic', rx: 0.275, ry: 0.460, direction: 'inout' },
+      { id: 'd5',  label: 'd5',  type: 'generic', rx: 0.365, ry: 0.460, direction: 'inout' },
+      { id: 'e5',  label: 'e5',  type: 'generic', rx: 0.455, ry: 0.460, direction: 'inout' },
+      { id: 'f5',  label: 'f5',  type: 'generic', rx: 0.545, ry: 0.460, direction: 'inout' },
+      { id: 'g5',  label: 'g5',  type: 'generic', rx: 0.635, ry: 0.460, direction: 'inout' },
+      { id: 'h5',  label: 'h5',  type: 'generic', rx: 0.725, ry: 0.460, direction: 'inout' },
+      { id: 'i5',  label: 'i5',  type: 'generic', rx: 0.815, ry: 0.460, direction: 'inout' },
+      { id: 'j5',  label: 'j5',  type: 'generic', rx: 0.905, ry: 0.460, direction: 'inout' },
+      { id: 'a6',  label: 'a6',  type: 'generic', rx: 0.095, ry: 0.550, direction: 'inout' },
+      { id: 'b6',  label: 'b6',  type: 'generic', rx: 0.185, ry: 0.550, direction: 'inout' },
+      { id: 'c6',  label: 'c6',  type: 'generic', rx: 0.275, ry: 0.550, direction: 'inout' },
+      { id: 'd6',  label: 'd6',  type: 'generic', rx: 0.365, ry: 0.550, direction: 'inout' },
+      { id: 'e6',  label: 'e6',  type: 'generic', rx: 0.455, ry: 0.550, direction: 'inout' },
+      { id: 'f6',  label: 'f6',  type: 'generic', rx: 0.545, ry: 0.550, direction: 'inout' },
+      { id: 'g6',  label: 'g6',  type: 'generic', rx: 0.635, ry: 0.550, direction: 'inout' },
+      { id: 'h6',  label: 'h6',  type: 'generic', rx: 0.725, ry: 0.550, direction: 'inout' },
+      { id: 'i6',  label: 'i6',  type: 'generic', rx: 0.815, ry: 0.550, direction: 'inout' },
+      { id: 'j6',  label: 'j6',  type: 'generic', rx: 0.905, ry: 0.550, direction: 'inout' },
+      { id: 'a7',  label: 'a7',  type: 'generic', rx: 0.095, ry: 0.640, direction: 'inout' },
+      { id: 'b7',  label: 'b7',  type: 'generic', rx: 0.185, ry: 0.640, direction: 'inout' },
+      { id: 'c7',  label: 'c7',  type: 'generic', rx: 0.275, ry: 0.640, direction: 'inout' },
+      { id: 'd7',  label: 'd7',  type: 'generic', rx: 0.365, ry: 0.640, direction: 'inout' },
+      { id: 'e7',  label: 'e7',  type: 'generic', rx: 0.455, ry: 0.640, direction: 'inout' },
+      { id: 'f7',  label: 'f7',  type: 'generic', rx: 0.545, ry: 0.640, direction: 'inout' },
+      { id: 'g7',  label: 'g7',  type: 'generic', rx: 0.635, ry: 0.640, direction: 'inout' },
+      { id: 'h7',  label: 'h7',  type: 'generic', rx: 0.725, ry: 0.640, direction: 'inout' },
+      { id: 'i7',  label: 'i7',  type: 'generic', rx: 0.815, ry: 0.640, direction: 'inout' },
+      { id: 'j7',  label: 'j7',  type: 'generic', rx: 0.905, ry: 0.640, direction: 'inout' },
+      { id: 'a8',  label: 'a8',  type: 'generic', rx: 0.095, ry: 0.730, direction: 'inout' },
+      { id: 'b8',  label: 'b8',  type: 'generic', rx: 0.185, ry: 0.730, direction: 'inout' },
+      { id: 'c8',  label: 'c8',  type: 'generic', rx: 0.275, ry: 0.730, direction: 'inout' },
+      { id: 'd8',  label: 'd8',  type: 'generic', rx: 0.365, ry: 0.730, direction: 'inout' },
+      { id: 'e8',  label: 'e8',  type: 'generic', rx: 0.455, ry: 0.730, direction: 'inout' },
+      { id: 'f8',  label: 'f8',  type: 'generic', rx: 0.545, ry: 0.730, direction: 'inout' },
+      { id: 'g8',  label: 'g8',  type: 'generic', rx: 0.635, ry: 0.730, direction: 'inout' },
+      { id: 'h8',  label: 'h8',  type: 'generic', rx: 0.725, ry: 0.730, direction: 'inout' },
+      { id: 'i8',  label: 'i8',  type: 'generic', rx: 0.815, ry: 0.730, direction: 'inout' },
+      { id: 'j8',  label: 'j8',  type: 'generic', rx: 0.905, ry: 0.730, direction: 'inout' },
+      { id: 'a9',  label: 'a9',  type: 'generic', rx: 0.095, ry: 0.820, direction: 'inout' },
+      { id: 'b9',  label: 'b9',  type: 'generic', rx: 0.185, ry: 0.820, direction: 'inout' },
+      { id: 'c9',  label: 'c9',  type: 'generic', rx: 0.275, ry: 0.820, direction: 'inout' },
+      { id: 'd9',  label: 'd9',  type: 'generic', rx: 0.365, ry: 0.820, direction: 'inout' },
+      { id: 'e9',  label: 'e9',  type: 'generic', rx: 0.455, ry: 0.820, direction: 'inout' },
+      { id: 'f9',  label: 'f9',  type: 'generic', rx: 0.545, ry: 0.820, direction: 'inout' },
+      { id: 'g9',  label: 'g9',  type: 'generic', rx: 0.635, ry: 0.820, direction: 'inout' },
+      { id: 'h9',  label: 'h9',  type: 'generic', rx: 0.725, ry: 0.820, direction: 'inout' },
+      { id: 'i9',  label: 'i9',  type: 'generic', rx: 0.815, ry: 0.820, direction: 'inout' },
+      { id: 'j9',  label: 'j9',  type: 'generic', rx: 0.905, ry: 0.820, direction: 'inout' },
+      { id: 'a10', label: 'a10', type: 'generic', rx: 0.095, ry: 0.910, direction: 'inout' },
+      { id: 'b10', label: 'b10', type: 'generic', rx: 0.185, ry: 0.910, direction: 'inout' },
+      { id: 'c10', label: 'c10', type: 'generic', rx: 0.275, ry: 0.910, direction: 'inout' },
+      { id: 'd10', label: 'd10', type: 'generic', rx: 0.365, ry: 0.910, direction: 'inout' },
+      { id: 'e10', label: 'e10', type: 'generic', rx: 0.455, ry: 0.910, direction: 'inout' },
+      { id: 'f10', label: 'f10', type: 'generic', rx: 0.545, ry: 0.910, direction: 'inout' },
+      { id: 'g10', label: 'g10', type: 'generic', rx: 0.635, ry: 0.910, direction: 'inout' },
+      { id: 'h10', label: 'h10', type: 'generic', rx: 0.725, ry: 0.910, direction: 'inout' },
+      { id: 'i10', label: 'i10', type: 'generic', rx: 0.815, ry: 0.910, direction: 'inout' },
+      { id: 'j10', label: 'j10', type: 'generic', rx: 0.905, ry: 0.910, direction: 'inout' },
     ],
   },
   header_8: {
@@ -535,6 +576,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'dht11', label: 'DHT11', w: 44, h: 52,
     color: '#1a5fb4', borderColor: '#0d3d80', category: 'sensor',
     description: 'Digital temp & humidity sensor · ±2°C · ±5%RH',
+    hidden: true,
     pins: [
       { id: 'vcc',  label: 'VCC (3.3–5V)', type: 'power',   rx: 0, ry: 0.3, direction: 'in'  },
       { id: 'data', label: 'Data',          type: 'digital', rx: 0, ry: 0.6, direction: 'out' },
@@ -546,6 +588,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'ldr', label: 'LDR', w: 34, h: 34,
     color: '#c48a00', borderColor: '#8a6000', category: 'sensor',
     description: 'Light-dependent resistor · resistance ↓ as light ↑',
+    hidden: true,
     pins: [
       { id: 'pin1', label: 'Pin 1', type: 'analog', rx: 0,   ry: 0.5, direction: 'inout' },
       { id: 'pin2', label: 'Pin 2', type: 'analog', rx: 1,   ry: 0.5, direction: 'inout' },
@@ -555,6 +598,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'ultrasonic', label: 'HC-SR04', w: 72, h: 42,
     color: '#1a4a2a', borderColor: '#0d3018', category: 'sensor',
     description: 'Ultrasonic distance sensor · 2–400cm · ±3mm',
+    hidden: true,
     pins: [
       { id: 'vcc',  label: 'VCC 5V', type: 'power',   rx: 0.1,  ry: 0, direction: 'in'  },
       { id: 'trig', label: 'TRIG',   type: 'digital', rx: 0.37, ry: 0, direction: 'in'  },
@@ -566,6 +610,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'ir_sensor', label: 'IR Sensor', w: 50, h: 36,
     color: '#1a1a1a', borderColor: '#333', category: 'sensor',
     description: 'Infrared obstacle sensor · digital output · 2–30cm',
+    hidden: true,
     pins: [
       { id: 'vcc', label: 'VCC',    type: 'power',   rx: 0, ry: 0.2, direction: 'in'  },
       { id: 'gnd', label: 'GND',    type: 'gnd',     rx: 0, ry: 0.8, direction: 'in'  },
@@ -576,6 +621,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'thermistor', label: 'Thermistor NTC', w: 36, h: 36,
     color: '#4a2a2a', borderColor: '#6a3a3a', category: 'sensor',
     description: 'NTC thermistor 10kΩ · resistance decreases with temperature',
+    hidden: true,
     pins: [
       { id: 'pin1', label: 'Pin 1', type: 'analog', rx: 0, ry: 0.5, direction: 'inout' },
       { id: 'pin2', label: 'Pin 2', type: 'analog', rx: 1, ry: 0.5, direction: 'inout' },
@@ -600,6 +646,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'l298n', label: 'L298N Driver', w: 72, h: 66,
     color: '#1c1c1c', borderColor: '#2a2a2a', category: 'actuator',
     description: 'L298N dual H-bridge motor driver · 2A per channel · 5–35V',
+    hidden: true,
     pins: [
       { id: 'ena',   label: 'ENA',    type: 'pwm',     rx: 0, ry: 0.10, direction: 'in'  },
       { id: 'in1',   label: 'IN1',    type: 'digital', rx: 0, ry: 0.26, direction: 'in'  },
@@ -618,6 +665,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'dc_motor', label: 'DC Motor', w: 54, h: 54,
     color: '#2a2a2a', borderColor: '#444', category: 'actuator',
     description: 'Generic DC motor · 3–12V · use with L298N or MOSFET',
+    hidden: true,
     pins: [
       { id: 'pos', label: 'Motor (+)', type: 'power', rx: 0.28, ry: 0, direction: 'in' },
       { id: 'neg', label: 'Motor (−)', type: 'gnd',   rx: 0.72, ry: 0, direction: 'in' },
@@ -629,6 +677,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'lcd_16x2', label: 'LCD 16×2', w: 120, h: 60,
     color: '#0a3d0a', borderColor: '#063006', category: 'display',
     description: 'HD44780 16×2 character LCD · parallel or I²C',
+    hidden: true,
     pins: [
       { id: 'vss', label: 'VSS GND',     type: 'gnd',     rx: 0.04, ry: 1, direction: 'in' },
       { id: 'vdd', label: 'VDD 5V',      type: 'power',   rx: 0.11, ry: 1, direction: 'in' },
@@ -665,6 +714,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'oled_128x64', label: 'OLED 128×64', w: 72, h: 54,
     color: '#0a0a0a', borderColor: '#222', category: 'display',
     description: 'SSD1306 0.96" OLED · 128×64 · I²C · 3.3V–5V',
+    hidden: true,
     pins: [
       { id: 'gnd', label: 'GND', type: 'gnd',   rx: 0.10, ry: 1, direction: 'in'    },
       { id: 'vcc', label: 'VCC', type: 'power', rx: 0.30, ry: 1, direction: 'in'    },
@@ -676,6 +726,7 @@ export const COMP_DEFS: Record<string, CircuitComponentDef> = {
     type: 'neopixel_ring', label: 'NeoPixel Ring', w: 60, h: 60,
     color: '#111', borderColor: '#333', category: 'output',
     description: 'WS2812B 12-pixel RGB ring · addressable · 5V',
+    hidden: true,
     pins: [
       { id: 'pwr',  label: 'PWR 5V',   type: 'power',   rx: 0.12, ry: 0.88, direction: 'in'  },
       { id: 'gnd',  label: 'GND',      type: 'gnd',     rx: 0.30, ry: 0.96, direction: 'in'  },
@@ -807,6 +858,104 @@ export function makeOrthogonalPath(
     }
   }
   return d
+}
+
+/**
+ * Smooth bezier wire path — gentle curves between waypoints.
+ */
+export function makeSmoothPath(
+  ax: number, ay: number,
+  bx: number, by: number,
+  waypoints: { x: number; y: number }[] = []
+): string {
+  const pts = [{ x: ax, y: ay }, ...waypoints, { x: bx, y: by }]
+  if (pts.length === 2) {
+    const dx = Math.abs(bx - ax) * 0.55
+    return `M ${ax},${ay} C ${ax + dx},${ay} ${bx - dx},${by} ${bx},${by}`
+  }
+  // Catmull-Rom to bezier
+  let d = `M ${pts[0].x},${pts[0].y}`
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)]
+    const p1 = pts[i]
+    const p2 = pts[i + 1]
+    const p3 = pts[Math.min(pts.length - 1, i + 2)]
+    const cp1x = p1.x + (p2.x - p0.x) / 6
+    const cp1y = p1.y + (p2.y - p0.y) / 6
+    const cp2x = p2.x - (p3.x - p1.x) / 6
+    const cp2y = p2.y - (p3.y - p1.y) / 6
+    d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`
+  }
+  return d
+}
+
+/**
+ * Flexible wire path — sags downward like a physical cable.
+ */
+export function makeFlexiblePath(
+  ax: number, ay: number,
+  bx: number, by: number,
+  waypoints: { x: number; y: number }[] = []
+): string {
+  if (waypoints.length > 0) return makeSmoothPath(ax, ay, bx, by, waypoints)
+  const mx  = (ax + bx) / 2
+  const my  = (ay + by) / 2
+  const len = Math.hypot(bx - ax, by - ay)
+  // Sag amount proportional to wire length, always downward
+  const sag = Math.min(len * 0.25, 60)
+  const cpx = mx
+  const cpy = my + sag
+  return `M ${ax},${ay} Q ${cpx},${cpy} ${bx},${by}`
+}
+
+/**
+ * Direct (straight) wire path.
+ */
+export function makeDirectPath(
+  ax: number, ay: number,
+  bx: number, by: number,
+  _waypoints: { x: number; y: number }[] = []
+): string {
+  return `M ${ax},${ay} L ${bx},${by}`
+}
+
+export type WireStyleId = 'orthogonal' | 'smooth' | 'flexible' | 'direct'
+
+/** Build a wire SVG path using the requested style */
+export function makeWirePath(
+  ax: number, ay: number,
+  bx: number, by: number,
+  waypoints: { x: number; y: number }[] = [],
+  style: WireStyleId = 'orthogonal',
+): string {
+  switch (style) {
+    case 'smooth':    return makeSmoothPath(ax, ay, bx, by, waypoints)
+    case 'flexible':  return makeFlexiblePath(ax, ay, bx, by, waypoints)
+    case 'direct':    return makeDirectPath(ax, ay, bx, by, waypoints)
+    default:          return makeOrthogonalPath(ax, ay, bx, by, waypoints)
+  }
+}
+
+/** Wire palette definitions */
+export type WirePaletteId = 'classic' | 'monochrome' | 'pastel' | 'custom'
+
+export const WIRE_PALETTES: Record<WirePaletteId, { label: string; colors: string[] }> = {
+  classic: {
+    label: 'Classic',
+    colors: ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899','#e2e2e2','#1a1a1a'],
+  },
+  monochrome: {
+    label: 'Monochrome',
+    colors: ['#ffffff','#d4d4d4','#a3a3a3','#737373','#525252','#404040','#2a2a2a','#1c1c1c','#0a0a0a'],
+  },
+  pastel: {
+    label: 'Pastel',
+    colors: ['#fca5a5','#fdba74','#fde68a','#86efac','#93c5fd','#c4b5fd','#f9a8d4','#e5e7eb','#6b7280'],
+  },
+  custom: {
+    label: 'Custom',
+    colors: ['#ef4444','#3b82f6','#22c55e','#f97316','#a855f7','#eab308','#ec4899','#e2e2e2','#1a1a1a'],
+  },
 }
 
 /** Compute estimated V / I / P for a wire given current sim state */

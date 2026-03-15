@@ -174,6 +174,10 @@ pub struct Simulator {
     setup_done: bool,
     /// Supply voltage (5.0 for 5V boards, 3.3 for ESP32/ESP8266/Pico)
     vcc:        f64,
+    /// Maps servo variable name -> attached pin (usize::MAX = declared but not yet attached)
+    servo_pins: HashMap<String, usize>,
+    /// Maps pin -> active tone frequency in Hz (0 = silent)
+    tone_pins:  HashMap<usize, u32>,
 }
 
 impl Simulator {
@@ -196,20 +200,26 @@ impl Simulator {
         for (k, v) in builtins { globals.insert(k.into(), v); }
 
         let mut functions: HashMap<String, (Vec<String>, Block)> = HashMap::new();
+        let mut servo_vars: Vec<String> = Vec::new();
 
         // ── Collect top-level declarations ────────────────────────────────────
         for decl in &prog.decls {
             match decl {
                 Decl::Const { name, val, .. } => {
-                    // Evaluate const initialiser in globals context
                     let v = eval_const_expr(val, &globals);
                     globals.insert(name.clone(), v);
                 }
-                Decl::Var { name, init, .. } => {
+                Decl::Var { name, ty, init, .. } => {
                     let v = init.as_ref()
                         .map(|e| eval_const_expr(e, &globals))
                         .unwrap_or(Value::Int(0));
                     globals.insert(name.clone(), v);
+                    // Pre-register servo variables so s.Attach/Write work before any call
+                    if let Some(tsuki_core::parser::ast::Type::Named(tn)) = ty {
+                        if tn.to_ascii_lowercase().contains("servo") {
+                            servo_vars.push(name.clone());
+                        }
+                    }
                 }
                 Decl::Func { name, sig, body: Some(body), recv: None, .. } => {
                     let params: Vec<String> = sig.params.iter()
@@ -221,6 +231,9 @@ impl Simulator {
             }
         }
 
+        let mut servo_pins: HashMap<String, usize> = HashMap::new();
+        for v in servo_vars { servo_pins.insert(v, usize::MAX); }
+
         Ok(Simulator {
             globals,
             functions,
@@ -228,6 +241,8 @@ impl Simulator {
             virtual_ms: 0.0,
             setup_done: false,
             vcc: 5.0,
+            servo_pins,
+            tone_pins: HashMap::new(),
         })
     }
 
@@ -391,6 +406,68 @@ impl Simulator {
             return self.math_builtin(m, args);
         }
 
+        // Servo library — three calling conventions:
+        //   Package-style:  Servo.Attach(s, pin)   pkg="Servo" sub=""      ao=1
+        //   Method-style A: s.Attach(pin)           pkg="s"     sub=""      ao=0 (pre-registered)
+        //   Method-style B: s.Attach(pin) dbl-sel   pkg="s"     sub="Servo" ao=0
+        let pkg_lower = pkg.to_ascii_lowercase();
+        let sub_lower = sub.to_ascii_lowercase();
+        let is_pkg_servo     = pkg_lower == "servo";
+        let is_sub_servo     = sub_lower == "servo";
+        let is_known_servo   = self.servo_pins.contains_key(pkg);
+        if is_pkg_servo || is_sub_servo || is_known_servo {
+            let var_name = if is_pkg_servo && !is_sub_servo {
+                if sub.is_empty() { "Servo".to_string() } else { sub.to_string() }
+            } else if is_sub_servo {
+                pkg.to_string()
+            } else {
+                pkg.to_string()
+            };
+            let ao: usize = if is_pkg_servo { 1 } else { 0 };
+            match m {
+                "attach" => {
+                    let pin = args.get(ao).map(|v| v.as_int() as usize).unwrap_or(0);
+                    self.servo_pins.insert(var_name, pin);
+                    return Value::Nil;
+                }
+                "write" => {
+                    let angle = args.get(ao).map(|v| v.as_f64()).unwrap_or(0.0)
+                        .clamp(0.0, 180.0) as u16;
+                    if let Some(&pin) = self.servo_pins.get(&var_name) {
+                        if pin != usize::MAX {
+                            self.pins.set_value(pin, angle);
+                            events.push(SimEvent {
+                                t_ms: self.virtual_ms, kind: "aw".into(),
+                                pin: Some(pin as u8), val: Some(angle), msg: None,
+                            });
+                        }
+                    }
+                    return Value::Nil;
+                }
+                "read" => {
+                    if let Some(&pin) = self.servo_pins.get(&var_name) {
+                        if pin != usize::MAX { return Value::Int(self.pins.get_value(pin) as i64); }
+                    }
+                    return Value::Int(0);
+                }
+                "writemicroseconds" => {
+                    let us = args.get(ao).map(|v| v.as_f64()).unwrap_or(1500.0).clamp(500.0, 2500.0);
+                    let angle = ((us - 500.0) / 2000.0 * 180.0) as u16;
+                    if let Some(&pin) = self.servo_pins.get(&var_name) {
+                        if pin != usize::MAX {
+                            self.pins.set_value(pin, angle);
+                            events.push(SimEvent {
+                                t_ms: self.virtual_ms, kind: "aw".into(),
+                                pin: Some(pin as u8), val: Some(angle), msg: None,
+                            });
+                        }
+                    }
+                    return Value::Nil;
+                }
+                _ => return Value::Nil,
+            }
+        }
+
         // Unknown — try as user function
         if !pkg.is_empty() && sub.is_empty() {
             // Could be a user-defined function named `method` in package `pkg`
@@ -474,7 +551,29 @@ impl Simulator {
             "sqrt" => { let v = args.get(0).map(|v| v.as_f64()).unwrap_or(0.0); Value::Float(v.sqrt()) }
             "pow"  => { let b = args.get(0).map(|v| v.as_f64()).unwrap_or(0.0); let e = args.get(1).map(|v| v.as_f64()).unwrap_or(0.0); Value::Float(b.powf(e)) }
             "random" => { let hi = args.get(0).map(|v| v.as_int()).unwrap_or(100); Value::Int(hi / 3) }
-            "tone" | "notone" | "attachinterrupt" | "detachinterrupt" | "interrupts" | "nointerrupts" => Value::Nil,
+            "tone" => {
+                let pin  = args.get(0).map(|v| v.as_int() as usize).unwrap_or(0);
+                let freq = args.get(1).map(|v| v.as_int() as u32).unwrap_or(1000).max(1);
+                let val  = freq.min(65535) as u16;
+                self.tone_pins.insert(pin, freq);
+                self.pins.set_value(pin, val);
+                events.push(SimEvent {
+                    t_ms: self.virtual_ms, kind: "aw".into(),
+                    pin: Some(pin as u8), val: Some(val), msg: None,
+                });
+                Value::Nil
+            }
+            "notone" => {
+                let pin = args.get(0).map(|v| v.as_int() as usize).unwrap_or(0);
+                self.tone_pins.remove(&pin);
+                self.pins.set_value(pin, 0);
+                events.push(SimEvent {
+                    t_ms: self.virtual_ms, kind: "dw".into(),
+                    pin: Some(pin as u8), val: Some(0), msg: None,
+                });
+                Value::Nil
+            }
+            "attachinterrupt" | "detachinterrupt" | "interrupts" | "nointerrupts" => Value::Nil,
             "serial" => Value::Nil, // arduino.Serial accessed as object — handled by double-select
             _ => Value::Nil,
         }

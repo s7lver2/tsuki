@@ -8,33 +8,174 @@ mod pty_session;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
-use tauri::Window;
+use tauri::{Manager, Window};
 use win_proc::WinSpawn;
 
-// ── Debug logger ──────────────────────────────────────────────────────────────
-// windows_subsystem="windows" suppresses stderr entirely, so we log to a file
-// in %TEMP% (or /tmp) that can be tailed while the app is running.
-fn dbg(msg: &str) {
+// ── Log mutex — serialises all writes to the debug log ───────────────────────
+// On Windows, concurrent OpenOptions::append from multiple threads causes
+// silent write failures (sharing violation).  This mutex ensures only one
+// thread writes at a time — zero cost when debug is off.
+static LOG_MUTEX: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+fn log_lock() -> std::sync::MutexGuard<'static, ()> {
+    LOG_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|p| p.into_inner())
+}
+
+// ── Debug mode flag ───────────────────────────────────────────────────────────
+// Set at startup by reading debugMode from settings.json BEFORE Tauri init.
+// This guarantees every log call from the first millisecond is captured when
+// debug mode is on — including spawn errors, path resolution, PTY failures, etc.
+pub static DEBUG_ENABLED:    AtomicBool = AtomicBool::new(false);
+/// When true, each entry is written as space-separated [key=value] tokens
+/// instead of the default flat "[ts] message" line — makes grep filters trivial.
+static DEBUG_STRUCTURED: AtomicBool = AtomicBool::new(false);
+
+// ── Per-category log flags ────────────────────────────────────────────────────
+// Each flag gates one logical group of log calls.  All default to true so that
+// when debug mode is first enabled every category is captured.  Users can
+// narrow scope in Settings → Developer → Debug & Logging without restarting.
+//
+// Keys must match debugLogCategories in store.ts:
+//   spawn    → spawn_process / spawn_shell invocations
+//   pty      → pty_create / pty_write / pty_resize / pty_kill lifecycle
+//   resolve  → normalise_cmd / resolve_cmd path lookups
+//   settings → settings read/write, tool-path detection
+//   shell    → list_shells, spawn_shell
+//   process  → process exit codes, write_stdin, kill_process
+//   frontend → messages forwarded from console.log/warn/error
+pub static LOG_CAT_SPAWN:    AtomicBool = AtomicBool::new(true);
+pub static LOG_CAT_PTY:      AtomicBool = AtomicBool::new(true);
+pub static LOG_CAT_RESOLVE:  AtomicBool = AtomicBool::new(true);
+pub static LOG_CAT_SETTINGS: AtomicBool = AtomicBool::new(true);
+pub static LOG_CAT_SHELL:    AtomicBool = AtomicBool::new(true);
+pub static LOG_CAT_PROCESS:  AtomicBool = AtomicBool::new(true);
+pub static LOG_CAT_FRONTEND: AtomicBool = AtomicBool::new(true);
+
+/// Returns the OS-specific path for the debug log file.
+pub fn debug_log_path() -> String {
     #[cfg(windows)]
-    let path = {
+    {
         let tmp = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Temp".into());
         format!("{}\\tsuki-ide-debug.log", tmp)
-    };
+    }
     #[cfg(not(windows))]
-    let path = "/tmp/tsuki-ide-debug.log".to_string();
+    {
+        // Prefer XDG_RUNTIME_DIR or HOME/.local/share, fallback to /tmp
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{}/.local/share/tsuki/tsuki-ide-debug.log", home)
+        } else {
+            "/tmp/tsuki-ide-debug.log".to_string()
+        }
+    }
+}
 
-    // Include a timestamp so entries are easy to correlate
-    let ts = std::time::SystemTime::now()
+// ── Log entry formatter ───────────────────────────────────────────────────────
+//
+// Flat mode  (default):
+//   [1234.567] [spawn_process] cmd="tsuki.exe" args=["check"]
+//   [1234.567] [frontend:error] spawn failed: ...
+//
+// Structured mode:
+//   [ts=1234.567] [src=rust] [cat=spawn_process] msg="cmd=\"tsuki.exe\" args=[\"check\"]"
+//   [ts=1234.567] [src=frontend] [lvl=error] msg="spawn failed: ..."
+//
+// Structured grep cheat-sheet:
+//   grep "\[src=rust\]"          — Rust-only entries
+//   grep "\[src=frontend\]"      — frontend-only entries
+//   grep "\[lvl=error\]"         — errors only
+//   grep "\[cat=spawn_process\]" — process-spawn events
+//   grep "\[cat=pty"              — all PTY events
+//   grep "\[cat=resolve_cmd\]"   — path resolution
+//   grep "tsuki.exe"               — any entry mentioning the binary
+pub fn now_ts() -> f64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let line = format!("[{}] {}", ts, msg);
+        .map(|d| d.as_millis())
+        .unwrap_or(0) as f64 / 1000.0
+}
 
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{}", line);
+pub fn fmt_entry(ts: f64, source: &str, level: &str, raw_msg: &str) -> String {
+    if DEBUG_STRUCTURED.load(Ordering::Relaxed) {
+        // Extract first [tag] from raw_msg as the category, rest is the body
+        let (cat, body) = if raw_msg.starts_with('[') {
+            if let Some(end) = raw_msg.find(']') {
+                let c = raw_msg[1..end].to_string();
+                let b = raw_msg[end + 1..].trim().to_string();
+                (c, b)
+            } else {
+                (String::new(), raw_msg.to_string())
+            }
+        } else {
+            (String::new(), raw_msg.to_string())
+        };
+
+        let mut parts = vec![
+            format!("[ts={:.3}]", ts),
+            format!("[src={}]", source),
+        ];
+        if !level.is_empty() { parts.push(format!("[lvl={}]", level)); }
+        if !cat.is_empty()   { parts.push(format!("[cat={}]", cat.replace(' ', "_"))); }
+        if !body.is_empty()  { parts.push(format!("msg={:?}", body)); }
+        parts.join(" ")
+    } else {
+        // Flat
+        if level.is_empty() {
+            format!("[{:.3}] {}", ts, raw_msg)
+        } else {
+            format!("[{:.3}] [{}:{}] {}", ts, source, level, raw_msg)
+        }
+    }
+}
+
+// ── Debug logger ──────────────────────────────────────────────────────────────
+pub fn write_to_log(line: &str, path: &str) {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Hold the mutex for the entire open+write+flush cycle.
+    // On Windows this prevents sharing violations when multiple threads
+    // (spawn_process, pty_create, reader threads) all try to append at once.
+    let _guard = log_lock();
+    #[cfg(windows)]
+    {
+        // On Windows use FILE_SHARE_READ|FILE_SHARE_WRITE to avoid ERROR_SHARING_VIOLATION
+        // when the viewer or tail command has the file open simultaneously.
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ:  u32 = 0x00000001;
+        const FILE_SHARE_WRITE: u32 = 0x00000002;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true).append(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(path)
+        {
+            let _ = writeln!(f, "{}", line);
+            let _ = f.flush();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{}", line);
+        }
     }
     eprintln!("{}", line);
+}
+
+fn dbg(msg: &str) {
+    let should_write = cfg!(debug_assertions) || DEBUG_ENABLED.load(Ordering::Relaxed);
+    if !should_write { return; }
+    let line = fmt_entry(now_ts(), "rust", "", msg);
+    write_to_log(&line, &debug_log_path());
+}
+
+/// Category-gated logger.  Only emits when BOTH debug mode AND the given
+/// category flag are on.  Zero cost when debug is off.
+pub fn dbg_cat(cat: &AtomicBool, msg: &str) {
+    if !DEBUG_ENABLED.load(Ordering::Relaxed) { return; }
+    if !cat.load(Ordering::Relaxed)           { return; }
+    let line = fmt_entry(now_ts(), "rust", "", msg);
+    write_to_log(&line, &debug_log_path());
 }
 
 // CREATE_NO_WINDOW suppresses console windows for the process AND its children.
@@ -80,12 +221,89 @@ fn which_first(names: &[&str]) -> Option<String> {
 #[tauri::command]
 async fn list_shells() -> Vec<ShellInfo> {
     let mut shells: Vec<ShellInfo> = Vec::new();
+    dbg_cat(&LOG_CAT_SHELL, "[list_shells] start");
 
     #[cfg(windows)]
     {
-        // CMD — always present on Windows, use absolute path so portable-pty finds it
-        let cmd_path = std::env::var("COMSPEC")
+        // ── WoW64-safe path resolver ─────────────────────────────────────────
+        //
+        // Problem: on a 32-bit process, Windows silently redirects
+        //   C:\Windows\System32  →  C:\Windows\SysWOW64
+        // for both file I/O AND CreateProcess.  Path::exists() may return true
+        // (file redirector), yet CreateProcess fails (process redirector can
+        // differ).  The "Sysnative" virtual directory always resolves to the
+        // real 64-bit System32 and bypasses WoW64 for both I/O and spawning.
+        //
+        // Strategy: try raw path first, then Sysnative rewrite, then which.
+        let resolve_win_shell = |raw: &str| -> String {
+            // 1. Try the path as-is — preferred if it spawns correctly
+            if std::path::Path::new(raw).exists() {
+                // Also verify via a Sysnative rewrite so we log the right path
+                let lower = raw.to_ascii_lowercase();
+                if lower.contains("system32") {
+                    let idx = lower.find("system32").unwrap();
+                    let sn  = format!("{}Sysnative{}", &raw[..idx], &raw[idx+8..]);
+                    let sn_exists = std::path::Path::new(&sn).exists();
+                    dbg_cat(&LOG_CAT_SHELL, &format!(
+                        "[resolve_win_shell] raw={:?} exists=true sysnative={:?} sn_exists={}",
+                        raw, sn, sn_exists
+                    ));
+                    // Always prefer Sysnative when it exists — it bypasses WoW64
+                    // for CreateProcess too, which is what portable-pty calls.
+                    if sn_exists {
+                        dbg_cat(&LOG_CAT_SHELL, &format!(
+                            "[resolve_win_shell] using Sysnative path={:?}", sn
+                        ));
+                        return sn;
+                    }
+                }
+                return raw.to_string();
+            }
+            // 2. Sysnative rewrite (32-bit process on 64-bit Windows)
+            let lower = raw.to_ascii_lowercase();
+            if lower.contains("system32") {
+                let idx = lower.find("system32").unwrap();
+                let sn  = format!("{}Sysnative{}", &raw[..idx], &raw[idx+8..]);
+                let sn_exists = std::path::Path::new(&sn).exists();
+                dbg_cat(&LOG_CAT_SHELL, &format!(
+                    "[resolve_win_shell] raw={:?} NOT found, sysnative={:?} exists={}",
+                    raw, sn, sn_exists
+                ));
+                if sn_exists { return sn; }
+            }
+            // 3. which — let the OS find it via PATH
+            if let Ok(p) = which::which(raw) {
+                let s = p.to_string_lossy().into_owned();
+                dbg_cat(&LOG_CAT_SHELL, &format!(
+                    "[resolve_win_shell] raw={:?} resolved via which={:?}", raw, s
+                ));
+                return s;
+            }
+            // 4. Return raw as last resort — spawn will fail with a clear error
+            dbg_cat(&LOG_CAT_SHELL, &format!(
+                "[resolve_win_shell] raw={:?} UNRESOLVED — returning as-is", raw
+            ));
+            raw.to_string()
+        };
+
+        // ── CMD ─────────────────────────────────────────────────────────────
+        let comspec_raw = std::env::var("COMSPEC")
             .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        dbg_cat(&LOG_CAT_SHELL, &format!("[list_shells] COMSPEC={:?}", comspec_raw));
+        let cmd_path = resolve_win_shell(&comspec_raw);
+        let cmd_meta_s = match std::path::Path::new(&cmd_path).metadata() {
+            Ok(m)  => format!("ok(len={})", m.len()),
+            Err(e) => format!("err(kind={:?}, os={:?})", e.kind(), e.raw_os_error()),
+        };
+        dbg_cat(&LOG_CAT_SHELL, &format!(
+            "[list_shells] cmd resolved={:?} metadata={}", cmd_path, cmd_meta_s
+        ));
+        {
+            let line = fmt_entry(now_ts(), "rust", "log", &format!(
+                "[list_shells] cmd final_path={:?} metadata={}", cmd_path, cmd_meta_s
+            ));
+            write_to_log(&line, &debug_log_path());
+        }
         shells.push(ShellInfo {
             id:   "cmd".into(),
             name: "Command Prompt".into(),
@@ -93,16 +311,19 @@ async fn list_shells() -> Vec<ShellInfo> {
             icon: "⬛".into(),
         });
 
-        // PowerShell 5.x
-        let ps5 = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
-        if std::path::Path::new(ps5).exists() {
+        // ── PowerShell 5.x ───────────────────────────────────────────────────
+        let ps5_raw = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        let ps5 = resolve_win_shell(ps5_raw);
+        if std::path::Path::new(&ps5).exists() {
+            dbg_cat(&LOG_CAT_SHELL, &format!("[list_shells] powershell={:?}", ps5));
             shells.push(ShellInfo {
                 id:   "powershell".into(),
                 name: "PowerShell".into(),
-                path: ps5.into(),
+                path: ps5,
                 icon: "🔵".into(),
             });
         } else if let Some(p) = which_first(&["powershell"]) {
+            dbg_cat(&LOG_CAT_SHELL, &format!("[list_shells] powershell(which)={:?}", p));
             shells.push(ShellInfo {
                 id:   "powershell".into(),
                 name: "PowerShell".into(),
@@ -168,6 +389,22 @@ async fn list_shells() -> Vec<ShellInfo> {
         }
     }
 
+    // ── Log resumen final ────────────────────────────────────────────────────
+    {
+        let summary: Vec<String> = shells.iter()
+            .map(|s| format!("{}={:?}(exists={})", s.id, s.path,
+                std::path::Path::new(&s.path).exists()))
+            .collect();
+        dbg_cat(&LOG_CAT_SHELL, &format!(
+            "[list_shells] done total={} shells=[{}]",
+            shells.len(), summary.join(", ")
+        ));
+        // Always write summary to log file
+        let line = fmt_entry(now_ts(), "rust", "log",
+            &format!("[list_shells] result total={} [{}]", shells.len(), summary.join(", ")));
+        write_to_log(&line, &debug_log_path());
+    }
+
     shells
 }
 
@@ -182,6 +419,10 @@ async fn spawn_shell(
     event_id:   String,
 ) -> Result<u32, String> {
     let shell_path = normalise_cmd(&shell_path);
+    dbg_cat(&LOG_CAT_SHELL, &format!(
+        "[spawn_shell] id={} path={:?} cwd={:?} exists={}",
+        shell_id, shell_path, cwd, std::path::Path::new(&shell_path).exists()
+    ));
     // --login on bash/git-bash sources .bash_profile which can open GUIs.
     // Use only -i (interactive) to avoid that.
     let args: Vec<&str> = match shell_id.as_str() {
@@ -208,10 +449,19 @@ async fn spawn_shell(
 
     if let Some(dir) = &cwd { c.current_dir(dir); }
 
-    let mut child = c.win_spawn()
-        .map_err(|e| format!("Failed to spawn shell '{}': {}", shell_path, e))?;
+    let mut child = c.win_spawn().map_err(|e| {
+        let msg = format!("Failed to spawn shell '{}': {}", shell_path, e);
+        // Always log shell spawn failures unconditionally
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
+            let l = fmt_entry(now_ts(), "rust", "error",
+                &format!("[spawn_shell] FAILED id={} path={:?} err={}", shell_id, shell_path, e));
+            write_to_log(&l, &debug_log_path());
+        }
+        msg
+    })?;
 
     let pid   = child.id();
+    dbg_cat(&LOG_CAT_SHELL, &format!("[spawn_shell] spawned pid={} id={}", pid, shell_id));
     let stdin  = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -236,6 +486,7 @@ async fn spawn_shell(
     std::thread::spawn(move || {
         let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         processes.lock().unwrap().remove(&pid);
+        dbg_cat(&LOG_CAT_PROCESS, &format!("[process_exit] pid={} exit_code={}", pid, code));
         let _ = win_done.emit(&format!("proc://{}:done", eid_done), code);
     });
 
@@ -252,17 +503,17 @@ fn enriched_path() -> String {
     let user = std::env::var("LOCALAPPDATA").unwrap_or_default();
     let home = std::env::var("USERPROFILE").unwrap_or_default();
     let extra = [
-        // tsuki default install location
-        format!(r"{}\Programs\tsuki\bin", user),
+        // tsuki default install location — \bin is where tsuki.exe lives
+        format!("{}\\Programs\\tsuki\\bin", user),
         // Go default install
-        r"C:\Program Files\Go\bin".to_string(),
-        format!(r"{}\go\bin", home),
+        "C:\\Program Files\\Go\\bin".to_string(),
+        format!("{}\\go\\bin", home),
         // arduino-cli common locations
-        format!(r"{}\Programs\arduino-cli", user),
-        r"C:\Program Files\arduino-cli".to_string(),
+        format!("{}\\Programs\\arduino-cli", user),
+        "C:\\Program Files\\arduino-cli".to_string(),
         // Git bin (for git.exe)
-        r"C:\Program Files\Git\bin".to_string(),
-        r"C:\Program Files\Git\cmd".to_string(),
+        "C:\\Program Files\\Git\\bin".to_string(),
+        "C:\\Program Files\\Git\\cmd".to_string(),
     ];
     let mut parts: Vec<String> = current.split(';').map(|s| s.to_string()).collect();
     for e in &extra {
@@ -306,7 +557,7 @@ fn normalise_cmd(raw: &str) -> String {
     let result = s.replace('/', "\\");
     #[cfg(not(windows))]
     let result = s;
-    dbg(&format!("[normalise_cmd] {:?} -> {:?}", raw, result));
+    dbg_cat(&LOG_CAT_RESOLVE, &format!("[normalise_cmd] raw={:?} result={:?}", raw, result));
     result
 }
 
@@ -316,7 +567,7 @@ fn normalise_cmd(raw: &str) -> String {
 // respects PATH including our enriched version with per-user install dirs.
 fn resolve_cmd(raw: &str) -> String {
     let s = raw.trim().trim_matches('"').trim();
-    dbg(&format!("[resolve_cmd] input = {:?}", s));
+    dbg_cat(&LOG_CAT_RESOLVE, &format!("[resolve_cmd] input={:?}", s));
 
     // Already an absolute path — normalise slashes and return
     let is_absolute = s.starts_with('\\')
@@ -328,7 +579,7 @@ fn resolve_cmd(raw: &str) -> String {
         let result = s.replace('/', "\\");
         #[cfg(not(windows))]
         let result = s.to_string();
-        dbg(&format!("[resolve_cmd] absolute -> {:?}", result));
+        dbg_cat(&LOG_CAT_RESOLVE, &format!("[resolve_cmd] absolute={:?}", result));
         return result;
     }
 
@@ -343,7 +594,7 @@ fn resolve_cmd(raw: &str) -> String {
             .map(|p: std::path::PathBuf| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| s.to_string());
         std::env::set_var("PATH", orig);
-        dbg(&format!("[resolve_cmd] which -> {:?}", result));
+        dbg_cat(&LOG_CAT_RESOLVE, &format!("[resolve_cmd] which={:?}", result));
         result
     }
     #[cfg(not(windows))]
@@ -351,7 +602,7 @@ fn resolve_cmd(raw: &str) -> String {
         let result = which::which(s)
             .map(|p: std::path::PathBuf| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| s.to_string());
-        dbg(&format!("[resolve_cmd] which -> {:?}", result));
+        dbg_cat(&LOG_CAT_RESOLVE, &format!("[resolve_cmd] which={:?}", result));
         result
     }
 }
@@ -361,20 +612,39 @@ fn resolve_cmd(raw: &str) -> String {
 async fn spawn_process(
     window:   Window,
     state:    tauri::State<'_, AppState>,
-    cmd:      String,
+    // Named 'exe_cmd' not 'cmd' — Tauri 1.x uses 'cmd' as the IPC dispatch key.
+    // Passing a payload field named 'cmd' would overwrite the dispatch field.
+    exe_cmd:  String,
     args:     Vec<String>,
     cwd:      Option<String>,
     event_id: String,
 ) -> Result<u32, String> {
-    let cmd = resolve_cmd(&normalise_cmd(&cmd));
+    let cmd = resolve_cmd(&normalise_cmd(&exe_cmd));
 
-    // ── DEBUG ────────────────────────────────────────────────────────────────
-    dbg(&format!("[spawn_process] cmd   = {:?}", cmd));
-    dbg(&format!("[spawn_process] args  = {:?}", args));
-    dbg(&format!("[spawn_process] cwd   = {:?}", cwd));
-    dbg(&format!("[spawn_process] exists= {}", std::path::Path::new(&cmd).exists()));
+    // ── Spawn diagnostic log ─────────────────────────────────────────────────
+    let cmd_exists = std::path::Path::new(&cmd).exists();
+    dbg_cat(&LOG_CAT_SPAWN, &format!(
+        "[spawn_process] cmd={:?} exists={} args={:?} cwd={:?}",
+        cmd, cmd_exists, args, cwd
+    ));
     #[cfg(windows)]
-    dbg(&format!("[spawn_process] PATH  = {}", enriched_path()));
+    {
+        // Log each PATH entry individually so missing dirs are obvious
+        let path_str = enriched_path();
+        dbg_cat(&LOG_CAT_SPAWN, &format!("[spawn_process] PATH entries:"));
+        for (i, entry) in path_str.split(';').enumerate() {
+            let exists = std::path::Path::new(entry).exists();
+            dbg_cat(&LOG_CAT_SPAWN, &format!(
+                "[spawn_process]   PATH[{:02}] exists={} {:?}", i, exists, entry
+            ));
+        }
+    }
+    // Always write a startup line regardless of category — critical for diagnosis
+    if DEBUG_ENABLED.load(Ordering::Relaxed) {
+        let line = fmt_entry(now_ts(), "rust", if cmd_exists { "log" } else { "warn" },
+            &format!("[spawn_process] about to spawn cmd={:?} exists={}", cmd, cmd_exists));
+        write_to_log(&line, &debug_log_path());
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     // Uses win_spawn() (DETACHED_PROCESS on Windows) which correctly supports
@@ -386,18 +656,54 @@ async fn spawn_process(
      .stderr(Stdio::piped());
     #[cfg(windows)]
     { c.env("PATH", enriched_path()); }
-    if let Some(dir) = &cwd { c.current_dir(dir); }
+
+    // Set cwd only when the directory exists; otherwise fall back to TEMP.
+    // On Windows, inheriting a non-existent parent CWD causes CreateProcess
+    // to return ERROR_FILE_NOT_FOUND even for absolute exe paths that exist.
+    // Explicitly setting a known-valid cwd breaks that inheritance chain.
+    {
+        let effective_cwd = match &cwd {
+            Some(dir) if std::path::Path::new(dir).is_dir() => {
+                Some(dir.clone())
+            }
+            Some(dir) => {
+                dbg_cat(&LOG_CAT_SPAWN, &format!("[spawn_process] cwd={:?} NOT FOUND — falling back to TEMP", dir));
+                None
+            }
+            None => None,
+        };
+        let fallback = std::env::var("TEMP").or_else(|_| std::env::var("TMP")).ok();
+        let dir_to_use = effective_cwd.or(fallback);
+        if let Some(d) = &dir_to_use {
+            c.current_dir(d);
+        }
+    }
 
     let mut child = c.win_spawn().map_err(|e| {
         let exists = std::path::Path::new(&cmd).exists();
         let kind   = e.kind();
-        format!(
-            "spawn failed for {:?}: {} (os_error={:?}, file_exists={})",
-            cmd, e, kind, exists
-        )
+        let msg = if !exists {
+            format!(
+                "Executable not found: {}\n  → Check Settings → CLI Tools and verify the path.",
+                cmd
+            )
+        } else {
+            format!(
+                "spawn failed for {:?}: {} (os_error={:?}, file_exists={})",
+                cmd, e, kind, exists
+            )
+        };
+        // Always log spawn failures — critical regardless of category toggle
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
+            let line = fmt_entry(now_ts(), "rust", "error",
+                &format!("[spawn_process] FAILED cmd={:?} exists={} kind={:?} err={}", cmd, exists, kind, e));
+            write_to_log(&line, &debug_log_path());
+        }
+        msg
     })?;
 
     let pid    = child.id();
+    dbg_cat(&LOG_CAT_SPAWN, &format!("[spawn_process] spawned pid={} cmd={:?}", pid, cmd));
     let stdin  = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -422,6 +728,7 @@ async fn spawn_process(
     std::thread::spawn(move || {
         let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
         processes.lock().unwrap().remove(&pid);
+        dbg_cat(&LOG_CAT_PROCESS, &format!("[process_exit] pid={} exit_code={}", pid, code));
         let _ = win_done.emit(&format!("proc://{}:done", eid_done), code);
     });
 
@@ -538,6 +845,15 @@ async fn save_settings(app: tauri::AppHandle, settings: String) -> Result<(), St
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("settings.json"), settings).map_err(|e| e.to_string())
 }
+#[tauri::command]
+async fn check_path_exists(path: String) -> Result<(), String> {
+    if std::path::Path::new(&path).exists() {
+        Ok(())
+    } else {
+        Err(format!("path does not exist: {}", path))
+    }
+}
+
 #[tauri::command]
 async fn read_dir_entries(path: String) -> Result<String, String> {
     let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
@@ -704,30 +1020,14 @@ async fn run_simulator(
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     sim_reg.stops.lock().unwrap().insert(event_id.clone(), Arc::clone(&stop));
 
-    let (eid_out, eid_err, eid_done) = (event_id.clone(), event_id.clone(), event_id.clone());
-    let (win_out, win_err, win_done) = (window.clone(), window.clone(), window.clone());
-    let max_steps  = steps.unwrap_or(0);
-    let stop_clone = Arc::clone(&stop);
-    let stops_ref  = Arc::clone(unsafe {
-        // SAFETY: tauri::State wraps an Arc; we extract it to pass to the thread.
-        // Using a channel instead to avoid unsafe:
-        &stop  // just clone the stop Arc we already have
-    });
-    // Use the stop Arc we already registered — no unsafe needed
-    drop(stops_ref);
+    let max_steps = steps.unwrap_or(0);
 
-    // We need the stops map to clean up after the thread finishes.
-    // Clone the Arc<Mutex<...>> out of the state.
-    // tauri::State<'_, T> doesn't impl Clone directly, but we can get the inner ref.
-    // Workaround: wrap stops in an outer Arc.
-    // Simpler: just let the thread remove itself via a clone of the map Arc.
-    // We stored it in a Mutex<HashMap> inside SimRegState. To share with thread,
-    // wrap SimRegState.stops as Arc<Mutex<...>>.
-
-    let (eid_out2, eid_err2, eid_done2) = (event_id.clone(), event_id.clone(), event_id.clone());
-    let (win_out2, win_err2, win_done2) = (window.clone(), window.clone(), window.clone());
-    let board2     = board.clone();
-    let stop2      = Arc::clone(&stop);
+    let eid_out2  = event_id.clone();
+    let (eid_err2, eid_done2) = (event_id.clone(), event_id.clone());
+    let win_out2  = window.clone();
+    let (win_err2, win_done2) = (window.clone(), window.clone());
+    let board2 = board.clone();
+    let stop2  = Arc::clone(&stop);
 
     // We can't cheaply move sim_reg into the thread (it's a State<>).
     // Use a oneshot cleanup via Arc<AtomicBool>; cleanup is fine via drop.
@@ -913,10 +1213,404 @@ async fn get_home_dir() -> Option<String> {
     tauri::api::path::home_dir().map(|p| p.to_string_lossy().into_owned())
 }
 
+// ── System diagnostics command ───────────────────────────────────────────────
+
+/// Returns a comprehensive system snapshot as a JSON string.
+/// Covers: PATH entries, key executable existence, env vars, Windows-specific
+/// paths — everything needed to diagnose "executable not found" failures.
+#[tauri::command]
+async fn run_diagnostics(app: tauri::AppHandle) -> String {
+    let ts = now_ts();
+    let mut lines: Vec<String> = Vec::new();
+
+    macro_rules! sec  { ($t:expr) => { lines.push(format!("\n=== {} ===", $t)); }; }
+    macro_rules! kv   { ($k:expr, $v:expr) => { lines.push(format!("  {:28} {}", $k, $v)); }; }
+    macro_rules! flag { ($k:expr, $p:expr) => {
+        let exists = std::path::Path::new($p).exists();
+        let is_file = std::path::Path::new($p).is_file();
+        lines.push(format!("  {:28} {} (file={} path={:?})", $k, if exists { "EXISTS" } else { "MISSING" }, is_file, $p));
+    }; }
+
+    lines.push(format!("tsuki-ide diagnostics  ts={:.3}", ts));
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+    sec!("Settings");
+    let cfg_dir = app.path_resolver().app_config_dir();
+    kv!("config_dir", format!("{:?}", cfg_dir));
+    if let Some(dir) = &cfg_dir {
+        let settings_path = dir.join("settings.json");
+        kv!("settings.json exists", settings_path.exists().to_string());
+        if let Ok(raw) = std::fs::read_to_string(&settings_path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                for key in &["tsukiPath", "tsukiCorePath", "tsukiFlashPath", "tsukiSimPath",
+                             "arduinoCliPath", "debugMode", "debugLogFormat"] {
+                    kv!(key, format!("{}", v.get(*key).unwrap_or(&serde_json::Value::Null)));
+                }
+            }
+        }
+    }
+
+    // ── Key executables ───────────────────────────────────────────────────────
+    sec!("Key executables");
+    let env_path = std::env::var("PATH").unwrap_or_default();
+    for name in &["tsuki.exe", "tsuki-core.exe", "tsuki-flash.exe",
+                   "arduino-cli.exe", "git.exe", "go.exe"] {
+        let found = which::which(name)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "NOT FOUND".into());
+        kv!(name, found);
+    }
+
+    // ── Environment variables ─────────────────────────────────────────────────
+    sec!("Environment");
+    for var in &["PATH", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE",
+                  "COMSPEC", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)"] {
+        kv!(var, std::env::var(var).unwrap_or_else(|_| "(not set)".into()));
+    }
+
+    // ── Enriched PATH (Windows) ───────────────────────────────────────────────
+    #[cfg(windows)]
+    {
+        sec!("Enriched PATH entries");
+        let epath = crate::enriched_path();
+        for (i, entry) in epath.split(';').enumerate() {
+            if entry.is_empty() { continue; }
+            let exists = std::path::Path::new(entry).exists();
+            lines.push(format!("  [{:02}] {} {:?}", i, if exists {"✓"} else {"✗"}, entry));
+        }
+    }
+
+    // ── Common shell paths ────────────────────────────────────────────────────
+    sec!("Shell paths");
+    let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+    flag!("COMSPEC (cmd.exe)", &comspec);
+    flag!(r"C:\Windows\System32\cmd.exe", r"C:\Windows\System32\cmd.exe");
+    flag!(r"C:\WINDOWS\system32\cmd.exe", r"C:\WINDOWS\system32\cmd.exe");
+    if let Some(home) = std::env::var("USERPROFILE").ok() {
+        let ps5 = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        flag!("powershell.exe", ps5);
+        let git_bash = format!(r"{}\AppData\Local\Programs\Git\bin\bash.exe", home);
+        flag!("git-bash (Programs)", &git_bash);
+        flag!("git-bash (PF)", r"C:\Program Files\Git\bin\bash.exe");
+    }
+
+    // ── Log file ─────────────────────────────────────────────────────────────
+    sec!("Log file");
+    let log_path = debug_log_path();
+    kv!("path", &log_path);
+    kv!("exists", std::path::Path::new(&log_path).exists().to_string());
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        kv!("size_bytes", meta.len().to_string());
+    }
+
+    let report = lines.join("\n");
+
+    // Also write the report to the debug log if debug is on
+    if DEBUG_ENABLED.load(Ordering::Relaxed) {
+        let l = fmt_entry(now_ts(), "rust", "log",
+            "[run_diagnostics] report written (see diagnostics panel in Settings)");
+        write_to_log(&l, &debug_log_path());
+        for line in &lines {
+            let l = fmt_entry(now_ts(), "rust", "log", &format!("[diag] {}", line));
+            write_to_log(&l, &debug_log_path());
+        }
+    }
+
+    report
+}
+
+// ── Log category control command ─────────────────────────────────────────────
+
+/// Called by the frontend whenever the user toggles a log category in Settings.
+/// Takes a JSON object { spawn, pty, resolve, settings, shell, process, frontend }.
+#[tauri::command]
+async fn set_log_categories(categories: serde_json::Value) {
+    let set_cat = |key: &str, flag: &AtomicBool| {
+        if let Some(v) = categories.get(key).and_then(|x| x.as_bool()) {
+            flag.store(v, Ordering::Relaxed);
+            if DEBUG_ENABLED.load(Ordering::Relaxed) {
+                let line = fmt_entry(now_ts(), "rust", "", &format!("[set_log_categories] {}={}", key, v));
+                write_to_log(&line, &debug_log_path());
+            }
+        }
+    };
+    set_cat("spawn",    &LOG_CAT_SPAWN);
+    set_cat("pty",      &LOG_CAT_PTY);
+    set_cat("resolve",  &LOG_CAT_RESOLVE);
+    set_cat("settings", &LOG_CAT_SETTINGS);
+    set_cat("shell",    &LOG_CAT_SHELL);
+    set_cat("process",  &LOG_CAT_PROCESS);
+    set_cat("frontend", &LOG_CAT_FRONTEND);
+}
+
+// ── Debug commands ────────────────────────────────────────────────────────────
+
+/// Called by the frontend to write a log entry (level = "log" | "warn" | "error").
+/// Only emits if debug mode is enabled.
+#[tauri::command]
+async fn log_frontend(level: String, message: String) {
+    if DEBUG_ENABLED.load(Ordering::Relaxed) {
+        let line = fmt_entry(now_ts(), "frontend", &level, &message);
+        write_to_log(&line, &debug_log_path());
+    }
+}
+
+/// Returns the absolute path to the debug log file so the frontend can show it.
+#[tauri::command]
+async fn get_debug_log_path() -> String {
+    debug_log_path()
+}
+
+/// Opens the debug log in the OS default text editor (Notepad on Windows,
+/// xdg-open / open on Linux / macOS).
+#[tauri::command]
+async fn open_debug_log() -> Result<(), String> {
+    let path = debug_log_path();
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("Log file not found: {}", path));
+    }
+    #[cfg(windows)]
+    {
+        Command::new("notepad").arg(&path).spawn()
+            .map_err(|e| format!("Failed to open log: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(&path).spawn()
+            .map_err(|e| format!("Failed to open log: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(&path).spawn()
+            .map_err(|e| format!("Failed to open log: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Truncates the debug log file and writes a restart marker so append mode
+/// keeps working immediately after (std::fs::write is avoided — on Windows
+/// it can leave the file in a state where subsequent OpenOptions::append fails).
+#[tauri::command]
+async fn clear_debug_log() -> Result<(), String> {
+    let path = debug_log_path();
+
+    // Ensure parent directory exists before truncating
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    // Truncate via OpenOptions — same flags family as the append writer,
+    // avoids any file-locking or mode-switching issues on Windows.
+    std::fs::OpenOptions::new()
+        .write(true).truncate(true).create(true)
+        .open(&path)
+        .map_err(|e| format!("Failed to clear log: {e}"))?;
+
+    // Write a header line so the file is non-empty and clearly restarts here.
+    // This also proves the append path still works right after truncation.
+    write_to_log(
+        &fmt_entry(now_ts(), "system", "log", "[log-cleared] --- log cleared by user ---"),
+        &path,
+    );
+    Ok(())
+}
+
+/// Returns the last `n` lines of the debug log (for the in-settings viewer).
+#[tauri::command]
+async fn tail_debug_log(lines: usize) -> String {
+    let path = debug_log_path();
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let all: Vec<&str> = content.lines().collect();
+    let start = all.len().saturating_sub(lines);
+    all[start..].join("\n")
+}
+
 fn main() {
+    // ── Read debugMode from settings.json BEFORE Tauri starts ────────────────
+    // We do this manually so the very first dbg() call is already conditional
+    // on the user's saved preference. Tauri hasn't started yet, so we read the
+    // file directly with serde_json.
+    //
+    // We build a list of every plausible location and try each one in order.
+    // The bundle identifier in tauri.conf.json is "dev.tsuki.ide"; Tauri v1
+    // maps app_config_dir() to:
+    //   Windows : %APPDATA%\dev.tsuki.ide\
+    //   Linux   : $XDG_CONFIG_HOME/dev.tsuki.ide/  (falls back to ~/.config/dev.tsuki.ide/)
+    //   macOS   : ~/Library/Application Support/dev.tsuki.ide/
+    //
+    // We write every candidate path to stderr unconditionally here (before
+    // DEBUG_ENABLED is set) so the startup trace is always visible in dev
+    // builds and in the log file once debug mode is active.
+    {
+        // Build all candidate paths
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+        #[cfg(windows)]
+        {
+            // Primary: %APPDATA%\dev.tsuki.ide\settings.json
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                candidates.push(std::path::PathBuf::from(&appdata)
+                    .join("dev.tsuki.ide").join("settings.json"));
+                // Fallback: some Tauri builds use the product name instead
+                candidates.push(std::path::PathBuf::from(&appdata)
+                    .join("tsuki-ide").join("settings.json"));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Primary: $XDG_CONFIG_HOME/dev.tsuki.ide/settings.json
+            if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                candidates.push(std::path::PathBuf::from(&xdg)
+                    .join("dev.tsuki.ide").join("settings.json"));
+            }
+            // Fallback: ~/.config/dev.tsuki.ide/settings.json
+            if let Ok(home) = std::env::var("HOME") {
+                candidates.push(std::path::PathBuf::from(&home)
+                    .join(".config").join("dev.tsuki.ide").join("settings.json"));
+                candidates.push(std::path::PathBuf::from(&home)
+                    .join(".config").join("tsuki-ide").join("settings.json"));
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                candidates.push(std::path::PathBuf::from(&home)
+                    .join("Library").join("Application Support")
+                    .join("dev.tsuki.ide").join("settings.json"));
+                candidates.push(std::path::PathBuf::from(&home)
+                    .join("Library").join("Application Support")
+                    .join("tsuki-ide").join("settings.json"));
+            }
+        }
+
+        // Ensure log directory exists so we can write even before DEBUG_ENABLED is set
+        let log_path = debug_log_path();
+        if let Some(parent) = std::path::Path::new(&log_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Log every candidate unconditionally (eprintln + file) so startup
+        // is always traceable even before the flag is known.
+        let early_log = |msg: &str| {
+            let line = format!("[{:.3}] [main] {}", now_ts(), msg);
+            eprintln!("{}", &line);
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true).append(true).open(&log_path)
+            {
+                let _ = writeln!(f, "{}", &line);
+            }
+        };
+
+        early_log(&format!("searching for settings.json ({} candidate(s))", candidates.len()));
+
+        let mut found = false;
+        for candidate in &candidates {
+            let display = candidate.display().to_string();
+            match std::fs::read_to_string(candidate) {
+                Ok(raw) => {
+                    early_log(&format!("found settings.json at: {}", display));
+                    match serde_json::from_str::<serde_json::Value>(&raw) {
+                        Ok(v) => {
+                            let debug_on = v.get("debugMode")
+                                .and_then(|x| x.as_bool()).unwrap_or(false);
+                            let fmt = v.get("debugLogFormat")
+                                .and_then(|x| x.as_str()).unwrap_or("flat");
+
+                            early_log(&format!("settings parsed: debugMode={} debugLogFormat={}", debug_on, fmt));
+
+                            if debug_on {
+                                DEBUG_ENABLED.store(true, Ordering::Relaxed);
+                            }
+                            if fmt == "structured" {
+                                DEBUG_STRUCTURED.store(true, Ordering::Relaxed);
+                            }
+                            // Apply per-category flags (default all true if key absent)
+                            if let Some(cats) = v.get("debugLogCategories") {
+                                let load_cat = |key: &str, flag: &AtomicBool| {
+                                    let on = cats.get(key).and_then(|x| x.as_bool()).unwrap_or(true);
+                                    flag.store(on, Ordering::Relaxed);
+                                };
+                                load_cat("spawn",    &LOG_CAT_SPAWN);
+                                load_cat("pty",      &LOG_CAT_PTY);
+                                load_cat("resolve",  &LOG_CAT_RESOLVE);
+                                load_cat("settings", &LOG_CAT_SETTINGS);
+                                load_cat("shell",    &LOG_CAT_SHELL);
+                                load_cat("process",  &LOG_CAT_PROCESS);
+                                load_cat("frontend", &LOG_CAT_FRONTEND);
+                                early_log(&format!("categories: spawn={} pty={} resolve={} settings={} shell={} process={} frontend={}",
+                                    LOG_CAT_SPAWN.load(Ordering::Relaxed),
+                                    LOG_CAT_PTY.load(Ordering::Relaxed),
+                                    LOG_CAT_RESOLVE.load(Ordering::Relaxed),
+                                    LOG_CAT_SETTINGS.load(Ordering::Relaxed),
+                                    LOG_CAT_SHELL.load(Ordering::Relaxed),
+                                    LOG_CAT_PROCESS.load(Ordering::Relaxed),
+                                    LOG_CAT_FRONTEND.load(Ordering::Relaxed),
+                                ));
+                            }
+                        }
+                        Err(e) => early_log(&format!("settings.json parse error: {}", e)),
+                    }
+                    found = true;
+                    break;
+                }
+                Err(_) => {
+                    early_log(&format!("not found: {}", display));
+                }
+            }
+        }
+
+        if !found {
+            early_log("settings.json not found in any candidate path — using defaults (debugMode=false)");
+        }
+    }
+
+    // ── Fix: ensure the process CWD is always valid ─────────────────────────
+    // On Windows, if the process inherits a non-existent CWD (e.g. from a
+    // shortcut whose "Start in" folder was deleted), ALL CreateProcess calls
+    // fail with ERROR_FILE_NOT_FOUND — even for absolute exe paths that exist.
+    // This affects pty_create, spawn_process, and spawn_shell alike.
+    // Fix: reset CWD to TEMP at startup so every spawn has a valid parent dir.
+    #[cfg(windows)]
+    {
+        let safe_cwd = std::env::var("TEMP")
+            .or_else(|_| std::env::var("TMP"))
+            .unwrap_or_else(|_| "C:\\Windows\\Temp".into());
+        if let Err(e) = std::env::set_current_dir(&safe_cwd) {
+            // Non-fatal — log and continue
+            let line = fmt_entry(now_ts(), "rust", "warn",
+                &format!("[main] set_current_dir({:?}) failed: {}", safe_cwd, e));
+            write_to_log(&line, &debug_log_path());
+        } else {
+            let line = fmt_entry(now_ts(), "rust", "log",
+                &format!("[main] CWD reset to {:?} (spawn fix)", safe_cwd));
+            write_to_log(&line, &debug_log_path());
+        }
+    }
+
     dbg("=== tsuki-ide started ===");
+
+    // Log the exact binary path — this tells us which exe is actually running.
+    // If this path is old/unexpected after a --quick build, the wrong binary is launching.
+    {
+        let exe_path = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "<unknown>".into());
+        let line = fmt_entry(now_ts(), "rust", "log",
+            &format!("[main] RUNNING_EXE={}", exe_path));
+        write_to_log(&line, &debug_log_path());
+        dbg(&format!("[main] RUNNING_EXE={}", exe_path));
+    }
+
+    dbg(&format!("[main] debug_mode={} format={}",
+        DEBUG_ENABLED.load(Ordering::Relaxed),
+        if DEBUG_STRUCTURED.load(Ordering::Relaxed) { "structured" } else { "flat" }
+    ));
     #[cfg(windows)]
     dbg(&format!("[main] TEMP={}", std::env::var("TEMP").unwrap_or_default()));
+    #[cfg(not(windows))]
+    dbg(&format!("[main] HOME={}", std::env::var("HOME").unwrap_or_default()));
+    dbg(&format!("[main] log_path={}", debug_log_path()));
+
     // Ensure child processes are killed when this process exits (Windows only)
     win_proc::init_job_object();
     tauri::Builder::default()
@@ -937,6 +1631,7 @@ fn main() {
             write_file,
             load_settings,
             save_settings,
+            check_path_exists,
             read_dir_entries,
             delete_file,
             rename_path,
@@ -952,6 +1647,17 @@ fn main() {
             run_simulator,
             stop_simulator,
             get_home_dir,
+            log_frontend,
+            set_log_categories,
+            run_diagnostics,
+            get_debug_log_path,
+            open_debug_log,
+            clear_debug_log,
+            tail_debug_log,
+            pty_session::pty_create,
+            pty_session::pty_write,
+            pty_session::pty_resize,
+            pty_session::pty_kill,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

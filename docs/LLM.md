@@ -451,3 +451,149 @@ El IDE (SandboxPanel.tsx) invoca `tsuki-sim` directamente (no a través de `tsuk
 | `spawn_stdin_listener()` | Thread que lee stdin y actualiza `InputState` compartido |
 | `compute_energy()` | Calcula voltaje/corriente estimados por pin OUTPUT activo |
 | `emit_result()` | Serializa `StepResult` + `EnergyInfo` opcional a JSON y escribe a stdout |
+---
+
+## Soporte de lenguaje: Python (`src/python/`)
+
+**Qué es**: Soporte de Python como lenguaje fuente para escribir firmware Arduino en tsuki. El usuario escribe archivos `.py` con la sintaxis Python estándar y tsuki los transpila a C++ Arduino. El sistema Python reutiliza el mismo `Runtime` (paquetes tsukilib, built-ins de arduino, fmt, time, etc.) que el transpilador Go, de modo que todos los paquetes externos funcionan igual en ambos lenguajes.
+
+### Pipeline de transpilación Python
+
+```
+PyLexer::tokenize()         → Vec<PyToken>     (src/python/lexer.rs)
+PyParser::parse_program()   → PyProgram (AST)  (src/python/parser.rs)
+PyTranspiler::generate()    → String (C++)      (src/python/transpiler.rs)
+```
+
+Invocado via `PythonPipeline::run()` (expuesto en `src/lib.rs`), con la misma API que `Pipeline`.
+
+### Archivos de `src/python/`
+
+| Archivo | Rol |
+|---|---|
+| `src/python/mod.rs` | Entry point del módulo. Re-exporta `PyLexer`, `PyParser`, `PyTranspiler`, `PyProgram`. |
+| `src/python/lexer.rs` | `PyLexer` struct. Tokeniza Python con manejo de INDENT/DEDENT mediante un `indent_stack: Vec<usize>` de niveles de columna. Emite tokens `Indent` y `Dedent` automáticamente al detectar cambios de indentación. Soporte para literales `0x`/`0b`/`0o`, separadores `_` en números, strings simples y triple-quoted, continuación explícita de línea `\`. Tokens queued en `pending: Vec<PyToken>` para emitir múltiples DEDENTs consecutivos. |
+| `src/python/ast.rs` | Tipos del AST Python. `BinOp` y `UnaryOp` con método `to_cpp()`. `PyExpr`: `Int`, `Float`, `Bool`, `Str`, `None`, `Ident`, `Attr`, `Call`, `Subscript`, `BinOp`, `UnaryOp`, `FStr`, `List`. `PyStmt`: `Assign`, `AugAssign`, `Expr`, `Return`, `If` (con elif_clauses), `While`, `For`, `Pass`, `Break`, `Continue`, `Global`, `Comment`. `PyFuncDef` con parámetros tipados. `PyImport` (import / from...import). `PyProgram` (imports + globals + functions). |
+| `src/python/parser.rs` | `PyParser` struct. Consume `Vec<PyToken>` y produce `PyProgram`. Parsing Pratt para expresiones con precedencia correcta: `or` → `and` → `not` → comparison → bitor → bitxor → bitand → shift → additive → multiplicative → unary → postfix → atom. Parsea `for var in range(n)`, `for var in range(a,b)`, `for var in range(a,b,step)`, type annotations (`:` tras nombre de parámetro o variable), `->` como return type hint. |
+| `src/python/transpiler.rs` | `PyTranspiler` struct. Convierte `PyProgram` → C++ Arduino. Registra imports y resuelve alias (`import foo as f`). Emite forward declarations para funciones no-setup/loop. Ordena `setup()` y `loop()` al final. **Resolución de tipos**: infiere C++ type desde anotaciones Python (`int→int`, `float→float`, `str→String`, `bool→bool`, `uint8→uint8_t`, etc.) o desde el tipo del literal RHS. Variables con anotación explícita se declaran con su tipo; sin anotación usan `auto`. **Mapeo de builtins Python**: `print(x)→Serial.println(x)`, `len(x)→sizeof/sizeof[0]`, `int(x)→(int)(x)`, `float(x)→(float)(x)`, `str(x)→String(x)`, `abs`, `min`, `max`. **`for` sobre `range()`**: transformado a bucle C idiomático. **Paquetes tsukilib**: `arduino.pinMode(13, arduino.OUTPUT)` → busca en `rt.packages["arduino"].functions["pinMode"]` → emite la plantilla C++. |
+
+### Problema de borrow checker resuelto en `transpiler.rs`
+
+La llamada a paquetes externos requería obtener `fn_map` y `header` del `Runtime` (borrow inmutable de `self.rt`) y luego llamar `self.emit_expr()` (borrow mutable de `self`). Rust no permite ambos borrows simultáneamente.
+
+**Solución — two-phase borrow**:
+
+```rust
+// Fase 1: snapshot inmutable (el borrow de self.rt termina al salir del bloque)
+let maybe_fn_map_and_header: Option<(FnMap, Option<String>)> =
+    self.rt.packages.get(&resolved).and_then(|pkg| {
+        pkg.functions.get(fn_name)
+            .map(|fm| (fm.clone(), pkg.header.clone()))
+    });
+
+// Fase 2: &mut self disponible — sin borrow activo sobre self.rt
+if let Some((fn_map, header)) = maybe_fn_map_and_header {
+    let cpp_args = args.iter()
+        .map(|a| self.emit_expr(a))   // ← OK: self.rt ya no está borrowed
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(h) = header {
+        self.includes.insert(h);       // ← OK
+    }
+    return Ok(fn_map.apply(&cpp_args));
+}
+```
+
+La clave es que `fn_map.clone()` y `pkg.header.clone()` copian los datos fuera del `HashMap` antes de que se necesite `&mut self`. Este patrón es el estándar en tsuki para cualquier función que necesite leer del `Runtime` y luego emitir expresiones.
+
+### Activar Python en la CLI
+
+El binario `tsuki-core` detecta automáticamente el lenguaje por extensión de archivo. También acepta `--lang python` explícito:
+
+```
+tsuki src/main.py build/main.cpp --board uno
+tsuki src/main.py build/main.cpp --lang python --board uno
+tsuki src/main.py --check                    # valida sin emitir output
+```
+
+El dispatch en `src/main.rs` usa la closure `run_pipeline`:
+
+```rust
+let run_pipeline = |source: &str, filename: &str| -> Result<String> {
+    match lang.as_str() {
+        "py" | "python" => PythonPipeline::new(cfg.clone())
+            .with_options(opts.clone()).run(source, filename),
+        _               => Pipeline::new(cfg.clone())
+            .with_options(opts.clone()).run(source, filename),
+    }
+};
+```
+
+### Ejemplo de firmware Arduino en Python
+
+```python
+import arduino
+import time
+import fmt
+
+LED_PIN: int = 13
+counter: int = 0
+
+def setup():
+    arduino.pinMode(LED_PIN, arduino.OUTPUT)
+    arduino.Serial.begin(9600)
+
+def loop():
+    global counter
+    arduino.digitalWrite(LED_PIN, arduino.HIGH)
+    time.sleep(500 * time.Millisecond)
+    arduino.digitalWrite(LED_PIN, arduino.LOW)
+    time.sleep(500 * time.Millisecond)
+    counter += 1
+    fmt.Println(counter)
+```
+
+Transpila a C++ equivalente al que produce la versión Go del mismo sketch.
+
+### Paquetes tsukilib con Python
+
+Los paquetes externos (ws2812, dht, hcsr04, u8g2) funcionan igual que con Go. El import usa el nombre del paquete directamente:
+
+```python
+import ws2812
+import dht
+
+strip = ws2812.NeoPixel(6, 12)
+
+def setup():
+    strip.Begin()
+
+def loop():
+    strip.SetPixelColor(0, ws2812.Color(255, 0, 0))
+    strip.Show()
+```
+
+El `PythonPipeline.with_options()` acepta el mismo `PipelineOptions` que `Pipeline`, con `libs_dir` y `pkg_names`.
+
+### Subset de Python soportado
+
+| Feature | Soportado | Notas |
+|---|---|---|
+| Funciones (`def`) | ✓ | Con type hints opcionales |
+| Variables con anotación (`x: int = 5`) | ✓ | Se emite el tipo C++ correcto |
+| `if / elif / else` | ✓ | Anidamiento ilimitado |
+| `while` | ✓ | |
+| `for i in range(n)` | ✓ | Emite `for (int i = 0; ...)` |
+| `for x in array` | ✓ | Emite `for (auto x : array)` |
+| Operadores aritméticos y bitwise | ✓ | `+`, `-`, `*`, `/`, `//`, `%`, `**`, `&`, `|`, `^`, `~`, `<<`, `>>` |
+| `x **= y` / `x += y` / etc. | ✓ | Augmented assignments |
+| `print()` | ✓ | → `Serial.println()` |
+| `len()`, `int()`, `float()`, `str()`, `bool()` | ✓ | Conversiones de tipo |
+| `import foo` / `from foo import bar` | ✓ | Paquetes tsukilib y built-ins |
+| Strings, f-strings (básico) | ✓ | |
+| `global` keyword | ✓ | Emite comentario (C++ ya tiene scope global) |
+| `pass`, `break`, `continue` | ✓ | |
+| Clases (`class`) | ✗ | No soportado en v1 |
+| Generadores, comprehensions | ✗ | No soportado en v1 |
+| `try / except` | ✗ | No aplica en embedded |
+| Closures / lambdas | ✗ | No soportado en v1 |
+| `*args` / `**kwargs` | ✗ | Ignorados silenciosamente |

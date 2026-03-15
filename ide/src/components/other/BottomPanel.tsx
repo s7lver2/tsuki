@@ -5,7 +5,7 @@ import { IconBtn } from '@/components/shared/primitives'
 import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
-import { spawnShell, spawnProcess, listShells, type ShellInfo, isTauri } from '@/lib/tauri'
+import { ptyCreate, ptyWrite, ptyKill, ptyOnData, ptyOnExit, spawnProcess, listShells, pathExists, type ShellInfo, isTauri } from '@/lib/tauri'
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
@@ -180,8 +180,15 @@ function parseAnsi(raw: string): AnsiSpan[] {
 // Strip non-SGR escape sequences (cursor movement, etc.) then parse ANSI colors
 function cleanAndParse(raw: string): AnsiSpan[] {
   const stripped = raw
-    .replace(/\x1b\[[^A-Za-z]*[A-BCDEGHJKST]/g, '')  // cursor movement etc.
-    .replace(/\x1b[^[]/g, '')                          // ESC + single char
+    // OSC sequences: ESC ] ... ST  (window title, hyperlinks, etc.)
+    // ST is either BEL (\x07) or ESC\
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // CSI sequences: ESC [ ... <any letter>  (covers ALL parameter/final bytes)
+    // This replaces the old narrow regex that only matched [A-BCDEGHJKST]
+    // and missed h, l, X, m, n, r, etc.
+    .replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, '')
+    // DEC private sequences not caught above (shouldn't remain but safety net)
+    .replace(/\x1b[^\[\]][^\x1b]*/g, '')
   return parseAnsi(stripped)
 }
 
@@ -217,10 +224,12 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
   const [history, setHistory] = useState<string[]>([])
   const [histIdx, setHistIdx] = useState(-1)
 
-  const scrollRef  = useRef<HTMLDivElement>(null)
-  const inputRef   = useRef<HTMLInputElement>(null)
-  const handleRef  = useRef<any>(null)
-  const resolveRef = useRef<((code: number) => void) | null>(null)
+  const scrollRef   = useRef<HTMLDivElement>(null)
+  const inputRef    = useRef<HTMLInputElement>(null)
+  // PTY session id (stable for the lifetime of this TermView mount)
+  const ptyIdRef    = useRef<string>(session.id)
+  // Buffer for partial lines arriving from the PTY in chunks
+  const lineBuffRef = useRef<string>('')
 
   const push = useCallback((raw: string, kind: LineKind = 'output') => {
     setLines(prev => [...prev, makeLine(raw, kind)])
@@ -232,48 +241,156 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
     if (el) el.scrollTop = el.scrollHeight
   }, [lines])
 
-  // ── Spawn interactive shell ───────────────────────────────────────────────
+  // ── Spawn PTY shell ───────────────────────────────────────────────────────
+  // Uses pty_create (portable-pty) instead of the old spawn_shell (piped stdio).
+  //
+  // Why PTY matters:
+  //   • child sees isatty()=true → prompt flushes immediately without trailing \n
+  //   • ANSI colours enabled automatically (TERM=xterm-256color)
+  //   • Ctrl-C / Tab / arrow keys work via raw escape sequences
+  //
+  // Output arrives as raw PTY chunks (not pre-split lines), so we buffer here
+  // and split on \n ourselves.
+  //
+  // cwd safety: if projectPath points to a directory that doesn't exist yet
+  //   (race on first-project creation), pty_create would fail with ENOENT.
+  //   We pass null and let the shell start in its home dir; the user can cd
+  //   manually or open a fresh session once the project dir is ready.
   useEffect(() => {
     let cancelled = false
-    spawnShell(session.shell, projectPath ?? undefined, (line, isErr) => {
-      push(line, isErr ? 'error' : 'output')
-    }).then(handle => {
-      if (cancelled) { handle.kill().catch(() => {}); handle.dispose(); return }
-      handleRef.current = handle
-      setReady(true)
-      setTimeout(() => inputRef.current?.focus(), 50)
+    const ptyId   = ptyIdRef.current
+    const unsubs: Array<() => void> = []
 
-      handle.done.then(code => {
-        push(`[${session.shell.name} exited — code ${code}]`, 'system')
-        onAlive(false)
-        onRunning(false)
-        resolveRef.current?.(code)
-        resolveRef.current = null
-        setReady(false)
-      })
-    }).catch(e => {
-      if (!cancelled) push(`Failed to start shell: ${e}`, 'error')
-    })
+    const shell     = session.shell
+    const shellArgs = ((): string[] => {
+      switch (shell.id) {
+        case 'bash':
+        case 'git-bash':   return ['-i']
+        case 'zsh':        return ['-i']
+        case 'fish':       return ['--interactive']
+        case 'powershell': return ['-NoLogo', '-NoExit', '-NoProfile']
+        case 'pwsh':       return ['-NoLogo', '-NoExit', '-NoProfile']
+        default:           return []
+      }
+    })()
+
+    // On Windows, passing a cwd to portable-pty causes ConPTY to fail with a
+    // misleading "command X not found" error (os_error=2 from CreateProcess),
+    // even when the shell exe and directory both exist. The root cause is a
+    // known portable-pty + ConPTY interaction in Tauri builds on Windows.
+    //
+    // Fix: always spawn the shell with cwd=null (its default home dir), then
+    // send an initial `cd` command once the shell is ready. This is the same
+    // pattern used by VS Code's integrated terminal.
+    const rawCwd = projectPath ?? undefined
+    const cols = 220, rows = 40
+
+    ;(async () => {
+      try {
+        // Register listeners BEFORE ptyCreate to avoid missing early output
+        const unsubData = await ptyOnData(ptyId, (chunk: string) => {
+          if (cancelled) return
+          // Accumulate chunks and split on newlines; keep trailing partial line
+          const raw        = lineBuffRef.current + chunk
+          const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+          const parts      = normalized.split('\n')
+          lineBuffRef.current = parts.pop() ?? ''
+          for (const part of parts) {
+            if (part) push(part, 'output')
+          }
+        })
+        const unsubExit = await ptyOnExit(ptyId, (code: number) => {
+          if (cancelled) return
+          // Flush any remaining buffered text (e.g. final prompt without \n)
+          if (lineBuffRef.current) {
+            push(lineBuffRef.current, 'output')
+            lineBuffRef.current = ''
+          }
+          push(`[${shell.name} exited — code ${code}]`, 'system')
+          onAlive(false)
+          onRunning(false)
+          setReady(false)
+        })
+        unsubs.push(unsubData, unsubExit)
+
+        if (cancelled) return
+
+        // Always spawn without cwd — avoids ConPTY/CreateProcess failure on Windows.
+        await ptyCreate(ptyId, shell.path, shellArgs, undefined, cols, rows)
+
+        if (cancelled) {
+          ptyKill(ptyId).catch(() => {})
+          return
+        }
+
+        // After the shell starts, cd into the project directory.
+        // We wait a short tick so the shell prompt is ready before we write.
+        if (rawCwd) {
+          const cdCmd = (() => {
+            switch (shell.id) {
+              case 'cmd':        return `cd /d "${rawCwd}"
+`
+              case 'powershell':
+              case 'pwsh':       return `Set-Location -LiteralPath '${rawCwd}'
+`
+              case 'bash':
+              case 'git-bash':
+              case 'zsh':
+              case 'fish':
+              case 'sh':         return `cd ${JSON.stringify(rawCwd)}
+`
+              default:           return `cd ${JSON.stringify(rawCwd)}
+`
+            }
+          })()
+          // 300 ms gives the shell time to print its initial prompt before we
+          // inject the cd — avoids the command appearing mid-prompt line.
+          setTimeout(() => {
+            if (!cancelled) ptyWrite(ptyId, cdCmd).catch(() => {})
+          }, 300)
+        }
+
+        setReady(true)
+        setTimeout(() => inputRef.current?.focus(), 50)
+      } catch (e) {
+        if (!cancelled) {
+          // Rich error — include shell metadata so the log shows exactly what path failed
+          const shellDump = JSON.stringify({
+            id:   shell.id,
+            name: shell.name,
+            path: shell.path,
+          })
+          console.error(
+            `[TermView] pty_create FAILED shell=${shellDump} ` +
+            `cwd=${rawCwd ?? 'null'} err=${e}`
+          )
+          push(
+            `Failed to start ${shell.name}: ${e}` +
+            `\n  shell path: ${shell.path}` +
+            `\n  (check the IDE debug log for more details)`,
+            'error'
+          )
+        }
+      }
+    })()
 
     return () => {
       cancelled = true
-      handleRef.current?.kill().catch(() => {})
-      handleRef.current?.dispose()
-      handleRef.current = null
+      ptyKill(ptyId).catch(() => {})
+      unsubs.forEach(f => f())
     }
   }, []) // eslint-disable-line
 
   const submitLine = useCallback((line: string) => {
-    if (!handleRef.current) return
     push(`> ${line}`, 'prompt')
     if (line.trim()) setHistory(h => [line, ...h.slice(0, 199)])
-    handleRef.current.write(line + '\r\n').catch(() => {})
+    ptyWrite(ptyIdRef.current, line + '\r\n').catch(() => {})
     setInput('')
     setHistIdx(-1)
   }, [push])
 
   const onKeyDown = useCallback((e: RKE<HTMLInputElement>) => {
-    if (!ready || !handleRef.current) return
+    if (!ready) return
 
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -293,7 +410,7 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
       setInput(next < 0 ? '' : history[next] ?? '')
     } else if (e.key === 'c' && e.ctrlKey) {
       e.preventDefault()
-      handleRef.current.write('\x03').catch(() => {})
+      ptyWrite(ptyIdRef.current, '\x03').catch(() => {})
       push('^C', 'system')
       setInput('')
       setHistIdx(-1)
@@ -302,7 +419,7 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
       setLines([])
     } else if (e.key === 'Tab') {
       e.preventDefault()
-      handleRef.current.write('\t').catch(() => {})
+      ptyWrite(ptyIdRef.current, '\t').catch(() => {})
     }
   }, [ready, input, history, histIdx, push, submitLine])
 

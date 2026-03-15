@@ -786,7 +786,15 @@ export default function ExamplesSidebar() {
   function handleOpen(ex: ExampleDef)           { setImportTarget(ex) }
   function handleImportCode(files: ExampleFile[]) {
     if (!importTarget) return
-    openExample({ name: importTarget.id, files })
+    // Pass board from the example's circuit if available, so the simulator
+    // and store use the correct board instead of whatever was loaded before.
+    const exBoard = (importTarget.circuit?.board as string | undefined) ?? undefined
+    openExample({ name: importTarget.id, board: exBoard, files })
+    // Auto-load the bundled circuit so the sandbox matches the example code.
+    // Without this the user has to manually click "circuit included" separately.
+    if (importTarget.circuit) {
+      loadCircuitInSandbox(importTarget.circuit)
+    }
   }
   function handleOpenCircuit(data: Record<string, unknown>) {
     loadCircuitInSandbox(data)
