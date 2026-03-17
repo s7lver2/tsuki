@@ -22,7 +22,7 @@ import { NextRequest, NextResponse } from "next/server";
 //    GITHUB_REPO   — override the repo slug (default: s7lver/tsuki)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const REPO    = process.env.GITHUB_REPO ?? "s7lver/tsuki";
+const REPO    = process.env.GITHUB_REPO ?? "s7lver2/tsuki";
 const GH_API  = "https://api.github.com";
 const HEADERS: HeadersInit = {
   Accept: "application/vnd.github+json",
