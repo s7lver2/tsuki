@@ -9,6 +9,7 @@ import {
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
   Beaker, ToggleLeft, GitBranch, Languages, Bug, FileText,
   Trash2, ExternalLink, AlertTriangle, RotateCcw, User, Layers,
+  Download, Plus, X, Radio, Package,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { clsx } from 'clsx'
@@ -25,6 +26,7 @@ const MAIN_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] =
   { id: 'defaults',   labelKey: 'settings.tab_board',      icon: <Sliders  size={13} /> },
   { id: 'editor',     labelKey: 'settings.tab_editor',     icon: <Code2    size={13} /> },
   { id: 'language',   labelKey: 'settings.tab_language',   icon: <Languages size={13} /> },
+  { id: 'updates',    labelKey: 'settings.tab_updates',    icon: <Download  size={13} /> },
 ]
 
 const DEV_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
@@ -215,6 +217,7 @@ export default function SettingsScreen() {
             {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
             {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
             {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
+            {settingsTab === 'updates'      && <UpdatesTab />}
             {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
           </div>
         </div>
@@ -1221,6 +1224,34 @@ function CliTab() {
 
 function DefaultsTab() {
   const { settings, updateSetting } = useStore()
+  const [newDir, setNewDir] = useState('')
+
+  async function browseExtraDir() {
+    const { pickFolder } = await import('@/lib/tauri')
+    const p = await pickFolder()
+    if (p) addExtraDir(p)
+  }
+
+  function addExtraDir(dir: string) {
+    const d = dir.trim()
+    if (!d) return
+    const current: string[] = settings.extraLibsDirs ?? []
+    if (current.includes(d)) return
+    updateSetting('extraLibsDirs', [...current, d])
+    setNewDir('')
+  }
+
+  function removeExtraDir(dir: string) {
+    updateSetting('extraLibsDirs', (settings.extraLibsDirs ?? []).filter((d: string) => d !== dir))
+  }
+
+  function moveDir(from: number, to: number) {
+    const arr = [...(settings.extraLibsDirs ?? [])]
+    const [item] = arr.splice(from, 1)
+    arr.splice(to, 0, item)
+    updateSetting('extraLibsDirs', arr)
+  }
+
   return (
     <div>
       <SectionHeader title="Defaults" desc="Values written to ~/.config/tsuki/config.json on save." />
@@ -1245,9 +1276,90 @@ function DefaultsTab() {
       </SettingsField>
 
       <GroupHeader title="Packages" />
-      <SettingsField name="libs_dir" desc="Local directory where tsukilib packages are installed">
-        <Input value={settings.libsDir} onChange={e => updateSetting('libsDir', e.target.value)} placeholder="~/.tsuki/libs" />
+
+      {/* Primary libs dir */}
+      <SettingsField name="libs_dir" desc="Primary directory where tsukilib packages are installed">
+        <div className="flex gap-1.5">
+          <Input
+            value={settings.libsDir}
+            onChange={e => updateSetting('libsDir', e.target.value)}
+            placeholder="~/.tsuki/libs"
+            className="flex-1"
+          />
+          <Btn variant="outline" size="xs" onClick={async () => {
+            const { pickFolder } = await import('@/lib/tauri')
+            const p = await pickFolder()
+            if (p) updateSetting('libsDir', p)
+          }}><FolderOpen size={11} /></Btn>
+        </div>
       </SettingsField>
+
+      {/* Extra search paths */}
+      <div className="py-3.5 border-b border-[var(--border-subtle)]">
+        <div className="flex items-start gap-4 mb-3">
+          <div className="flex-1">
+            <div className="text-sm font-medium">extra_libs_dirs</div>
+            <div className="text-xs text-[var(--fg-muted)] mt-0.5">
+              Additional directories searched when resolving tsukilib packages.
+              Checked in order after <span className="font-mono">libs_dir</span>.
+            </div>
+          </div>
+        </div>
+
+        {/* List of extra dirs */}
+        {(settings.extraLibsDirs ?? []).length > 0 && (
+          <div className="mb-2 flex flex-col gap-1">
+            {(settings.extraLibsDirs ?? []).map((dir: string, i: number) => (
+              <div
+                key={dir}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-1)] group"
+              >
+                <Package size={11} className="text-[var(--fg-faint)] flex-shrink-0" />
+                <span className="flex-1 text-xs font-mono text-[var(--fg)] truncate">{dir}</span>
+                {/* up/down */}
+                <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => i > 0 && moveDir(i, i - 1)}
+                    disabled={i === 0}
+                    className="px-1 py-0.5 rounded text-[10px] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-25 border-0 bg-transparent cursor-pointer"
+                  >↑</button>
+                  <button
+                    onClick={() => i < (settings.extraLibsDirs ?? []).length - 1 && moveDir(i, i + 1)}
+                    disabled={i === (settings.extraLibsDirs ?? []).length - 1}
+                    className="px-1 py-0.5 rounded text-[10px] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-25 border-0 bg-transparent cursor-pointer"
+                  >↓</button>
+                </div>
+                <button
+                  onClick={() => removeExtraDir(dir)}
+                  className="p-0.5 rounded text-[var(--fg-faint)] hover:text-[var(--err)] hover:bg-[var(--err)]/10 border-0 bg-transparent cursor-pointer transition-colors flex-shrink-0"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add new dir row */}
+        <div className="flex items-center gap-1.5">
+          <input
+            value={newDir}
+            onChange={e => setNewDir(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addExtraDir(newDir)}
+            placeholder="Add a path…"
+            className="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 text-xs text-[var(--fg)] outline-none font-mono placeholder:text-[var(--fg-faint)] focus:border-[var(--fg-faint)]"
+          />
+          <Btn variant="outline" size="xs" onClick={() => addExtraDir(newDir)}><Plus size={11} /></Btn>
+          <Btn variant="outline" size="xs" onClick={browseExtraDir}><FolderOpen size={11} /></Btn>
+        </div>
+
+        {(settings.extraLibsDirs ?? []).length === 0 && (
+          <p className="mt-1.5 text-[10px] text-[var(--fg-faint)]">
+            No extra paths configured. Only <span className="font-mono">libs_dir</span> will be searched.
+          </p>
+        )}
+      </div>
+
       <SettingsField name="registry_url" desc="Package registry endpoint">
         <Input value={settings.registryUrl} onChange={e => updateSetting('registryUrl', e.target.value)} />
       </SettingsField>
@@ -1731,6 +1843,237 @@ function LspExpTab() {
           Alpha feature. Full completions, hover docs, and signature help require <code className="font-mono bg-[var(--surface-3)] px-1 rounded">tsuki-lsp</code> to be installed. Front-end diagnostics and library detection run without it.
         </p>
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Updates tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Public keys per channel — these match the private keys used to sign releases
+// in build.py (generated with `python tools/build.py gen-keys`).
+// Replace with your actual base64-encoded Ed25519 public keys.
+const UPDATE_PUBKEYS: Record<'stable' | 'testing', string> = {
+  stable:  'wlMslB+1Nt55zH+It+m+HCZA0HEc8E3BkWvEv9K7DRA=',
+  testing: '6jefc9ms6aUIYmZXJPCBVzQWON2AgvnynIlfZUgJLGU=',
+}
+
+// Manifest URLs point to the web API — no files need to be committed to any
+// branch. The API queries GitHub Releases dynamically and returns the manifest.
+const UPDATE_MANIFEST_URLS: Record<'stable' | 'testing', string> = {
+  stable:  'https://tsuki.s7lver.xyz/api/update/stable',
+  testing: 'https://tsuki.s7lver.xyz/api/update/testing',
+}
+
+interface UpdateInfo {
+  version: string
+  channel: 'stable' | 'testing'
+  pub_date: string
+  notes: string
+  platforms: Record<string, { url: string; signature: string; size: number }>
+}
+
+function UpdatesTab() {
+  const { settings, updateSetting } = useStore()
+  const [checking, setChecking]     = useState(false)
+  const [info, setInfo]             = useState<UpdateInfo | null>(null)
+  const [checkErr, setCheckErr]     = useState<string | null>(null)
+  const [installing, setInstalling] = useState(false)
+
+  const channel: 'stable' | 'testing' = settings.updateChannel ?? 'stable'
+
+  async function checkNow() {
+    setChecking(true)
+    setCheckErr(null)
+    setInfo(null)
+    try {
+      const { checkForUpdates } = await import('@/lib/tauri')
+      const result = await checkForUpdates(channel, UPDATE_MANIFEST_URLS[channel])
+      setInfo(result)
+      updateSetting('lastUpdateCheck', Date.now())
+    } catch (e: unknown) {
+      setCheckErr(e instanceof Error ? e.message : String(e))
+    }
+    setChecking(false)
+  }
+
+  async function installUpdate() {
+    if (!info) return
+    setInstalling(true)
+    try {
+      const { applyUpdate } = await import('@/lib/tauri')
+      await applyUpdate(info)
+    } catch (e: unknown) {
+      setCheckErr(e instanceof Error ? e.message : String(e))
+    }
+    setInstalling(false)
+  }
+
+  const lastCheck = settings.lastUpdateCheck
+    ? new Date(settings.lastUpdateCheck).toLocaleString()
+    : 'Never'
+
+  return (
+    <div>
+      <SectionHeader
+        title="Updates"
+        desc="Keep tsuki IDE up to date. Choose between the stable release channel or the testing channel for early access."
+      />
+
+      {/* ── Channel selector ── */}
+      <GroupHeader title="Update channel" />
+      <div className="flex flex-col gap-2 mt-3 mb-5">
+        {([
+          {
+            id: 'stable' as const,
+            label: 'Stable',
+            desc: 'Recommended. Releases are tested and signed before publishing. Checked against the stable public key.',
+            badge: 'recommended',
+            badgeColor: 'text-green-400 bg-green-400/10',
+          },
+          {
+            id: 'testing' as const,
+            label: 'Testing',
+            desc: 'Early access builds. May contain bugs or incomplete features. Signed with a separate testing key.',
+            badge: 'beta',
+            badgeColor: 'text-yellow-400 bg-yellow-400/10',
+          },
+        ]).map(ch => (
+          <button
+            key={ch.id}
+            onClick={() => { updateSetting('updateChannel', ch.id); setInfo(null); setCheckErr(null) }}
+            className={clsx(
+              'flex items-start gap-3 px-4 py-3.5 rounded-xl border text-left cursor-pointer transition-all w-full bg-transparent',
+              channel === ch.id
+                ? 'border-[var(--fg-muted)] bg-[var(--active)]'
+                : 'border-[var(--border)] hover:border-[var(--fg-faint)] hover:bg-[var(--hover)]',
+            )}
+          >
+            <Radio size={15} className={clsx('mt-0.5 flex-shrink-0', channel === ch.id ? 'text-[var(--fg)]' : 'text-[var(--fg-faint)]')} />
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-sm font-semibold">{ch.label}</span>
+                <span className={clsx('text-[9px] font-mono px-1.5 py-0.5 rounded', ch.badgeColor)}>{ch.badge}</span>
+              </div>
+              <p className="text-xs text-[var(--fg-muted)] leading-relaxed">{ch.desc}</p>
+            </div>
+            {channel === ch.id && <Check size={13} className="text-green-400 mt-0.5 flex-shrink-0" />}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Auto-check toggle ── */}
+      <GroupHeader title="Behaviour" />
+      <SettingsField name="Check on startup" desc="Automatically check for updates when the IDE opens.">
+        <Toggle
+          on={settings.autoCheckUpdates ?? true}
+          onToggle={() => updateSetting('autoCheckUpdates', !(settings.autoCheckUpdates ?? true))}
+        />
+      </SettingsField>
+
+      {/* ── Manual check ── */}
+      <GroupHeader title="Check now" />
+      <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] overflow-hidden">
+        <div className="px-4 py-3 flex items-center gap-3 border-b border-[var(--border)]">
+          <div className="flex-1">
+            <div className="text-sm font-medium">
+              Channel: <span className="font-mono text-[var(--fg-muted)]">{channel}</span>
+            </div>
+            <div className="text-xs text-[var(--fg-muted)] mt-0.5">
+              Last checked: {lastCheck}
+            </div>
+          </div>
+          <Btn
+            variant="outline"
+            size="sm"
+            onClick={checkNow}
+            disabled={checking}
+            className="gap-1.5 flex-shrink-0"
+          >
+            <RefreshCw size={12} className={checking ? 'animate-spin' : ''} />
+            {checking ? 'Checking…' : 'Check for updates'}
+          </Btn>
+        </div>
+
+        {/* Result area */}
+        <div className="px-4 py-3 min-h-[60px] flex items-center">
+          {!info && !checkErr && !checking && (
+            <p className="text-xs text-[var(--fg-faint)]">
+              Press "Check for updates" to query the {channel} manifest.
+            </p>
+          )}
+
+          {checking && (
+            <div className="flex items-center gap-2 text-xs text-[var(--fg-muted)]">
+              <RefreshCw size={12} className="animate-spin" />
+              Fetching {channel} manifest…
+            </div>
+          )}
+
+          {checkErr && (
+            <div className="flex items-start gap-2 text-xs text-[var(--err)]">
+              <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>{checkErr}</span>
+            </div>
+          )}
+
+          {info && (
+            <div className="w-full flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <Check size={14} className="text-green-400 flex-shrink-0" />
+                <span className="text-sm font-medium">
+                  Version <span className="font-mono">{info.version}</span> available
+                </span>
+                <span className="text-xs text-[var(--fg-faint)]">· {new Date(info.pub_date).toLocaleDateString()}</span>
+              </div>
+              {info.notes && (
+                <p className="text-xs text-[var(--fg-muted)] leading-relaxed whitespace-pre-wrap border-l-2 border-[var(--border)] pl-3">
+                  {info.notes}
+                </p>
+              )}
+              <div className="flex gap-2 mt-1">
+                <Btn
+                  variant="outline"
+                  size="sm"
+                  onClick={installUpdate}
+                  disabled={installing}
+                  className="gap-1.5"
+                >
+                  <Download size={12} className={installing ? 'animate-bounce' : ''} />
+                  {installing ? 'Installing…' : 'Download & install'}
+                </Btn>
+                <Btn variant="ghost" size="sm" onClick={() => {
+                  updateSetting('lastSeenVersion', info.version)
+                  setInfo(null)
+                }}>
+                  Dismiss
+                </Btn>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Key fingerprints ── */}
+      <GroupHeader title="Signing keys" />
+      <div className="mt-3 mb-6 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] divide-y divide-[var(--border-subtle)]">
+        {(['stable', 'testing'] as const).map(ch => (
+          <div key={ch} className="px-4 py-3">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs font-semibold capitalize">{ch}</span>
+              {ch === channel && <span className="text-[9px] font-mono text-green-400 bg-green-400/10 px-1 rounded">active</span>}
+            </div>
+            <p className="text-[10px] font-mono text-[var(--fg-faint)] break-all leading-relaxed select-all">
+              {UPDATE_PUBKEYS[ch]}
+            </p>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-[var(--fg-faint)] leading-relaxed">
+        All update bundles are verified against these Ed25519 public keys before installation.
+        Keys are embedded at build time and cannot be changed without rebuilding the IDE.
+      </p>
     </div>
   )
 }

@@ -199,11 +199,12 @@ impl Runtime {
             .fun("Now",    FnMap::Direct("millis()".into()))
             .fun("Since",  FnMap::Template("(millis()-{0})".into()))
             // ── Python (snake_case) ───────────────────────────────────────────
-            // time.sleep(n)    → delay(n)            n is milliseconds (Arduino-natural)
-            // time.sleep_ms(n) → delay(n)            explicit ms alias
-            // time.sleep_us(n) → delayMicroseconds(n)
-            // time.sleep_ns(n) → delay((n)/1000000UL) nanosecond-exact alias
-            .fun("sleep",    FnMap::Template("delay({0})".into()))
+            // time.sleep(n)    → delay(n/1e6)         n is nanoseconds (same as Go Sleep)
+            //                    time.sleep(500 * time.Millisecond) → delay(500)
+            // time.sleep_ms(n) → delay(n)             explicit ms alias: sleep_ms(500) → delay(500)
+            // time.sleep_us(n) → delayMicroseconds(n) explicit µs alias
+            // time.sleep_ns(n) → delay((n)/1000000UL) explicit ns alias (same as sleep)
+            .fun("sleep",    FnMap::Template("delay(({0})/1000000UL)".into()))
             .fun("sleep_ms", FnMap::Template("delay({0})".into()))
             .fun("sleep_us", FnMap::Template("delayMicroseconds({0})".into()))
             .fun("sleep_ns", FnMap::Template("delay(({0})/1000000UL)".into()))
@@ -215,9 +216,11 @@ impl Runtime {
             .cst("Second",      "1000000000ULL")
             .cst("Millisecond", "1000000ULL")
             .cst("Microsecond", "1000ULL")
-            // Python-friendly ms constants (no need to multiply by Millisecond)
-            .cst("MS",  "1")    // time.sleep(500 * time.MS)  == delay(500)
-            .cst("US",  "1")    // used with sleep_us
+            // Python-friendly constants
+            // Use time.MS with sleep_ms:  time.sleep_ms(500 * time.MS)  → delay(500)
+            // Use time.Millisecond with sleep: time.sleep(500 * time.Millisecond) → delay(500)
+            .cst("MS",  "1")    // time.sleep_ms(500 * time.MS)  == delay(500)
+            .cst("US",  "1")    // time.sleep_us(500 * time.US)  == delayMicroseconds(500)
         );
     }
 

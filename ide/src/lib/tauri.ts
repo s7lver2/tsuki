@@ -439,12 +439,13 @@ export async function getHomeDir(): Promise<string | null> {
 // of PATH, install location, or exe permissions.
 
 /**
- * Transpile a Go source string → C++ string, entirely in-process.
+ * Transpile a source string → C++ string, entirely in-process.
+ * `lang` defaults to "go"; pass "python" for .py projects.
  * Replaces: spawnProcess(coreBin, [tmpPath, '--board', board], ...)
  */
-export async function transpileSource(source: string, board: string): Promise<string> {
+export async function transpileSource(source: string, board: string, lang = 'go'): Promise<string> {
   if (!isTauri()) throw new Error('transpileSource: not in Tauri')
-  return invoke<string>('transpile_source', { source, board })
+  return invoke<string>('transpile_source', { source, board, lang })
 }
 
 /**
@@ -667,4 +668,35 @@ export async function setLogCategories(cats: Record<string, boolean>): Promise<v
 export async function runDiagnostics(): Promise<string> {
   if (!isTauri()) return '(diagnostics only available inside Tauri)'
   return invoke<string>('run_diagnostics')
+}
+
+// ── Updates ────────────────────────────────────────────────────────────────
+
+export interface UpdateInfo {
+  version: string
+  channel: 'stable' | 'testing'
+  pub_date: string
+  notes: string
+  platforms: Record<string, { url: string; signature: string; size: number }>
+}
+
+/**
+ * Fetch the update manifest for `channel` from `manifestUrl` and return the
+ * UpdateInfo if a newer version is available, or throw with a human-readable
+ * message if the current version is up to date or the check failed.
+ */
+export async function checkForUpdates(
+  channel: 'stable' | 'testing',
+  manifestUrl: string,
+): Promise<UpdateInfo> {
+  if (!isTauri()) throw new Error('checkForUpdates: not in Tauri')
+  return invoke<UpdateInfo>('check_for_updates', { channel, manifestUrl })
+}
+
+/**
+ * Download and apply an update from `info`. On success the app restarts.
+ */
+export async function applyUpdate(info: UpdateInfo): Promise<void> {
+  if (!isTauri()) throw new Error('applyUpdate: not in Tauri')
+  return invoke<void>('apply_update', { info })
 }

@@ -1,7 +1,7 @@
 'use client'
 import { useStore } from '@/lib/store'
 import NewProjectModal from '@/components/other/NewProjectModal'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Btn, Divider } from '@/components/shared/primitives'
 import FilesSidebar from '@/components/other/FilesSidebar'
 import GitSidebar from '@/components/experiments/GitSidebar/GitSidebar'
@@ -358,8 +358,10 @@ export default function IdeScreen() {
                 <ExportWorkstation board={board} projectName={projectName} />
               </div>
 
-              {/* Bottom panel always visible in code workstation, hidden in others */}
-              {workstation === 'code' && <BottomPanel />}
+              {/* Bottom panel: always mounted to preserve terminal sessions, hidden via CSS on non-code workstations */}
+              <div className={workstation !== 'code' ? 'hidden' : undefined}>
+                <BottomPanel />
+              </div>
             </>
           ) : (
             /* Legacy layout — editor + sandbox side panel */
@@ -576,8 +578,35 @@ function CodeWorkstation({
 // ── Sandbox workstation ───────────────────────────────────────────────────────
 
 function SandboxWorkstation() {
-  const { settings } = useStore()
+  const { settings, openTabs, activeTabIdx } = useStore()
   const sandboxEnabled = settings.experimentsEnabled && settings.expSandboxEnabled
+  const [codeOpen, setCodeOpen] = useState(false)
+  const [codeHeight, setCodeHeight] = useState(220)
+  const draggingRef = useRef(false)
+  const startYRef   = useRef(0)
+  const startHRef   = useRef(0)
+
+  const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
+
+  // Resize drag for the code panel
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!draggingRef.current) return
+      const delta = startYRef.current - e.clientY
+      setCodeHeight(Math.max(80, Math.min(520, startHRef.current + delta)))
+    }
+    function onUp() {
+      draggingRef.current = false
+      document.body.style.cursor     = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+  }, [])
 
   if (!sandboxEnabled) {
     return (
@@ -592,9 +621,77 @@ function SandboxWorkstation() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* SandboxPanel in full-width mode — no close button needed */}
-      <SandboxPanel fullscreen />
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+      {/* SandboxPanel takes remaining space */}
+      <div className="flex-1 overflow-hidden min-h-0">
+        <SandboxPanel fullscreen />
+      </div>
+
+      {/* ── Collapsible code panel ── */}
+      <div className="flex-shrink-0 border-t border-[var(--border)] bg-[var(--surface-1)] relative">
+
+        {/* Resize grip — visible only when panel is open, sits on the top edge */}
+        {codeOpen && (
+          <div
+            className="absolute top-0 left-0 right-0 h-1 cursor-row-resize z-10 hover:bg-[var(--fg-faint)] transition-colors"
+            onMouseDown={e => {
+              e.stopPropagation()
+              draggingRef.current = true
+              startYRef.current   = e.clientY
+              startHRef.current   = codeHeight
+              document.body.style.cursor     = 'row-resize'
+              document.body.style.userSelect = 'none'
+            }}
+          />
+        )}
+
+        {/* Header — click to toggle */}
+        <div
+          className="h-7 flex items-center gap-2 px-3 select-none cursor-pointer hover:bg-[var(--hover)] transition-colors"
+          onClick={() => setCodeOpen(o => !o)}
+        >
+          <ChevronRight
+            size={11}
+            className="text-[var(--fg-faint)] transition-transform flex-shrink-0"
+            style={{ transform: codeOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+          />
+          <Code2 size={11} className="text-[var(--fg-faint)] flex-shrink-0" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--fg-faint)] flex-1">
+            Code
+          </span>
+          {activeTab ? (
+            <span className="text-[10px] font-mono text-[var(--fg-muted)] truncate max-w-[200px]">
+              {activeTab.name}
+              {activeTab.modified && <span className="ml-1 text-[var(--fg-faint)]">●</span>}
+            </span>
+          ) : (
+            <span className="text-[10px] text-[var(--fg-faint)] italic">no file open</span>
+          )}
+        </div>
+
+        {/* Code content */}
+        {codeOpen && (
+          <div
+            className="overflow-auto border-t border-[var(--border)]"
+            style={{ height: codeHeight }}
+          >
+            {activeTab ? (
+              <pre
+                className="p-3 text-xs font-mono leading-5 text-[var(--fg-muted)] whitespace-pre min-h-full m-0"
+                style={{ fontFamily: 'var(--font-mono, "JetBrains Mono", Consolas, monospace)' }}
+              >
+                {activeTab.content || (
+                  <span className="text-[var(--fg-faint)] italic not-italic">empty file</span>
+                )}
+              </pre>
+            ) : (
+              <div className="flex items-center justify-center h-full text-xs text-[var(--fg-faint)] italic">
+                Open a file in the editor to preview it here
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

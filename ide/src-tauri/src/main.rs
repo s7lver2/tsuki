@@ -1173,15 +1173,21 @@ async fn stop_simulator(
 // the IDE never needs to find/spawn tsuki-core.exe, which was the root cause of
 // the "command … not found" errors on Windows.
 
-/// Transpile a Go source string to C++ and return the result.
+/// Transpile a source string to C++ and return the result.
+/// Accepts an optional `lang` parameter ("go" | "python"). Defaults to "go".
 /// Used by LiveCompilerBlock in the docs to show transpiler output live.
 #[tauri::command]
-async fn transpile_source(source: String, board: String) -> Result<String, String> {
-    use tsuki_core::{Pipeline, TranspileConfig};
+async fn transpile_source(source: String, board: String, lang: Option<String>) -> Result<String, String> {
+    use tsuki_core::{Pipeline, PythonPipeline, TranspileConfig};
     let cfg = TranspileConfig { board: board.clone(), ..Default::default() };
-    Pipeline::new(cfg)
-        .run(&source, "main.go")
-        .map_err(|e| tsuki_core::pretty_error(&e, &source))
+    match lang.as_deref().unwrap_or("go") {
+        "python" | "py" => PythonPipeline::new(cfg)
+            .run(&source, "main.py")
+            .map_err(|e| tsuki_core::pretty_error(&e, &source)),
+        _ => Pipeline::new(cfg)
+            .run(&source, "main.go")
+            .map_err(|e| tsuki_core::pretty_error(&e, &source)),
+    }
 }
 
 /// Transpile a Go source string and write a .sim.json bundle to disk.
@@ -1438,6 +1444,139 @@ async fn tail_debug_log(lines: usize) -> String {
     all[start..].join("\n")
 }
 
+// ── Update system ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlatformAsset {
+    pub url:       String,
+    pub signature: String,
+    pub size:      u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UpdateInfo {
+    pub version:   String,
+    pub channel:   String,
+    pub pub_date:  String,
+    pub notes:     String,
+    pub platforms: std::collections::HashMap<String, PlatformAsset>,
+}
+
+/// Fetch the update manifest for `channel` from `manifest_url`.
+/// Returns the UpdateInfo if the manifest parses correctly.
+/// The frontend is responsible for comparing versions.
+#[tauri::command]
+async fn check_for_updates(channel: String, manifest_url: String) -> Result<UpdateInfo, String> {
+    // Use reqwest if available, otherwise fall back to std (no TLS) — for now
+    // we shell out to the OS HTTP client via a simple approach.
+    // In production you would add reqwest = { features = ["json","rustls-tls"] }.
+    //
+    // Since reqwest is not yet in Cargo.toml we use tauri's HTTP via Command.
+    let output = tokio::process::Command::new(if cfg!(windows) { "powershell" } else { "curl" })
+        .args(if cfg!(windows) {
+            vec!["-Command".to_string(), format!("(Invoke-WebRequest -Uri '{}' -UseBasicParsing).Content", manifest_url)]
+        } else {
+            vec!["-fsSL".to_string(), manifest_url.clone()]
+        })
+        .output()
+        .await
+        .map_err(|e| format!("HTTP fetch failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Manifest fetch error ({}): {}", manifest_url, stderr.trim()));
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let info: UpdateInfo = serde_json::from_str(&body)
+        .map_err(|e| format!("Manifest parse error: {e}\nBody: {}", &body[..body.len().min(200)]))?;
+
+    Ok(info)
+}
+
+/// Download and apply an update. After a successful install the app is
+/// restarted. The frontend shows progress via the `update_progress` event.
+/// NOTE: Full delta-patch logic lives here in production; this implementation
+/// downloads the installer/tarball and runs it.
+#[tauri::command]
+async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
+    // Determine current platform key (must match the key used in build.py)
+    let platform_key = {
+        let os = if cfg!(target_os = "windows") { "windows" }
+                 else if cfg!(target_os = "macos") { "darwin" }
+                 else { "linux" };
+        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        format!("{}-{}", os, arch)
+    };
+
+    let asset = info.platforms.get(&platform_key)
+        .ok_or_else(|| format!("No asset for platform '{platform_key}' in update manifest"))?;
+
+    window.emit("update_progress", serde_json::json!({ "stage": "downloading", "platform": platform_key }))
+        .map_err(|e| e.to_string())?;
+
+    // Download to a temp file
+    let tmp_dir  = std::env::temp_dir();
+    let filename = asset.url.split('/').last().unwrap_or("tsuki-update");
+    let tmp_path = tmp_dir.join(filename);
+
+    let dl_status = tokio::process::Command::new(if cfg!(windows) { "powershell" } else { "curl" })
+        .args(if cfg!(windows) {
+            vec![
+                "-Command".to_string(),
+                format!("Invoke-WebRequest -Uri '{}' -OutFile '{}'", asset.url, tmp_path.display()),
+            ]
+        } else {
+            vec!["-fsSL".to_string(), asset.url.clone(), "-o".to_string(), tmp_path.to_string_lossy().into_owned()]
+        })
+        .status()
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    if !dl_status.success() {
+        return Err(format!("Download of {} failed", asset.url));
+    }
+
+    window.emit("update_progress", serde_json::json!({ "stage": "installing" }))
+        .map_err(|e| e.to_string())?;
+
+    // Launch installer / tarball and restart
+    #[cfg(windows)]
+    {
+        tokio::process::Command::new(&tmp_path)
+            .arg("/SILENT")
+            .spawn()
+            .map_err(|e| format!("Installer launch failed: {e}"))?;
+    }
+    #[cfg(unix)]
+    {
+        // For tar.gz: extract to a temp dir and run install.sh
+        let extract_dir = tmp_dir.join("tsuki-update-extract");
+        let _ = std::fs::create_dir_all(&extract_dir);
+        tokio::process::Command::new("tar")
+            .args(["xzf", &tmp_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
+            .status()
+            .await
+            .map_err(|e| format!("tar extraction failed: {e}"))?;
+        let install_sh = extract_dir.read_dir()
+            .map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name() == "install.sh")
+            .map(|e| e.path())
+            .ok_or("install.sh not found in update archive")?;
+        tokio::process::Command::new("bash")
+            .arg(install_sh)
+            .arg("-y")
+            .spawn()
+            .map_err(|e| format!("install.sh launch failed: {e}"))?;
+    }
+
+    // Give installer a moment then quit this process
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    std::process::exit(0);
+}
+
+
 fn main() {
     // ── Read debugMode from settings.json BEFORE Tauri starts ────────────────
     // We do this manually so the very first dbg() call is already conditional
@@ -1671,6 +1810,8 @@ fn main() {
             pty_session::pty_write,
             pty_session::pty_resize,
             pty_session::pty_kill,
+            check_for_updates,
+            apply_update,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

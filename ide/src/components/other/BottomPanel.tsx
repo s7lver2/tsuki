@@ -224,12 +224,16 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
   const [history, setHistory] = useState<string[]>([])
   const [histIdx, setHistIdx] = useState(-1)
 
-  const scrollRef   = useRef<HTMLDivElement>(null)
-  const inputRef    = useRef<HTMLInputElement>(null)
+  const scrollRef      = useRef<HTMLDivElement>(null)
+  const inputRef       = useRef<HTMLInputElement>(null)
   // PTY session id (stable for the lifetime of this TermView mount)
-  const ptyIdRef    = useRef<string>(session.id)
+  const ptyIdRef       = useRef<string>(session.id)
   // Buffer for partial lines arriving from the PTY in chunks
-  const lineBuffRef = useRef<string>('')
+  const lineBuffRef    = useRef<string>('')
+  // Track ready state in a ref so the projectPath effect can read it
+  const readyRef       = useRef(false)
+  // Track the last path we cd'd into so we don't repeat it
+  const lastCdPathRef  = useRef<string | null>(null)
 
   const push = useCallback((raw: string, kind: LineKind = 'output') => {
     setLines(prev => [...prev, makeLine(raw, kind)])
@@ -310,6 +314,7 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
           onAlive(false)
           onRunning(false)
           setReady(false)
+          readyRef.current = false
         })
         unsubs.push(unsubData, unsubExit)
 
@@ -351,6 +356,7 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
         }
 
         setReady(true)
+        readyRef.current = true
         setTimeout(() => inputRef.current?.focus(), 50)
       } catch (e) {
         if (!cancelled) {
@@ -380,6 +386,40 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
       unsubs.forEach(f => f())
     }
   }, []) // eslint-disable-line
+
+  // ── React to project path changes — send cd when ready ───────────────────
+  useEffect(() => {
+    if (!projectPath) return
+    if (projectPath === lastCdPathRef.current) return
+
+    const sendCd = () => {
+      if (!readyRef.current) return
+      // Verify the path exists before trying to cd — avoids the
+      // "El nombre de archivo..." error when a project path is stale or
+      // the directory hasn't been created yet.
+      pathExists(projectPath).then(exists => {
+        if (!exists) return
+        lastCdPathRef.current = projectPath
+        const shell  = session.shell
+        const cdCmd  = (() => {
+          switch (shell.id) {
+            case 'cmd':        return `cd /d "${projectPath}"\r\n`
+            case 'powershell':
+            case 'pwsh':       return `Set-Location -LiteralPath '${projectPath}'\r\n`
+            default:           return `cd ${JSON.stringify(projectPath)}\r\n`
+          }
+        })()
+        ptyWrite(ptyIdRef.current, cdCmd).catch(() => {})
+      }).catch(() => {})
+    }
+
+    if (readyRef.current) {
+      sendCd()
+    } else {
+      const t = setTimeout(sendCd, 600)
+      return () => clearTimeout(t)
+    }
+  }, [projectPath, session.shell]) // eslint-disable-line
 
   const submitLine = useCallback((line: string) => {
     push(`> ${line}`, 'prompt')
@@ -517,6 +557,7 @@ function Terminal() {
   const [cmdRunning,  setCmdRunning ] = useState(false)
   const cmdScrollRef  = useRef<HTMLDivElement>(null)
   const projectPathRef = useRef(projectPath)
+  const shellsInitRef  = useRef(false)   // guard against StrictMode double-fire
 
   useEffect(() => { projectPathRef.current = projectPath }, [projectPath])
   useEffect(() => {
@@ -528,6 +569,8 @@ function Terminal() {
   }, [])
 
   useEffect(() => {
+    if (shellsInitRef.current) return
+    shellsInitRef.current = true
     listShells().then(list => {
       setShells(list)
       setLoadingShells(false)

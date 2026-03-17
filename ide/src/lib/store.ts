@@ -5,7 +5,7 @@ import { applyTheme, applyUiScale, applyFontRendering } from './themes'
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'language' | 'developer' | 'profile'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'language' | 'developer' | 'profile' | 'updates'
 
 export interface FileNode {
   id: string
@@ -115,8 +115,14 @@ export interface SettingsState {
   autoDetect: boolean
   color: boolean
   libsDir: string
+  extraLibsDirs: string[]   // additional package search paths (merged with libsDir)
   registryUrl: string
   verifySignatures: boolean
+  // -- Updates
+  updateChannel: 'stable' | 'testing'
+  autoCheckUpdates: boolean
+  lastUpdateCheck: number | null    // unix ms
+  lastSeenVersion: string | null    // last version the user dismissed
   // ── Editor ───────────────────────────────────────────────────────────────
   fontSize: number
   tabSize: number
@@ -356,8 +362,13 @@ const DEFAULT_SETTINGS: SettingsState = {
   autoDetect: true,
   color: true,
   libsDir: '~/.tsuki/libs',
+  extraLibsDirs: [],
   registryUrl: 'https://registry.goduino.dev/v1/index.json',
   verifySignatures: true,
+  updateChannel: 'stable',
+  autoCheckUpdates: true,
+  lastUpdateCheck: null,
+  lastSeenVersion: null,
   fontSize: 13,
   tabSize: 2,
   minimap: false,
@@ -501,6 +512,36 @@ async function scanDir(
   }
 
   return { id: 'tmp', name: dirName2, type: 'dir', path: dirPath, open: depth <= 1, children }
+}
+
+// ── Profile persistence helpers ───────────────────────────────────────────────
+
+const PROFILES_KEY      = 'tsuki_profiles'
+const ACTIVE_PROFILE_KEY = 'tsuki_active_profile'
+
+function loadProfiles(): UserProfile[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(PROFILES_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as UserProfile[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+
+function saveProfiles(profiles: UserProfile[]) {
+  if (typeof window === 'undefined') return
+  try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)) } catch {}
+}
+
+function loadActiveProfileId(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(ACTIVE_PROFILE_KEY) ?? ''
+}
+
+function saveActiveProfileId(id: string) {
+  if (typeof window === 'undefined') return
+  try { localStorage.setItem(ACTIVE_PROFILE_KEY, id) } catch {}
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -1058,36 +1099,6 @@ export const useStore = create<AppState>((set, get) => ({
 
 }))
 
-
-// ── Profile persistence helpers ───────────────────────────────────────────────
-
-const PROFILES_KEY      = 'tsuki_profiles'
-const ACTIVE_PROFILE_KEY = 'tsuki_active_profile'
-
-function loadProfiles(): UserProfile[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(PROFILES_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as UserProfile[]
-    return Array.isArray(parsed) ? parsed : []
-  } catch { return [] }
-}
-
-function saveProfiles(profiles: UserProfile[]) {
-  if (typeof window === 'undefined') return
-  try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)) } catch {}
-}
-
-function loadActiveProfileId(): string {
-  if (typeof window === 'undefined') return ''
-  return localStorage.getItem(ACTIVE_PROFILE_KEY) ?? ''
-}
-
-function saveActiveProfileId(id: string) {
-  if (typeof window === 'undefined') return
-  try { localStorage.setItem(ACTIVE_PROFILE_KEY, id) } catch {}
-}
 
 // ── Bootstrap: load persisted settings and apply theme on startup ─────────────
 

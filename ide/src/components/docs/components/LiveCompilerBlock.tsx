@@ -134,12 +134,14 @@ function Btn({
 // ── LiveCompilerBlock ─────────────────────────────────────────────────────────
 
 export interface LiveCompilerBlockProps {
-  /** Initial Go source shown in the editor */
+  /** Initial source shown in the editor */
   initialCode: string
   /** Board id passed to tsuki-core (default: uno) */
   board?: string
   /** Label shown in the block header */
   filename?: string
+  /** Source language: "go" (default) or "python" */
+  lang?: 'go' | 'python'
 }
 
 type CompileState = 'idle' | 'running' | 'ok' | 'error'
@@ -148,6 +150,7 @@ export function LiveCompilerBlock({
   initialCode,
   board = 'uno',
   filename = 'main.go',
+  lang = 'go',
 }: LiveCompilerBlockProps) {
   const original = initialCode.trim()
   const [code,    setCode]    = useState(original)
@@ -186,7 +189,7 @@ export function LiveCompilerBlock({
       pushLine({ kind: 'meta', text: `→ transpiling with board: ${board}` })
 
       // In-process transpilation — no tsuki-core.exe subprocess needed
-      const cpp = await transpileSource(code, board)
+      const cpp = await transpileSource(code, board, lang)
 
       const ms = Date.now() - t0
       setElapsed(ms)

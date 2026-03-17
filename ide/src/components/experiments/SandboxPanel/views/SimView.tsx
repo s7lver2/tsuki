@@ -245,22 +245,55 @@ export default function SimView(props: SimViewProps) {
     startSigGen, stopSigGen,
   } = props
 
-  const { openTabs, activeTabIdx, board, settings, projectLanguage } = useStore()
+  const { openTabs, activeTabIdx, board, settings, projectLanguage, tree } = useStore()
   const showCurrentFlow = settings.showCurrentFlow
 
-  // Find the main source file for the current language — this is what the
-  // simulator should always use, regardless of which tab is currently active.
+  // ── Source file resolution ────────────────────────────────────────────────
+  // Priority: 1. matching open tab  2. matching node in file tree (read from disk)
+  // This means the Sim works even when the user hasn't opened the file in the editor.
   const sourceExt = projectLanguage === 'python' ? '.py'
                   : projectLanguage === 'cpp'    ? '.cpp'
                   : projectLanguage === 'ino'    ? '.ino'
                   :                                '.go'
 
+  // Only match tabs that have the right extension for the project language.
+  // Do NOT fall back to openTabs[activeTabIdx] — it could be a generated .cpp
+  // file whose content would be passed to the wrong transpiler pipeline.
   const mainTab = openTabs.find(t => t.name?.endsWith(sourceExt))
-               ?? openTabs.find(t => ['main.go','main.py','main.cpp'].includes(t.name ?? ''))
-               ?? (activeTabIdx >= 0 ? openTabs[activeTabIdx] : null)
+               ?? openTabs.find(t => ['main.go','main.py','main.cpp', 'main.ino'].includes(t.name ?? '') && t.name?.endsWith(sourceExt))
 
-  // For the UI indicator, also keep track of the active tab name
-  const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
+  // Track disk-loaded content for when the file isn't open as a tab
+  const [diskContent, setDiskContent] = useState<string | null>(null)
+  const [diskFileName, setDiskFileName] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (mainTab) { setDiskContent(null); setDiskFileName(null); return }
+    // No matching open tab — try to find the file in the tree and read it
+    const mainNode = tree.find(n =>
+      n.type === 'file' && (
+        n.name?.endsWith(sourceExt) ||
+        ['main.go','main.py','main.cpp'].includes(n.name ?? '')
+      )
+    )
+    if (!mainNode) { setDiskContent(null); setDiskFileName(null); return }
+    if (mainNode.content !== undefined) {
+      setDiskContent(mainNode.content)
+      setDiskFileName(mainNode.name ?? null)
+      return
+    }
+    if (mainNode.path) {
+      import('@/lib/tauri').then(({ readFile }) =>
+        readFile(mainNode.path!).then(content => {
+          setDiskContent(content)
+          setDiskFileName(mainNode.name ?? null)
+        }).catch(() => { setDiskContent(null); setDiskFileName(null) })
+      )
+    }
+  }, [mainTab, tree, sourceExt]) // eslint-disable-line
+
+  // The content and name to actually use for Run
+  const sourceContent  = mainTab?.content  ?? diskContent  ?? ''
+  const sourceFileName = mainTab?.name     ?? diskFileName ?? null
 
   const analogPins  = getAnalogInputPins(circuit)
   const digitalPins = getDigitalInputPins(circuit)
@@ -279,7 +312,7 @@ export default function SimView(props: SimViewProps) {
         <button
           onClick={simRunning
             ? handleStop
-            : () => handleRun(mainTab?.content ?? '', board || 'uno')}
+            : () => handleRun(sourceContent, board || 'uno')}
           disabled={simStatus === 'loading'}
           className={clsx(
             'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold cursor-pointer border-0 transition-colors',
@@ -305,14 +338,14 @@ export default function SimView(props: SimViewProps) {
 
         <div className="flex-1" />
 
-        {mainTab ? (
+        {sourceFileName ? (
           <span className="text-[10px] text-[var(--ok)] flex items-center gap-1">
-            <CheckCircle2 size={9} /> {mainTab.name}
+            <CheckCircle2 size={9} /> {sourceFileName}
           </span>
         ) : (
           <span className="text-[10px] text-[var(--fg-faint)] flex items-center gap-1">
             <AlertCircle size={9} />
-            {projectLanguage === 'cpp' ? 'Open a .cpp file' : projectLanguage === 'ino' ? 'Open a .ino file' : projectLanguage === 'python' ? 'Open a .py file' : 'Open a .go file'}
+            {projectLanguage === 'cpp' ? 'No .cpp found' : projectLanguage === 'ino' ? 'No .ino found' : projectLanguage === 'python' ? 'No .py found' : 'No .go found'}
           </span>
         )}
 

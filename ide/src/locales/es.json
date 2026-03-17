@@ -269,6 +269,8 @@
     "lang_active": "Activo",
     "lang_select": "Seleccionar",
     "tab_developer": "Desarrollador",
-    "tab_lsp": "Servidor de lenguaje"
+    "tab_lsp": "Servidor de lenguaje",
+    "tab_updates": "Actualizaciones",
+    "tab_profile": "Perfil"
   }
 }

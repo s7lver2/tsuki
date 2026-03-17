@@ -41,6 +41,12 @@ RELEASE_DIR    = os.path.join(PROJECT_ROOT, "releases")
 IDE_DIR        = os.path.join(PROJECT_ROOT, "ide")
 FLASH_DIR      = PROJECT_ROOT   # Rust crate: tsuki-core + tsuki-flash
 REGISTRY_URL   = "https://raw.githubusercontent.com/s7lver/tsuki/refs/heads/main/pkg/packages.json"
+RELEASES_REPO_DIR = os.path.join(PROJECT_ROOT, "releases")  # also the RELEASE_DIR — json files live here too
+KEYS_DIR       = os.path.join(PROJECT_ROOT, "tools", "keys")  # NOT committed — .gitignore this
+UPDATE_MANIFEST_STABLE  = os.path.join(RELEASE_DIR, "update-stable.json")
+UPDATE_MANIFEST_TESTING = os.path.join(RELEASE_DIR, "update-testing.json")
+# GitHub raw URL base for update asset downloads (change to your own repo)
+GITHUB_RELEASES_BASE = "https://github.com/s7lver/tsuki/releases/download"
 PUBLISHER      = "tsuki Team"
 PUBLISHER_URL  = "https://github.com/s7lver/tsuki"
 OTHER_RESIDUAL_DIRS = [
@@ -51,12 +57,31 @@ OTHER_RESIDUAL_DIRS = [
 ]
 
 PLATFORMS = {
-    "linux-amd64":   {"goos": "linux",   "goarch": "amd64", "rust_target": "x86_64-unknown-linux-gnu"},
-    "linux-arm64":   {"goos": "linux",   "goarch": "arm64", "rust_target": "aarch64-unknown-linux-gnu"},
-    "windows-amd64": {"goos": "windows", "goarch": "amd64", "rust_target": "x86_64-pc-windows-msvc"},
-    "darwin-amd64":  {"goos": "darwin",  "goarch": "amd64", "rust_target": "x86_64-apple-darwin"},
-    "darwin-arm64":  {"goos": "darwin",  "goarch": "arm64", "rust_target": "aarch64-apple-darwin"},
+    # -- Linux --------------------------------------------------------
+    "linux-amd64":   {"goos": "linux",   "goarch": "amd64",   "rust_target": "x86_64-unknown-linux-gnu",     "cross": False},
+    "linux-arm64":   {"goos": "linux",   "goarch": "arm64",   "rust_target": "aarch64-unknown-linux-gnu",    "cross": True},
+    "linux-arm":     {"goos": "linux",   "goarch": "arm",     "rust_target": "armv7-unknown-linux-gnueabihf","cross": True},  # RPi/ARMv7 32-bit
+    "linux-386":     {"goos": "linux",   "goarch": "386",     "rust_target": "i686-unknown-linux-gnu",       "cross": True},
+    "linux-riscv64": {"goos": "linux",   "goarch": "riscv64", "rust_target": "riscv64gc-unknown-linux-gnu",  "cross": True},
+    # -- Windows ------------------------------------------------------
+    "windows-amd64": {"goos": "windows", "goarch": "amd64",   "rust_target": "x86_64-pc-windows-msvc",      "cross": False},
+    "windows-arm64": {"goos": "windows", "goarch": "arm64",   "rust_target": "aarch64-pc-windows-msvc",     "cross": True},
+    "windows-386":   {"goos": "windows", "goarch": "386",     "rust_target": "i686-pc-windows-msvc",        "cross": True},
+    # -- macOS --------------------------------------------------------
+    "darwin-amd64":  {"goos": "darwin",  "goarch": "amd64",   "rust_target": "x86_64-apple-darwin",         "cross": False},
+    "darwin-arm64":  {"goos": "darwin",  "goarch": "arm64",   "rust_target": "aarch64-apple-darwin",        "cross": False},
+    # -- FreeBSD ------------------------------------------------------
+    "freebsd-amd64": {"goos": "freebsd", "goarch": "amd64",   "rust_target": "x86_64-unknown-freebsd",      "cross": True},
+    "freebsd-arm64": {"goos": "freebsd", "goarch": "arm64",   "rust_target": "aarch64-unknown-freebsd",     "cross": True},
 }
+
+# Platforms built by default in `release` mode.
+# Use --platforms all  or  --platforms linux-amd64,linux-arm64  to override.
+RELEASE_PLATFORMS = [
+    "linux-amd64", "linux-arm64", "linux-arm",
+    "windows-amd64", "windows-arm64",
+    "darwin-amd64",  "darwin-arm64",
+]
 
 # ─────────────────────────────────────────────
 #  UTILIDADES
@@ -132,20 +157,57 @@ def check_tool(name, *args):
             return False
     return True
 
+def _sanitize_version(v):
+    """Convierte cualquier string de version a X.Y.Z semver limpio.
+
+    Ejemplos:
+        "v5.0-12-g4ce00a0-dirty"  →  "5.0.0"
+        "v1.2.3"                  →  "1.2.3"
+        "1.4.0-beta.1"            →  "1.4.0"
+        "abc123"  (solo hash)     →  "0.0.0-abc123"
+    """
+    import re
+    # Strip leading 'v'
+    v = v.lstrip("v")
+    # Take everything up to the first '-' that follows a numeric portion
+    # e.g. "5.0-12-g4ce00a0-dirty" → "5.0"
+    m = re.match(r"(\d+(?:\.\d+)*)", v)
+    if not m:
+        # No numeric part at all (bare commit hash)
+        return f"0.0.0-{v}"
+    numeric = m.group(1)
+    parts = numeric.split(".")
+    # Pad to at least X.Y.Z
+    while len(parts) < 3:
+        parts.append("0")
+    return ".".join(parts[:3])
+
+
+def _version_to_numeric(semver):
+    """Convierte X.Y.Z a X.Y.Z.0 para VersionInfoVersion de Inno Setup."""
+    import re
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", semver)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}.0"
+    return "1.0.0.0"
+
+
 def get_version(forced=None):
     if forced:
-        return forced, "manual", datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        clean = _sanitize_version(forced)
+        d = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return clean, "manual", d
     try:
-        v = subprocess.check_output(
+        raw = subprocess.check_output(
             ["git", "describe", "--tags", "--always", "--dirty"],
             cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL).decode().strip() or "0.1.0"
         c = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
             cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
-        v, c = "0.1.0", "unknown"
+        raw, c = "0.1.0", "unknown"
     d = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return v, c, d
+    return _sanitize_version(raw), c, d
 
 def _rmtree_force(path):
     """rmtree que maneja PermissionError en Windows.
@@ -253,38 +315,84 @@ def _detect_host_platform():
 
 HOST_PLATFORM = _detect_host_platform()
 
-def build_rust(platform_key):
-    """Compila los binarios Rust para el host nativo.
+def _has_cross():
+    """Devuelve True si `cross` (cargo-cross) esta disponible en el PATH."""
+    return shutil.which("cross") is not None
 
-    Si platform_key no coincide con el host, devuelve None, None
-    y emite un aviso en lugar de fallar. Cross-compilar Rust requiere
-    toolchains adicionales (linker de la plataforma objetivo).
+
+def build_rust(platform_key, force_cross=False):
+    """Compila los binarios Rust.
+
+    Estrategia de compilacion:
+      1. Host nativo          -> cargo build --release  (sin --target, mas rapido)
+      2. Cross via `cross`    -> cross build --release --target <triple>
+         Requiere Docker + `cargo install cross`.
+         Se activa automaticamente si la plataforma tiene "cross": True
+         y `cross` esta en el PATH, o si se pasa force_cross=True.
+      3. Sin herramienta      -> avisa y devuelve None, None
+
+    La clave "cross" en PLATFORMS indica si la plataforma *necesita*
+    cross-compilacion (no es el host nativo).
     """
-    if platform_key != HOST_PLATFORM:
-        warn(
-            f"Rust omitido para {platform_key} "
-            f"(host={HOST_PLATFORM}). "
-            f"Cross-compilar Rust requiere instalar el linker de la "
-            f"plataforma objetivo (ej. mingw-w64, aarch64-linux-gnu-gcc). "
-            f"Ejecuta el build en la máquina objetivo para obtener esos binarios."
-        )
-        return None, None
-
-    step(f"Compilando Rust binarios → {platform_key} (nativo)")
     plat = PLATFORMS[platform_key]
     ext  = ".exe" if plat["goos"] == "windows" else ""
+    needs_cross = plat.get("cross", False) and platform_key != HOST_PLATFORM
 
-    # Sin --target: cargo compila para el host desde el crate flash/
-    run(["cargo", "build", "--release"], cwd=FLASH_DIR)
+    # -- Caso 1: compilacion nativa ----------------------------------------
+    if not needs_cross and platform_key == HOST_PLATFORM:
+        step(f"Compilando Rust (nativo) -> {platform_key}")
+        run(["cargo", "build", "--release"], cwd=FLASH_DIR)
+        src_base = os.path.join(FLASH_DIR, "target", "release")
+        results = []
+        for name in [CORE_BINARY, FLASH_BINARY]:
+            src = os.path.join(src_base, f"{name}{ext}")
+            dst = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
+            shutil.copy(src, dst)
+            info(f"Rust binary -> {os.path.basename(dst)}")
+            results.append(dst)
+        return results[0], results[1]
 
-    results = []
-    for name in [CORE_BINARY, FLASH_BINARY]:
-        src_path = os.path.join(FLASH_DIR, "target", "release", f"{name}{ext}")
-        dst_path = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
-        shutil.copy(src_path, dst_path)
-        info(f"Rust binary → {os.path.basename(dst_path)}")
-        results.append(dst_path)
-    return results[0], results[1]
+    # -- Caso 2: cross-compilacion con `cross` o `cargo --target` -----------
+    rust_target = plat["rust_target"]
+
+    if _has_cross() or force_cross:
+        tool = "cross" if _has_cross() else "cargo"
+        step(f"Compilando Rust (cross/{tool}) -> {platform_key}  [{rust_target}]")
+        if tool == "cross":
+            info("  Usando `cross` (Docker). Asegurate de que Docker esta corriendo.")
+        else:
+            info(f"  Usando `cargo --target {rust_target}`.")
+            info("  Asegurate de tener el toolchain: rustup target add " + rust_target)
+
+        run([tool, "build", "--release", "--target", rust_target], cwd=FLASH_DIR)
+        src_base = os.path.join(FLASH_DIR, "target", rust_target, "release")
+        results = []
+        for name in [CORE_BINARY, FLASH_BINARY]:
+            src = os.path.join(src_base, f"{name}{ext}")
+            dst = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
+            if not os.path.isfile(src):
+                warn(f"  Binario no encontrado tras cross-build: {src}")
+                results.append(None)
+                continue
+            shutil.copy(src, dst)
+            info(f"Rust binary -> {os.path.basename(dst)}")
+            results.append(dst)
+        core_out  = results[0] if results else None
+        flash_out = results[1] if len(results) > 1 else None
+        return core_out, flash_out
+
+    # -- Caso 3: sin herramienta de cross-compilacion ----------------------
+    warn(
+        f"Rust omitido para {platform_key} (host={HOST_PLATFORM}).\n"
+        f"  Opciones para compilar este target:\n"
+        f"  A) Instala `cross` (recomendado, usa Docker):\n"
+        f"       cargo install cross\n"
+        f"  B) Instala el toolchain y linker manualmente:\n"
+        f"       rustup target add {rust_target}\n"
+        f"       # + linker del sistema (ej. aarch64-linux-gnu-gcc, mingw-w64)\n"
+        f"  C) Ejecuta el build directamente en la maquina objetivo."
+    )
+    return None, None
 
 # ─────────────────────────────────────────────
 #  BUILD: TAURI IDE  (solo host actual)
@@ -681,11 +789,13 @@ AppUpdatesURL={#AppURL}/releases
 DefaultDirName={autopf}\tsuki
 DefaultGroupName=@@app_name@@
 AllowNoIcons=yes
-; Requiere privilegios de administrador para instalar en Program Files
+; Use native 64-bit Program Files on x64/arm64 — never Program Files (x86)
+ArchitecturesAllowed=x64 arm64 x86
+ArchitecturesInstallIn64BitMode=x64 arm64
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=@@release_dir@@
-OutputBaseFilename=@@app_name@@-Setup-@@version@@-windows-amd64
+OutputBaseFilename=@@app_name@@-Setup-@@version@@-@@platform_key@@
 SetupIconFile=@@icon_file@@
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -799,10 +909,12 @@ Root: HKCU; Subkey: "Software\@@app_name@@"; \
       ValueType: string; ValueName: "RegistryURL"; ValueData: "@@registry_url@@"; \
       Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\@@app_name@@"; \
-      ValueType: string; ValueName: "CoreBinary"; ValueData: "{app}\bin\@@core_binary@@.exe"; \
+      ValueType: string; ValueName: "CoreBinary"; \
+      ValueData: "{app}\bin\@@core_binary@@.exe"; \
       Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\@@app_name@@"; \
-      ValueType: string; ValueName: "FlashBinary"; ValueData: "{app}\bin\@@flash_binary@@.exe"; \
+      ValueType: string; ValueName: "FlashBinary"; \
+      ValueData: "{app}\bin\@@flash_binary@@.exe"; \
       Flags: uninsdeletekey
 
 ; ── Asociación de archivos .goino ───────────────────────────────────
@@ -831,8 +943,9 @@ Root: HKCU; Subkey: "Software\Classes\Directory\shell\@@app_name@@\command"; \
 
 [Run]
 ; Ejecutar la configuración inicial tras instalar
-Filename: "{app}\\bin\\@@binary@@.exe"; \
-    Parameters: "config init --libs-dir {{app}}\libs --registry @@registry_url@@"; \
+; Note: {app} is quoted with doubled quotes so spaces in the install path work.
+Filename: "{app}\bin\@@binary@@.exe"; \
+    Parameters: "config init --libs-dir ""{app}\libs"" --registry @@registry_url@@"; \
     Flags: runhidden nowait; \
     StatusMsg: "Inicializando configuración..."; \
     Components: cli
@@ -854,34 +967,22 @@ Filename: "{app}\\bin\\@@binary@@.exe"; \
 //  Página personalizada de Configuración Avanzada
 // ═══════════════════════════════════════════════════════════════════
 var
-  AdvancedPage:         TWizardPage;
-  // Registro
-  lblRegistry:          TLabel;
-  edRegistry:           TEdit;
-  // Directorio de librerías
-  lblLibsDir:           TLabel;
-  edLibsDir:            TEdit;
-  btnLibsDir:           TButton;
-  // Directorio de configuración
-  lblConfDir:           TLabel;
-  edConfDir:            TEdit;
-  btnConfDir:           TButton;
-  // Opciones extra
-  chkAutoUpdate:        TCheckBox;
-  chkSendTelemetry:     TCheckBox;
-  chkBackupConfig:      TCheckBox;
-  chkStartWithWindows:  TCheckBox;
-  // Página de herramientas externas
-  ToolsPage:            TWizardPage;
-  chkAvrdude:           TCheckBox;
-  chkEsptool:           TCheckBox;
-  chkArduinoCli:        TCheckBox;
-  lblToolsNote:         TLabel;
-  // Página de información de licencia post-instalación
-  SummaryPage:          TWizardPage;
-  lblSummary:           TLabel;
+  AdvancedPage: TWizardPage;
+  // Registro de paquetes
+  lblRegistry:  TLabel;
+  edRegistry:   TEdit;
+  // Directorio de librerías Arduino
+  lblLibsDir:   TLabel;
+  edLibsDir:    TEdit;
+  btnLibsDir:   TButton;
+  // Directorio de configuración de usuario
+  lblConfDir:   TLabel;
+  edConfDir:    TEdit;
+  btnConfDir:   TButton;
+  // Actualizaciones automáticas
+  chkAutoUpdate: TCheckBox;
 
-// ─── Helper: Browse Folder ────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────
 function BoolStr(Val: Boolean; TrueStr, FalseStr: String): String;
 begin
   if Val then Result := TrueStr else Result := FalseStr;
@@ -902,12 +1003,11 @@ begin SelectFolder(edLibsDir); end;
 procedure btnConfDirClick(Sender: TObject);
 begin SelectFolder(edConfDir); end;
 
-// ─── Crear páginas personalizadas ─────────────────────────────────
+// ─── Crear página personalizada ──────────────────────────────────────
 procedure InitializeWizard;
 var
   y: Integer;
 begin
-  // ── Página: Configuración Avanzada ────────────────────────────
   AdvancedPage := CreateCustomPage(
     wpSelectComponents,
     'Configuración Avanzada',
@@ -915,7 +1015,8 @@ begin
   );
 
   y := 8;
-  // Registro
+
+  // ── URL del registro ──────────────────────────────────────────────
   lblRegistry := TLabel.Create(AdvancedPage);
   lblRegistry.Parent  := AdvancedPage.Surface;
   lblRegistry.Caption := 'URL del registro de paquetes:';
@@ -929,7 +1030,8 @@ begin
   edRegistry.Text   := '@@registry_url@@';
 
   y := y + 52;
-  // Directorio de librerías
+
+  // ── Directorio de librerías ───────────────────────────────────────
   lblLibsDir := TLabel.Create(AdvancedPage);
   lblLibsDir.Parent   := AdvancedPage.Surface;
   lblLibsDir.Caption  := 'Directorio de librerías Arduino:';
@@ -950,7 +1052,8 @@ begin
   btnLibsDir.OnClick := @btnLibsDirClick;
 
   y := y + 52;
-  // Directorio de config
+
+  // ── Directorio de configuración ───────────────────────────────────
   lblConfDir := TLabel.Create(AdvancedPage);
   lblConfDir.Parent   := AdvancedPage.Surface;
   lblConfDir.Caption  := 'Directorio de configuración de usuario:';
@@ -971,122 +1074,17 @@ begin
   btnConfDir.OnClick := @btnConfDirClick;
 
   y := y + 52;
-  // Opciones extra
+
+  // ── Actualizaciones automáticas ───────────────────────────────────
   chkAutoUpdate := TCheckBox.Create(AdvancedPage);
   chkAutoUpdate.Parent  := AdvancedPage.Surface;
   chkAutoUpdate.Top     := y;  chkAutoUpdate.Left := 0;
   chkAutoUpdate.Width   := AdvancedPage.SurfaceWidth;
   chkAutoUpdate.Caption := 'Buscar actualizaciones automáticamente al iniciar';
   chkAutoUpdate.Checked := True;
-
-  y := y + 22;
-  chkSendTelemetry := TCheckBox.Create(AdvancedPage);
-  chkSendTelemetry.Parent  := AdvancedPage.Surface;
-  chkSendTelemetry.Top     := y;  chkSendTelemetry.Left := 0;
-  chkSendTelemetry.Width   := AdvancedPage.SurfaceWidth;
-  chkSendTelemetry.Caption := 'Enviar telemetría anónima para mejorar @@app_name@@ (opcional)';
-  chkSendTelemetry.Checked := False;
-
-  y := y + 22;
-  chkBackupConfig := TCheckBox.Create(AdvancedPage);
-  chkBackupConfig.Parent  := AdvancedPage.Surface;
-  chkBackupConfig.Top     := y;  chkBackupConfig.Left := 0;
-  chkBackupConfig.Width   := AdvancedPage.SurfaceWidth;
-  chkBackupConfig.Caption := 'Crear copia de seguridad de la configuración anterior (si existe)';
-  chkBackupConfig.Checked := True;
-
-  y := y + 22;
-  chkStartWithWindows := TCheckBox.Create(AdvancedPage);
-  chkStartWithWindows.Parent  := AdvancedPage.Surface;
-  chkStartWithWindows.Top     := y;  chkStartWithWindows.Left := 0;
-  chkStartWithWindows.Width   := AdvancedPage.SurfaceWidth;
-  chkStartWithWindows.Caption := 'Iniciar @@app_name@@ IDE al arrancar Windows';
-  chkStartWithWindows.Checked := False;
-
-  // ── Página: Herramientas Externas ─────────────────────────────
-  ToolsPage := CreateCustomPage(
-    AdvancedPage.ID,
-    'Herramientas Externas',
-    'Configura herramientas adicionales para compilar y flashear Arduino'
-  );
-
-  y := 8;
-  lblToolsNote := TLabel.Create(ToolsPage);
-  lblToolsNote.Parent   := ToolsPage.Surface;
-  lblToolsNote.Caption  := 'Selecciona las herramientas que deseas descargar e instalar:';
-  lblToolsNote.Top      := y;  lblToolsNote.Left := 0;
-  lblToolsNote.AutoSize := True;
-
-  y := y + 22;
-  chkAvrdude := TCheckBox.Create(ToolsPage);
-  chkAvrdude.Parent  := ToolsPage.Surface;
-  chkAvrdude.Top     := y;  chkAvrdude.Left := 0;
-  chkAvrdude.Width   := ToolsPage.SurfaceWidth;
-  chkAvrdude.Caption := 'avrdude — Flashear Arduino UNO/MEGA/Leonardo (recomendado)';
-  chkAvrdude.Checked := True;
-
-  y := y + 22;
-  chkEsptool := TCheckBox.Create(ToolsPage);
-  chkEsptool.Parent  := ToolsPage.Surface;
-  chkEsptool.Top     := y;  chkEsptool.Left := 0;
-  chkEsptool.Width   := ToolsPage.SurfaceWidth;
-  chkEsptool.Caption := 'esptool — Flashear ESP32 / ESP8266';
-  chkEsptool.Checked := False;
-
-  y := y + 22;
-  chkArduinoCli := TCheckBox.Create(ToolsPage);
-  chkArduinoCli.Parent  := ToolsPage.Surface;
-  chkArduinoCli.Top     := y;  chkArduinoCli.Left := 0;
-  chkArduinoCli.Width   := ToolsPage.SurfaceWidth;
-  chkArduinoCli.Caption := 'arduino-cli — Compilación con soporte oficial Arduino';
-  chkArduinoCli.Checked := False;
-
-  // ── Página de Resumen ─────────────────────────────────────────
-  SummaryPage := CreateCustomPage(
-    ToolsPage.ID,
-    'Resumen de instalación',
-    'Revisa tu configuración antes de instalar'
-  );
-
-  lblSummary := TLabel.Create(SummaryPage);
-  lblSummary.Parent   := SummaryPage.Surface;
-  lblSummary.Caption  := '';
-  lblSummary.Top      := 0;  lblSummary.Left := 0;
-  lblSummary.Width    := SummaryPage.SurfaceWidth;
-  lblSummary.Height   := SummaryPage.SurfaceHeight;
-  lblSummary.WordWrap := True;
 end;
 
-// ─── Actualizar resumen al llegar a esa página ─────────────────────
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  if CurPageID = SummaryPage.ID then
-  begin
-    lblSummary.Caption :=
-      'Configuración seleccionada:' + #13#10 +
-      '─────────────────────────────────────' + #13#10 +
-      'Directorio de instalación : ' + ExpandConstant('{app}') + #13#10 +
-      'Directorio de librerías   : ' + edLibsDir.Text + #13#10 +
-      'Directorio de config      : ' + edConfDir.Text + #13#10 +
-      'Registro de paquetes      : ' + edRegistry.Text + #13#10 +
-      '─────────────────────────────────────' + #13#10 +
-      'Auto-actualizar           : ' + BoolStr(chkAutoUpdate.Checked, 'Sí', 'No') + #13#10 +
-      'Telemetría anónima        : ' + BoolStr(chkSendTelemetry.Checked, 'Sí', 'No') + #13#10 +
-      'Backup configuración      : ' + BoolStr(chkBackupConfig.Checked, 'Sí', 'No') + #13#10 +
-      'Iniciar con Windows       : ' + BoolStr(chkStartWithWindows.Checked, 'Sí', 'No') + #13#10 +
-      '─────────────────────────────────────' + #13#10 +
-      'avrdude                   : ' + BoolStr(chkAvrdude.Checked, 'Se instalará', 'No') + #13#10 +
-      'esptool                   : ' + BoolStr(chkEsptool.Checked, 'Se instalará', 'No') + #13#10 +
-      'arduino-cli               : ' + BoolStr(chkArduinoCli.Checked, 'Se instalará', 'No');
-  end;
-end;
-
-// ─── Guardar config personalizada tras instalar ─────────────────────
-procedure WriteSetting(const Key, Value: String);
-begin
-  RegWriteStringValue(HKCU, 'Software\\@@app_name@@', Key, Value);
-end;
-
+// ─── Guardar config tras instalar ────────────────────────────────────
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigFile: String;
@@ -1094,47 +1092,38 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    // Guardar en el registro
-    WriteSetting('LibsDir',       edLibsDir.Text);
-    WriteSetting('ConfigDir',     edConfDir.Text);
-    WriteSetting('RegistryURL',   edRegistry.Text);
-    WriteSetting('AutoUpdate',    BoolStr(chkAutoUpdate.Checked,    '1', '0'));
-    WriteSetting('Telemetry',     BoolStr(chkSendTelemetry.Checked, '1', '0'));
-    WriteSetting('InstallAvrdude',BoolStr(chkAvrdude.Checked,       '1', '0'));
-    WriteSetting('InstallEsptool',BoolStr(chkEsptool.Checked,       '1', '0'));
-    WriteSetting('InstallArduCli',BoolStr(chkArduinoCli.Checked,    '1', '0'));
+    // Guardar rutas en el registro de Windows
+    RegWriteStringValue(HKCU, 'Software\@@app_name@@', 'InstallDir',    ExpandConstant('{app}'));
+    RegWriteStringValue(HKCU, 'Software\@@app_name@@', 'Version',       '@@version@@');
+    RegWriteStringValue(HKCU, 'Software\@@app_name@@', 'LibsDir',       edLibsDir.Text);
+    RegWriteStringValue(HKCU, 'Software\@@app_name@@', 'ConfigDir',     edConfDir.Text);
+    RegWriteStringValue(HKCU, 'Software\@@app_name@@', 'RegistryURL',   edRegistry.Text);
+    RegWriteStringValue(HKCU, 'Software\@@app_name@@', 'AutoUpdate',    BoolStr(chkAutoUpdate.Checked, '1', '0'));
 
     // Escribir config.toml inicial
     ForceDirectories(edConfDir.Text);
-    ConfigFile := edConfDir.Text + '\\config.toml';
+    ConfigFile := edConfDir.Text + '\config.toml';
     Lines := TStringList.Create;
     try
       Lines.Add('[paths]');
       Lines.Add('libs_dir     = "' + edLibsDir.Text + '"');
-      Lines.Add('core_binary  = "' + ExpandConstant('{app}\\bin\\@@core_binary@@.exe') + '"');
-      Lines.Add('flash_binary = "' + ExpandConstant('{app}\\bin\\@@flash_binary@@.exe') + '"');
+      Lines.Add('core_binary  = "' + ExpandConstant('{app}\bin\@@core_binary@@.exe') + '"');
+      Lines.Add('flash_binary = "' + ExpandConstant('{app}\bin\@@flash_binary@@.exe') + '"');
       Lines.Add('');
       Lines.Add('[registry]');
       Lines.Add('url = "' + edRegistry.Text + '"');
       Lines.Add('');
-      Lines.Add('[features]');
-      Lines.Add('auto_update = ' + BoolStr(chkAutoUpdate.Checked, 'true', 'false'));
-      Lines.Add('telemetry   = ' + BoolStr(chkSendTelemetry.Checked, 'true', 'false'));
+      Lines.Add('[updates]');
+      Lines.Add('auto_check = ' + BoolStr(chkAutoUpdate.Checked, 'true', 'false'));
+      Lines.Add('channel = "stable"');
       Lines.SaveToFile(ConfigFile);
     finally
       Lines.Free;
     end;
-
-    // Inicio con Windows (HKCU Run)
-    if chkStartWithWindows.Checked then
-      RegWriteStringValue(HKCU,
-        'Software\\Microsoft\\Windows\\CurrentVersion\\Run',
-        '@@app_name@@IDE',
-        '"' + ExpandConstant('{app}\ide\@@ide_exe_name@@') + '"');
   end;
 end;
 
-// ─── Validación antes de proceder ──────────────────────────────────
+// ─── Validación ──────────────────────────────────────────────────────
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
@@ -1153,13 +1142,12 @@ begin
   end;
 end;
 
-// ─── Detectar si hay bundle de IDE disponible ───────────────────────
+// ─── Detectar si hay bundle de IDE disponible ─────────────────────────
 function HasIdeBundle: Boolean;
 begin
-  Result := DirExists(ExpandConstant('{app}\\ide'));
+  Result := DirExists(ExpandConstant('{app}\ide'));
 end;
 
-// ─── Inicializar valores por defecto ───────────────────────────────
 function InitializeSetup: Boolean;
 begin
   Result := True;
@@ -1257,7 +1245,7 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR WINDOWS (Inno Setup)
 # ─────────────────────────────────────────────
-def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version):
+def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64"):
     step("Creando instalador GUI Windows (Inno Setup)")
 
     # Buscar ícono
@@ -1296,7 +1284,8 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@cores_avr_dir@@": _w(cores_avr),
         "@@release_dir@@":  _w(RELEASE_DIR),
         "@@registry_url@@": REGISTRY_URL,
-        "@@ide_exe_name@@": ide_exe_name or f"{APP_NAME}.exe",  # <-- añadir esta línea
+        "@@ide_exe_name@@": ide_exe_name or f"{APP_NAME}.exe",
+        "@@platform_key@@": platform_key,
     }
     iss_content = INNO_SCRIPT
     for placeholder, value in iss_subs.items():
@@ -1446,7 +1435,14 @@ def install_ide_direct(platform_key):
 
     # Posibles directorios de instalacion — Inno Setup usa {autopf}	suki\ide    # {autopf} = C:\Program Files en admin o %LOCALAPPDATA%\Programs en usuario
     lappdata = os.environ.get("LOCALAPPDATA", "")
-    pf       = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    # PROGRAMW6432 is always the native 64-bit Program Files folder on
+    # 64-bit Windows, even when Python itself is a 32-bit process.
+    # PROGRAMFILES alone returns Program Files (x86) for 32-bit processes.
+    pf = (
+        os.environ.get("PROGRAMW6432")
+        or os.environ.get("PROGRAMFILES")
+        or r"C:\Program Files"
+    )
     exe_name = os.path.basename(exe_src)
 
     install_candidates = [
@@ -1539,8 +1535,11 @@ USAGE = """
   python tools/build.py --quick       Build dev + copia el exe directamente (sin wizard)
   python tools/build.py clean         Limpia dist/ y releases/
   python tools/build.py clean --deep  Limpia todo (incluyendo target/ y cargo)
-  python tools/build.py release       Build para todas las plataformas
-  python tools/build.py release --version X.Y.Z   Con version forzada
+  python tools/build.py release                       Build para todas las plataformas (version desde git)
+  python tools/build.py release --version 1.2.3      Forzar version explicita (recomendado para releases)
+  python tools/build.py release --version 1.2.3 --no-publish   Sólo compilar y firmar, sin crear GitHub Release
+  python tools/build.py gen-keys      Genera par de claves Ed25519 para stable y testing
+  python tools/build.py show-keys     Muestra las claves publicas actuales (para incrustar en el IDE)
 """
 
 
@@ -1549,7 +1548,10 @@ def parse_command():
 
     forced_version = None
     deep_clean     = False
-    quick          = False   # --quick: tauri dev en vez de tauri build + installer
+    quick          = False
+    channel        = "stable"
+    notes          = ""
+    no_publish     = False
 
     filtered = []
     i = 0
@@ -1563,6 +1565,19 @@ def parse_command():
         elif raw[i] == "--quick":
             quick = True
             i += 1
+        elif raw[i] == "--channel" and i + 1 < len(raw):
+            ch = raw[i + 1].lower()
+            if ch not in ("stable", "testing"):
+                error(f"Canal desconocido: {ch!r}  (usa: stable | testing)")
+                sys.exit(1)
+            channel = ch
+            i += 2
+        elif raw[i] == "--notes" and i + 1 < len(raw):
+            notes = raw[i + 1]
+            i += 2
+        elif raw[i] == "--no-publish":
+            no_publish = True
+            i += 1
         elif raw[i].startswith("--"):
             error(f"Flag desconocido: {raw[i]}")
             print(USAGE)
@@ -1573,12 +1588,12 @@ def parse_command():
 
     command = filtered[0].lower() if filtered else "dev"
 
-    if len(filtered) > 1 or command not in ("dev", "clean", "release"):
+    if len(filtered) > 1 or command not in ("dev", "clean", "release", "gen-keys", "show-keys"):
         error(f"Comando no valido: {' '.join(filtered)!r}")
         print(USAGE)
         sys.exit(1)
 
-    return command, forced_version, deep_clean, quick
+    return command, forced_version, deep_clean, quick, channel, notes, no_publish
 
 
 def _print_header(subtitle=""):
@@ -1633,7 +1648,7 @@ def _build_platforms(target_platforms, version, commit, date,
             warn(f"Sin binarios para {pk}, saltando instalador.")
             continue
 
-        numeric_version = "1.0.0.0"
+        numeric_version = _version_to_numeric(version)
 
         if "windows" in pk:
             if missing_rust:
@@ -1647,6 +1662,7 @@ def _build_platforms(target_platforms, version, commit, date,
                     ide_bundle_dir=ide_bundle,
                     ide_exe_name=ide_exe_name,
                     numeric_version=numeric_version,
+                    platform_key=pk,
                 )
         else:
             create_unix_installer(pk,
@@ -1821,8 +1837,315 @@ def cmd_dev(forced_version, quick=False):
     run_installer()
 
 
-def cmd_release(forced_version):
-    _print_header("→ release")
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GITHUB RELEASE PUBLISHING
+#
+#  Usa la CLI oficial `gh` (github.com/cli/cli) para crear la release y subir
+#  los artefactos. Si `gh` no está disponible muestra instrucciones manuales.
+#
+#  Convenciones de tags:
+#    stable   →  v1.2.3
+#    testing  →  v1.2.3-testing
+#
+#  Artefactos subidos:
+#    - Todos los .tar.gz y .exe de releases/
+#    - Los archivos .sig correspondientes (si existen)
+#    - manifest.json  ← para el fallback del endpoint /api/update/[channel]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _has_gh():
+    return shutil.which("gh") is not None
+
+
+def publish_github_release(version, channel, notes, manifest_path):
+    """Crea una GitHub Release y sube todos los artefactos.
+
+    - stable  → tag v{version}, non-prerelease
+    - testing → tag v{version}-testing, prerelease
+
+    La web en tsuki.sh/api/update/{channel} leerá esta release automáticamente.
+    No hay que hacer commit de ningún archivo al repo.
+    """
+    step(f"Publicando GitHub Release → {channel} v{version}")
+
+    if not _has_gh():
+        warn("La CLI `gh` no está instalada — salta la publicación automática.")
+        warn("Instala gh:  https://cli.github.com/")
+        warn("Luego crea la release manualmente:")
+        tag = f"v{version}" if channel == "stable" else f"v{version}-testing"
+        warn(f"  gh release create {tag} releases/* --notes {notes!r}")
+        return
+
+    tag      = f"v{version}" if channel == "stable" else f"v{version}-testing"
+    is_pre   = channel == "testing"
+    title    = f"tsuki {version}" + (" (testing)" if is_pre else "")
+    body     = notes or f"tsuki {version} {'(testing channel)' if is_pre else '(stable)'}"
+
+    # Collect all artifacts to upload
+    upload_files = []
+    if os.path.isdir(RELEASE_DIR):
+        for fname in sorted(os.listdir(RELEASE_DIR)):
+            fpath = os.path.join(RELEASE_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            # Skip previous manifests — we upload a fresh manifest.json
+            if fname.startswith("update-") and fname.endswith(".json"):
+                continue
+            upload_files.append(fpath)
+
+    # Rename / copy the manifest to manifest.json so the web API can find it
+    manifest_copy = os.path.join(RELEASE_DIR, "manifest.json")
+    if manifest_path and os.path.exists(manifest_path):
+        shutil.copy(manifest_path, manifest_copy)
+        upload_files.append(manifest_copy)
+
+    if not upload_files:
+        warn("  No hay artefactos en releases/ para subir.")
+
+    # Build gh command
+    cmd = [
+        "gh", "release", "create", tag,
+        "--title", title,
+        "--notes", body,
+    ]
+    if is_pre:
+        cmd.append("--prerelease")
+    cmd += upload_files
+
+    try:
+        run(cmd, cwd=PROJECT_ROOT)
+        info(f"GitHub Release creada → {tag}")
+        info(f"La web detectará la actualización automáticamente en ~5 min.")
+        info(f"  https://github.com/{PUBLISHER_URL.split('github.com/')[-1]}/releases/tag/{tag}")
+    except subprocess.CalledProcessError as e:
+        warn(f"gh release create falló (exit={e.returncode}).")
+        warn("Si el tag ya existe, bórralo primero:")
+        warn(f"  gh release delete {tag} --yes && git tag -d {tag}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  KEY MANAGEMENT  (Ed25519 via cryptography library or openssl fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _require_crypto():
+    """Intentar importar cryptography; sugerir instalación si falta."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey, Ed25519PublicKey,
+        )
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PublicFormat, PrivateFormat, NoEncryption,
+        )
+        return True
+    except ImportError:
+        error("La librería 'cryptography' no está instalada.")
+        error("  pip install cryptography")
+        return False
+
+
+def _key_paths(channel):
+    """Devuelve (private_pem_path, public_b64_path) para el canal dado."""
+    os.makedirs(KEYS_DIR, exist_ok=True)
+    return (
+        os.path.join(KEYS_DIR, f"{channel}_private.pem"),
+        os.path.join(KEYS_DIR, f"{channel}_public.b64"),
+    )
+
+
+def cmd_gen_keys():
+    """Genera nuevos pares de claves Ed25519 para stable y testing.
+
+    Los archivos se guardan en tools/keys/ (añade esta carpeta a .gitignore).
+    La clave pública (base64) debe incrustarse en el IDE antes de compilar
+    (constante UPDATE_PUBKEYS en SettingsScreen.tsx).
+    """
+    _print_header("→ gen-keys")
+
+    if not _require_crypto():
+        sys.exit(1)
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PublicFormat, PrivateFormat, NoEncryption,
+    )
+    import base64
+
+    for channel in ("stable", "testing"):
+        priv_path, pub_path = _key_paths(channel)
+
+        if os.path.exists(priv_path):
+            warn(f"  {channel}: clave ya existe en {priv_path} — omitiendo.")
+            warn("  Borra el archivo manualmente si quieres regenerarla.")
+            # Still show the current public key
+            if os.path.exists(pub_path):
+                with open(pub_path) as f:
+                    info(f"  {channel} public key (actual): {f.read().strip()}")
+            continue
+
+        priv = Ed25519PrivateKey.generate()
+        pub  = priv.public_key()
+
+        priv_pem = priv.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+        pub_b64  = base64.b64encode(
+            pub.public_bytes(Encoding.Raw, PublicFormat.Raw)
+        ).decode()
+
+        with open(priv_path, "wb") as f:
+            f.write(priv_pem)
+        os.chmod(priv_path, 0o600)  # owner read-only
+
+        with open(pub_path, "w") as f:
+            f.write(pub_b64)
+
+        info(f"  {channel} private key → {priv_path}")
+        info(f"  {channel} public  key → {pub_path}")
+        print(f"  {BOLD}PUBLIC KEY ({channel}):{RESET}  {pub_b64}")
+        print()
+
+    print(f"  {YELLOW}Importante:{RESET}")
+    print("  1. Añade tools/keys/ a .gitignore (NUNCA subas las claves privadas).")
+    print("  2. Copia las claves públicas a UPDATE_PUBKEYS en SettingsScreen.tsx.")
+    print("  3. Las claves privadas quedan sólo en tu máquina de build.")
+
+
+def cmd_show_keys():
+    """Muestra las claves públicas actuales (para copiarlas al IDE)."""
+    _print_header("→ show-keys")
+    for channel in ("stable", "testing"):
+        _, pub_path = _key_paths(channel)
+        if os.path.exists(pub_path):
+            with open(pub_path) as f:
+                key = f.read().strip()
+            print(f"  {BOLD}{channel}{RESET}:  {key}")
+        else:
+            warn(f"  {channel}: no hay clave pública en {pub_path}")
+            warn("  Ejecuta: python tools/build.py gen-keys")
+
+
+def _sign_file(file_path, channel):
+    """Firma file_path con la clave privada de channel y devuelve la firma base64.
+
+    Si la librería cryptography no está disponible o la clave no existe,
+    devuelve una cadena vacía (el instalador no verificará la firma).
+    """
+    if not _require_crypto():
+        return ""
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    import base64
+
+    priv_path, _ = _key_paths(channel)
+    if not os.path.exists(priv_path):
+        warn(f"  Clave privada '{channel}' no encontrada en {priv_path} — firma omitida.")
+        warn("  Ejecuta: python tools/build.py gen-keys")
+        return ""
+
+    with open(priv_path, "rb") as f:
+        priv = load_pem_private_key(f.read(), password=None)
+
+    with open(file_path, "rb") as f:
+        data = f.read()
+
+    sig = priv.sign(data)
+    return base64.b64encode(sig).decode()
+
+
+def _file_size(path):
+    """Devuelve el tamaño del archivo en bytes, o 0 si no existe."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  UPDATE MANIFEST GENERATION
+#  Genera update-stable.json y update-testing.json en releases/
+#
+#  Formato del manifiesto (compatible con el UpdateInfo de main.rs):
+#  {
+#    "version":   "1.2.3",
+#    "channel":   "stable",
+#    "pub_date":  "2025-01-01T00:00:00Z",
+#    "notes":     "Release notes aquí",
+#    "platforms": {
+#      "linux-amd64":   { "url": "...", "signature": "...", "size": 12345 },
+#      "darwin-arm64":  { ... },
+#      "windows-amd64": { ... }
+#    }
+#  }
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_update_manifests(version, date, channel="stable", notes=""):
+    """Genera update-{channel}.json con todas las plataformas disponibles en releases/.
+
+    Firma cada artefacto con la clave privada del canal si está disponible.
+    Se llama automáticamente al final de cmd_release.
+    """
+    step(f"Generando manifiesto de actualización → {channel}")
+
+    import json as _json
+
+    # Collect built artifacts from RELEASE_DIR
+    # Expected filenames (from create_unix_installer / create_windows_installer):
+    #   tsuki-{version}-{platform}.tar.gz      (Linux / macOS)
+    #   tsuki-Setup-{version}-{platform}.exe   (Windows)
+    platforms = {}
+
+    if os.path.isdir(RELEASE_DIR):
+        for fname in sorted(os.listdir(RELEASE_DIR)):
+            fpath = os.path.join(RELEASE_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            # Skip the manifest files themselves
+            if fname.startswith("update-") and fname.endswith(".json"):
+                continue
+
+            # Determine platform key from filename
+            pk = None
+            for candidate in PLATFORMS:
+                if candidate in fname:
+                    pk = candidate
+                    break
+            if pk is None:
+                continue
+
+            asset_url = f"{GITHUB_RELEASES_BASE}/v{version}/{fname}"
+            signature = _sign_file(fpath, channel)
+            platforms[pk] = {
+                "url":       asset_url,
+                "signature": signature,
+                "size":      _file_size(fpath),
+            }
+
+    if not platforms:
+        warn("  No se encontraron artefactos en releases/ para el manifiesto.")
+        warn("  El manifiesto se generará vacío — actualízalo manualmente.")
+
+    manifest = {
+        "version":   version,
+        "channel":   channel,
+        "pub_date":  date,
+        "notes":     notes or f"tsuki {version} ({channel})",
+        "platforms": platforms,
+    }
+
+    manifest_path = UPDATE_MANIFEST_STABLE if channel == "stable" else UPDATE_MANIFEST_TESTING
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        _json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    info(f"Manifiesto escrito → {os.path.basename(manifest_path)}")
+    for pk, asset in platforms.items():
+        signed = "✓ firmado" if asset["signature"] else "⚠ sin firma"
+        sz = f"{asset['size'] / 1024 / 1024:.1f} MB" if asset['size'] > 0 else "?"
+        info(f"  {pk:20s}  {sz:8s}  {signed}")
+
+    return manifest_path
+
+def cmd_release(forced_version, channel="stable", notes="", no_publish=False):
+    _print_header(f"→ release [{channel}]")
 
     warn("Esto intentara compilar para TODAS las plataformas.")
     warn("Rust solo compilara para el host (cross-compile omitido).")
@@ -1835,19 +2158,41 @@ def cmd_release(forced_version):
     clean(deep=False)
 
     version, commit, date = get_version(forced_version)
-    print(f"\n  Version : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}\n")
+    if forced_version:
+        info(f"Version forzada: {BOLD}{version}{RESET}")
+    else:
+        warn("Version derivada de git — usa --version X.Y.Z para fijarla.")
+    print(f"\n  Version : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}")
+    print(f"  Canal   : {BOLD}{channel}{RESET}\n")
 
     _build_platforms(list(PLATFORMS.keys()), version, commit, date)
     _print_summary(version)
 
+    # Generate update manifests and sign artifacts
+    manifest_path = generate_update_manifests(version, date, channel=channel, notes=notes)
+
+    # Publish to GitHub Releases — the web API reads it automatically, no commits needed
+    if not no_publish:
+        publish_github_release(version, channel, notes, manifest_path)
+    else:
+        warn("--no-publish: artefactos generados pero GitHub Release omitida.")
+
+    print()
+    info(f"Release {version} ({channel}) lista.")
+    info(f"La web tsuki.sh/api/update/{channel} detectará la nueva version en ~5 min.")
+
 
 def main():
-    command, forced_version, deep_clean, quick = parse_command()
+    command, forced_version, deep_clean, quick, channel, notes, no_publish = parse_command()
 
     if command == "clean":
         cmd_clean(deep=deep_clean)
     elif command == "release":
-        cmd_release(forced_version)
+        cmd_release(forced_version, channel=channel, notes=notes, no_publish=no_publish)
+    elif command == "gen-keys":
+        cmd_gen_keys()
+    elif command == "show-keys":
+        cmd_show_keys()
     else:
         cmd_dev(forced_version, quick=quick)
 

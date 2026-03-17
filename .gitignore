@@ -15,3 +15,4 @@ ide/public/*
 circuittest.json
 web/node_modules
 web/.next
+tools/keys

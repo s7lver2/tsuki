@@ -135,6 +135,7 @@ export default function SandboxPanel({ onClose, fullscreen = false }: { onClose?
   // ── Shared state (passed to both Canvas and Sim views) ─────────────────────
   const [probes, setProbes] = useState<WireProbe[]>([])
   const [view, setView]     = useState<View>('canvas')
+  const [confirmClear, setConfirmClear] = useState(false)
 
   // ── Hooks ──────────────────────────────────────────────────────────────────
   const { circuit, setCircuit } = useCircuit(board || 'uno')
@@ -181,7 +182,11 @@ export default function SandboxPanel({ onClose, fullscreen = false }: { onClose?
   }
 
   function clearCanvas() {
-    if (!confirm('Clear the circuit? This cannot be undone.')) return
+    setConfirmClear(true)
+  }
+
+  function confirmClearCanvas() {
+    setConfirmClear(false)
     setCircuit({ ...DEFAULT_CIRCUIT, name: circuit.name, board: circuit.board })
     sim.handleReset()
   }
@@ -244,6 +249,25 @@ export default function SandboxPanel({ onClose, fullscreen = false }: { onClose?
           </button>
         </div>
       </div>
+
+      {/* ── Inline clear confirmation ── */}
+      {confirmClear && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-[color-mix(in_srgb,var(--err)_10%,transparent)] border-b border-[var(--err)] flex-shrink-0">
+          <span className="text-xs text-[var(--err)] flex-1">Clear the circuit? This cannot be undone.</span>
+          <button
+            onClick={confirmClearCanvas}
+            className="px-2 py-0.5 text-[10px] rounded bg-[var(--err)] text-white cursor-pointer border-0 hover:opacity-80 font-medium"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => setConfirmClear(false)}
+            className="px-2 py-0.5 text-[10px] rounded bg-transparent text-[var(--fg-muted)] cursor-pointer border border-[var(--border)] hover:bg-[var(--hover)]"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* ── Views ── */}
 
