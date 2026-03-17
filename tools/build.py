@@ -40,15 +40,15 @@ BUILD_DIR      = os.path.join(PROJECT_ROOT, "dist")
 RELEASE_DIR    = os.path.join(PROJECT_ROOT, "releases")
 IDE_DIR        = os.path.join(PROJECT_ROOT, "ide")
 FLASH_DIR      = PROJECT_ROOT   # Rust crate: tsuki-core + tsuki-flash
-REGISTRY_URL   = "https://raw.githubusercontent.com/s7lver/tsuki/refs/heads/main/pkg/packages.json"
+REGISTRY_URL   = "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/packages.json"
 RELEASES_REPO_DIR = os.path.join(PROJECT_ROOT, "releases")  # also the RELEASE_DIR — json files live here too
 KEYS_DIR       = os.path.join(PROJECT_ROOT, "tools", "keys")  # NOT committed — .gitignore this
 UPDATE_MANIFEST_STABLE  = os.path.join(RELEASE_DIR, "update-stable.json")
 UPDATE_MANIFEST_TESTING = os.path.join(RELEASE_DIR, "update-testing.json")
 # GitHub raw URL base for update asset downloads (change to your own repo)
-GITHUB_RELEASES_BASE = "https://github.com/s7lver/tsuki/releases/download"
+GITHUB_RELEASES_BASE = "https://github.com/s7lver2/tsuki/releases/download"
 PUBLISHER      = "tsuki Team"
-PUBLISHER_URL  = "https://github.com/s7lver/tsuki"
+PUBLISHER_URL  = "https://github.com/s7lver2/tsuki"
 OTHER_RESIDUAL_DIRS = [
   f"{PROJECT_ROOT}/target",
   f"{PROJECT_ROOT}/dist",
@@ -1903,14 +1903,31 @@ def publish_github_release(version, channel, notes, manifest_path):
     if not upload_files:
         warn("  No hay artefactos en releases/ para subir.")
 
-    # Build gh command
+    # Ensure the tag exists locally and is pushed before calling gh.
+    # Without a pushed tag, gh silently creates the release as a draft.
+    step(f"Creando/empujando tag {tag}...")
+    subprocess.run(["git", "tag", "-f", tag], cwd=PROJECT_ROOT,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    push_result = subprocess.run(
+        ["git", "push", "origin", tag, "--force"],
+        cwd=PROJECT_ROOT, stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE, text=True,
+    )
+    if push_result.returncode != 0:
+        warn(f"  git push tag falló: {push_result.stderr.strip()}")
+        warn("  La release podría crearse como draft si el tag no existe en el remoto.")
+
+    # Build gh command — never draft, publish immediately
     cmd = [
         "gh", "release", "create", tag,
         "--title", title,
         "--notes", body,
+        "--verify-tag",
     ]
     if is_pre:
-        cmd.append("--prerelease")
+        cmd += ["--prerelease", "--latest=false"]
+    else:
+        cmd += ["--latest"]
     cmd += upload_files
 
     try:

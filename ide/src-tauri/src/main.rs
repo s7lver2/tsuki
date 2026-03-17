@@ -1466,41 +1466,37 @@ pub struct UpdateInfo {
 /// Returns the UpdateInfo if the manifest parses correctly.
 /// The frontend is responsible for comparing versions.
 #[tauri::command]
-async fn check_for_updates(channel: String, manifest_url: String) -> Result<UpdateInfo, String> {
-    // Use reqwest if available, otherwise fall back to std (no TLS) — for now
-    // we shell out to the OS HTTP client via a simple approach.
-    // In production you would add reqwest = { features = ["json","rustls-tls"] }.
-    //
-    // Since reqwest is not yet in Cargo.toml we use tauri's HTTP via Command.
-    let output = tokio::process::Command::new(if cfg!(windows) { "powershell" } else { "curl" })
-        .args(if cfg!(windows) {
-            vec!["-Command".to_string(), format!("(Invoke-WebRequest -Uri '{}' -UseBasicParsing).Content", manifest_url)]
-        } else {
-            vec!["-fsSL".to_string(), manifest_url.clone()]
-        })
-        .output()
-        .await
-        .map_err(|e| format!("HTTP fetch failed: {e}"))?;
+async fn check_for_updates(_channel: String, manifest_url: String) -> Result<UpdateInfo, String> {
+    // Use tauri's built-in HTTP client so no visible terminal window appears
+    // on Windows. The old powershell/curl subprocess approach opened a console.
+    let client = tauri::api::http::ClientBuilder::new()
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Manifest fetch error ({}): {}", manifest_url, stderr.trim()));
-    }
+    let request = tauri::api::http::HttpRequestBuilder::new("GET", &manifest_url)
+        .map_err(|e| format!("Request build error: {e}"))?
+        .header("Accept", "application/json")
+        .map_err(|e| format!("Header error: {e}"))?;
 
-    let body = String::from_utf8_lossy(&output.stdout);
-    let info: UpdateInfo = serde_json::from_str(&body)
-        .map_err(|e| format!("Manifest parse error: {e}\nBody: {}", &body[..body.len().min(200)]))?;
+    let response = client.send(request).await
+        .map_err(|e| format!("Manifest fetch error ({}): {e}", manifest_url))?;
+
+    let body = response.bytes().await
+        .map_err(|e| format!("Response read error: {e}"))?;
+
+    let info: UpdateInfo = serde_json::from_slice(&body.data)
+        .map_err(|e| {
+            let preview = String::from_utf8_lossy(&body.data[..body.data.len().min(200)]);
+            format!("Manifest parse error: {e}\nBody: {preview}")
+        })?;
 
     Ok(info)
 }
 
 /// Download and apply an update. After a successful install the app is
 /// restarted. The frontend shows progress via the `update_progress` event.
-/// NOTE: Full delta-patch logic lives here in production; this implementation
-/// downloads the installer/tarball and runs it.
 #[tauri::command]
 async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
-    // Determine current platform key (must match the key used in build.py)
     let platform_key = {
         let os = if cfg!(target_os = "windows") { "windows" }
                  else if cfg!(target_os = "macos") { "darwin" }
@@ -1515,48 +1511,48 @@ async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
     window.emit("update_progress", serde_json::json!({ "stage": "downloading", "platform": platform_key }))
         .map_err(|e| e.to_string())?;
 
-    // Download to a temp file
+    // Download via tauri HTTP client — no console window
+    let client = tauri::api::http::ClientBuilder::new()
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let request = tauri::api::http::HttpRequestBuilder::new("GET", &asset.url)
+        .map_err(|e| format!("Request build error: {e}"))?;
+
+    let response = client.send(request).await
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    let bytes = response.bytes().await
+        .map_err(|e| format!("Download read error: {e}"))?;
+
     let tmp_dir  = std::env::temp_dir();
     let filename = asset.url.split('/').last().unwrap_or("tsuki-update");
     let tmp_path = tmp_dir.join(filename);
 
-    let dl_status = tokio::process::Command::new(if cfg!(windows) { "powershell" } else { "curl" })
-        .args(if cfg!(windows) {
-            vec![
-                "-Command".to_string(),
-                format!("Invoke-WebRequest -Uri '{}' -OutFile '{}'", asset.url, tmp_path.display()),
-            ]
-        } else {
-            vec!["-fsSL".to_string(), asset.url.clone(), "-o".to_string(), tmp_path.to_string_lossy().into_owned()]
-        })
-        .status()
-        .await
-        .map_err(|e| format!("Download failed: {e}"))?;
-
-    if !dl_status.success() {
-        return Err(format!("Download of {} failed", asset.url));
-    }
+    std::fs::write(&tmp_path, &bytes.data)
+        .map_err(|e| format!("Failed to save download to {}: {e}", tmp_path.display()))?;
 
     window.emit("update_progress", serde_json::json!({ "stage": "installing" }))
         .map_err(|e| e.to_string())?;
 
-    // Launch installer / tarball and restart
+    // Launch installer with CREATE_NO_WINDOW — no terminal appears
     #[cfg(windows)]
     {
-        tokio::process::Command::new(&tmp_path)
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new(&tmp_path)
             .arg("/SILENT")
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Installer launch failed: {e}"))?;
     }
     #[cfg(unix)]
     {
-        // For tar.gz: extract to a temp dir and run install.sh
+        // For tar.gz: extract and run install.sh in the background
         let extract_dir = tmp_dir.join("tsuki-update-extract");
         let _ = std::fs::create_dir_all(&extract_dir);
-        tokio::process::Command::new("tar")
+        std::process::Command::new("tar")
             .args(["xzf", &tmp_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
             .status()
-            .await
             .map_err(|e| format!("tar extraction failed: {e}"))?;
         let install_sh = extract_dir.read_dir()
             .map_err(|e| e.to_string())?
@@ -1564,7 +1560,7 @@ async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
             .find(|e| e.file_name() == "install.sh")
             .map(|e| e.path())
             .ok_or("install.sh not found in update archive")?;
-        tokio::process::Command::new("bash")
+        std::process::Command::new("bash")
             .arg(install_sh)
             .arg("-y")
             .spawn()

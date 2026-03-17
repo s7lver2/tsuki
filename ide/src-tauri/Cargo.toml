@@ -39,6 +39,7 @@ tauri = { version = "1.6", features = [
   "window-unmaximize",
   "window-unminimize",
   "window-start-dragging",
+  "http-all",
 ] }
 tsuki_core  = { path = "../../", package = "tsuki" }
 serde       = { version = "1", features = ["derive"] }

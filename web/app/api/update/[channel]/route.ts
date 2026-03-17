@@ -19,7 +19,7 @@ import { NextRequest, NextResponse } from "next/server";
 //  Env vars (set in Vercel / your host):
 //    GITHUB_TOKEN  — optional but recommended to avoid rate limits (5000 req/h
 //                    authenticated vs 60 req/h anonymous).
-//    GITHUB_REPO   — override the repo slug (default: s7lver/tsuki)
+//    GITHUB_REPO   — override the repo slug (default: s7lver2/tsuki)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REPO    = process.env.GITHUB_REPO ?? "s7lver2/tsuki";
