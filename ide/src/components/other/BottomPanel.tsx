@@ -286,7 +286,15 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
     // Fix: always spawn the shell with cwd=null (its default home dir), then
     // send an initial `cd` command once the shell is ready. This is the same
     // pattern used by VS Code's integrated terminal.
-    const rawCwd = projectPath ?? undefined
+    //
+    // IMPORTANT: the store uses forward-slash paths (pathJoin returns '/').
+    // cmd.exe / PowerShell on Windows require backslashes for cd to work
+    // reliably — forward slashes inside quoted paths confuse the drive-relative
+    // cd parser and produce error 123 ("nombre de archivo... no son correctos").
+    // We normalise to backslashes before building any cd command.
+    const toNativePath = (p: string) =>
+      p.replace(/\//g, '\\')
+    const rawCwd = projectPath ? toNativePath(projectPath) : undefined
     const cols = 220, rows = 40
 
     ;(async () => {
@@ -331,18 +339,13 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
         // After the shell starts, cd into the project directory.
         // We wait a short tick so the shell prompt is ready before we write.
         if (rawCwd) {
+          // rawCwd already has native OS separators (backslashes on Windows).
           const cdCmd = (() => {
             switch (shell.id) {
               case 'cmd':        return `cd /d "${rawCwd}"
 `
               case 'powershell':
               case 'pwsh':       return `Set-Location -LiteralPath '${rawCwd}'
-`
-              case 'bash':
-              case 'git-bash':
-              case 'zsh':
-              case 'fish':
-              case 'sh':         return `cd ${JSON.stringify(rawCwd)}
 `
               default:           return `cd ${JSON.stringify(rawCwd)}
 `
@@ -392,21 +395,29 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
     if (!projectPath) return
     if (projectPath === lastCdPathRef.current) return
 
+    // Normalise separators: store uses '/', shells on Windows need '\'
+    const nativePath = projectPath.replace(/\//g, '\\')
+
     const sendCd = () => {
       if (!readyRef.current) return
       // Verify the path exists before trying to cd — avoids the
       // "El nombre de archivo..." error when a project path is stale or
       // the directory hasn't been created yet.
       pathExists(projectPath).then(exists => {
-        if (!exists) return
+        if (!exists) {
+          // Path doesn't exist — show a warning in the terminal instead of
+          // silently staying in TEMP.
+          push(`⚠ Project directory not found: ${nativePath}`, 'system')
+          return
+        }
         lastCdPathRef.current = projectPath
         const shell  = session.shell
         const cdCmd  = (() => {
           switch (shell.id) {
-            case 'cmd':        return `cd /d "${projectPath}"\r\n`
+            case 'cmd':        return `cd /d "${nativePath}"\r\n`
             case 'powershell':
-            case 'pwsh':       return `Set-Location -LiteralPath '${projectPath}'\r\n`
-            default:           return `cd ${JSON.stringify(projectPath)}\r\n`
+            case 'pwsh':       return `Set-Location -LiteralPath '${nativePath}'\r\n`
+            default:           return `cd ${JSON.stringify(nativePath)}\n`
           }
         })()
         ptyWrite(ptyIdRef.current, cdCmd).catch(() => {})

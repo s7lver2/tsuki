@@ -168,11 +168,26 @@ export default function IdeScreen() {
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [resizingSidebar]) // eslint-disable-line
 
+
+  // Adaptive sidebar: auto-collapse when window narrower than threshold
+  useEffect(() => {
+    if (!settings.adaptiveSidebar) return
+    const threshold = settings.minWindowWidth ?? 1024
+    function check() {
+      if (window.innerWidth < threshold) {
+        useStore.setState({ sidebarOpen: false })
+      }
+    }
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [settings.adaptiveSidebar, settings.minWindowWidth]) // eslint-disable-line
+
   return (
     <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
 
       {/* ── Topbar ── */}
-      <div className="h-10 flex items-center gap-1 px-3 border-b border-[var(--border)] flex-shrink-0 bg-[var(--surface-1)]">
+      <div className="topbar flex items-center gap-1 px-2 border-b border-[var(--border)] flex-shrink-0 bg-[var(--surface-1)]">
 
         <div className="flex items-center gap-2 mr-1 min-w-0 max-w-[240px]">
           <TsukiLogo size="sm" />
@@ -203,19 +218,19 @@ export default function IdeScreen() {
         {projectLanguage === 'go' && (
           <Btn variant="ghost" size="xs" onClick={handleCheck}
             title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
-            <Check size={12} /> {t('topbar.check')}
+            <Check size={12} /><span className="topbar-label ml-1">{t('topbar.check')}</span>
           </Btn>
         )}
 
         <Btn variant="ghost" size="xs" onClick={handleBuild}
           title={`${tsuki} build --compile${board ? ' --board ' + board : ''}`}>
-          <Zap size={12} /> {t('topbar.build')}
+          <Zap size={12} /><span className="topbar-label ml-1">{t('topbar.build')}</span>
         </Btn>
 
         <Btn variant="ghost" size="xs" onClick={handleFlash}
           title={`${tsuki} flash${board ? ' --board ' + board : ''}`}
           className="!text-green-400 hover:!text-green-400">
-          <Upload size={12} /> {t('topbar.flash')}
+          <Upload size={12} /><span className="topbar-label ml-1">{t('topbar.flash')}</span>
         </Btn>
 
         <button
@@ -230,7 +245,7 @@ export default function IdeScreen() {
 
         <Btn variant="ghost" size="xs" onClick={handleMonitor}
           title={`${tsuki} monitor${settings.defaultBaud !== '9600' ? ' --baud ' + settings.defaultBaud : ''}`}>
-          <Terminal size={12} /> {t('topbar.monitor')}
+          <Terminal size={12} /><span className="topbar-label-sm ml-1">{t('topbar.monitor')}</span>
         </Btn>
 
         <div className="flex-1" />

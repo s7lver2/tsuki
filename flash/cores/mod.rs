@@ -171,11 +171,24 @@ pub fn ensure_arch(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths>
     }
 
     // Slow path: auto-install.
+    // Always print the download attempt — this is the first visible feedback
+    // when the SDK is missing (especially important on first use of a new board).
     println!(
-        "{} Core '{}' not found — installing via tsuki-modules…",
+        "{} Core '{}' not found — downloading via tsuki-modules…",
         "→".cyan().bold(), arch.bold()
     );
-    install(arch, verbose)?;
+    println!("  (this happens once; subsequent builds will be fast)");
+
+    match install(arch, verbose) {
+        Ok(()) => {},
+        Err(e) => {
+            // Don't propagate immediately — fall through to arduino15 fallback
+            // in sdk::resolve(). We print the warning here so the user knows
+            // the auto-download failed even if arduino15 ends up working.
+            eprintln!("  {} tsuki-modules install failed for {}: {}", "⚠".yellow(), arch, e);
+            return Err(e);
+        }
+    }
 
     crate::sdk::scan_tsuki_modules(&root, arch, variant)
         .ok_or_else(|| FlashError::SdkNotFound {

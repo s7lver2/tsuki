@@ -1460,47 +1460,59 @@ pub struct UpdateInfo {
     pub pub_date:  String,
     pub notes:     String,
     pub platforms: std::collections::HashMap<String, PlatformAsset>,
+    /// If set, the IDE will re-show the onboarding wizard when updating
+    /// to this version (stored in settings.forcedOnboardingVersion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_onboarding_version: Option<String>,
+    /// If set, the IDE will show the What's New popup for this version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whats_new_version: Option<String>,
+    /// JSON-encoded array of ChangelogEntry ({type, text}) for the popup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whats_new_changelog: Option<String>,
 }
 
 /// Fetch the update manifest for `channel` from `manifest_url`.
-/// Returns the UpdateInfo if the manifest parses correctly.
-/// The frontend is responsible for comparing versions.
+/// Uses reqwest with rustls — no subprocess, no console window.
 #[tauri::command]
 async fn check_for_updates(_channel: String, manifest_url: String) -> Result<UpdateInfo, String> {
-    // Use tauri's built-in HTTP client so no visible terminal window appears
-    // on Windows. The old powershell/curl subprocess approach opened a console.
-    let client = tauri::api::http::ClientBuilder::new()
+    let client = reqwest::Client::builder()
+        .user_agent("tsuki-ide-updater")
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    let request = tauri::api::http::HttpRequestBuilder::new("GET", &manifest_url)
-        .map_err(|e| format!("Request build error: {e}"))?
+    let response = client.get(&manifest_url)
         .header("Accept", "application/json")
-        .map_err(|e| format!("Header error: {e}"))?;
-
-    let response = client.send(request).await
+        .send().await
         .map_err(|e| format!("Manifest fetch error ({}): {e}", manifest_url))?;
 
-    let body = response.bytes().await
-        .map_err(|e| format!("Response read error: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Manifest fetch returned {}: {}", response.status(), manifest_url));
+    }
 
-    let info: UpdateInfo = serde_json::from_slice(&body.data)
-        .map_err(|e| {
-            let preview = String::from_utf8_lossy(&body.data[..body.data.len().min(200)]);
-            format!("Manifest parse error: {e}\nBody: {preview}")
-        })?;
+    let info: UpdateInfo = response.json().await
+        .map_err(|e| format!("Manifest parse error: {e}"))?;
 
     Ok(info)
 }
 
-/// Download and apply an update. After a successful install the app is
-/// restarted. The frontend shows progress via the `update_progress` event.
+/// Returns the current app version from Cargo.toml so the frontend can
+/// compare it against the manifest version to decide what to show.
 #[tauri::command]
-async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Download and apply an update.
+/// Emits update_progress events: { stage, pct?, total?, downloaded? }
+///   stage = "downloading" | "installing" | "done"
+/// After the installer exits the app is relaunched via AppHandle::restart.
+#[tauri::command]
+async fn apply_update(app: tauri::AppHandle, window: Window, info: UpdateInfo) -> Result<(), String> {
     let platform_key = {
-        let os = if cfg!(target_os = "windows") { "windows" }
-                 else if cfg!(target_os = "macos") { "darwin" }
-                 else { "linux" };
+        let os   = if cfg!(target_os = "windows") { "windows" }
+                   else if cfg!(target_os = "macos") { "darwin" }
+                   else { "linux" };
         let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
         format!("{}-{}", os, arch)
     };
@@ -1508,37 +1520,64 @@ async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
     let asset = info.platforms.get(&platform_key)
         .ok_or_else(|| format!("No asset for platform '{platform_key}' in update manifest"))?;
 
-    window.emit("update_progress", serde_json::json!({ "stage": "downloading", "platform": platform_key }))
-        .map_err(|e| e.to_string())?;
+    let total_bytes = asset.size;  // 0 if unknown
 
-    // Download via tauri HTTP client — no console window
-    let client = tauri::api::http::ClientBuilder::new()
+    window.emit("update_progress", serde_json::json!({
+        "stage": "downloading", "platform": &platform_key,
+        "pct": 0, "downloaded": 0, "total": total_bytes
+    })).map_err(|e| e.to_string())?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("tsuki-ide-updater")
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    let request = tauri::api::http::HttpRequestBuilder::new("GET", &asset.url)
-        .map_err(|e| format!("Request build error: {e}"))?;
+    let response = client.get(&asset.url)
+        .send().await
+        .map_err(|e| format!("Download failed ({}): {e}", asset.url))?;
 
-    let response = client.send(request).await
-        .map_err(|e| format!("Download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Download returned {}: {}", response.status(), asset.url));
+    }
 
-    let bytes = response.bytes().await
-        .map_err(|e| format!("Download read error: {e}"))?;
+    // Stream the response body so we can emit progress events
+    use futures_util::StreamExt;
+    let content_length = response.content_length().unwrap_or(total_bytes);
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(content_length as usize);
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download stream error: {e}"))?;
+        downloaded += chunk.len() as u64;
+        buf.extend_from_slice(&chunk);
+
+        let pct = if content_length > 0 {
+            (downloaded * 100 / content_length).min(100)
+        } else { 0 };
+
+        window.emit("update_progress", serde_json::json!({
+            "stage": "downloading",
+            "pct": pct,
+            "downloaded": downloaded,
+            "total": content_length,
+        })).ok();
+    }
 
     let tmp_dir  = std::env::temp_dir();
     let filename = asset.url.split('/').last().unwrap_or("tsuki-update");
     let tmp_path = tmp_dir.join(filename);
 
-    std::fs::write(&tmp_path, &bytes.data)
-        .map_err(|e| format!("Failed to save download to {}: {e}", tmp_path.display()))?;
+    std::fs::write(&tmp_path, &buf)
+        .map_err(|e| format!("Failed to save to {}: {e}", tmp_path.display()))?;
 
-    window.emit("update_progress", serde_json::json!({ "stage": "installing" }))
+    window.emit("update_progress", serde_json::json!({"stage": "installing", "pct": 100}))
         .map_err(|e| e.to_string())?;
 
-    // Launch installer with CREATE_NO_WINDOW — no terminal appears
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // /RESTARTAPPLICATIONS is not used here — we restart via AppHandle below
         std::process::Command::new(&tmp_path)
             .arg("/SILENT")
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
@@ -1547,29 +1586,34 @@ async fn apply_update(window: Window, info: UpdateInfo) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
-        // For tar.gz: extract and run install.sh in the background
         let extract_dir = tmp_dir.join("tsuki-update-extract");
         let _ = std::fs::create_dir_all(&extract_dir);
         std::process::Command::new("tar")
-            .args(["xzf", &tmp_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
+            .args(["xzf", tmp_path.to_str().unwrap_or(""), "-C", extract_dir.to_str().unwrap_or("")])
             .status()
-            .map_err(|e| format!("tar extraction failed: {e}"))?;
+            .map_err(|e| format!("tar failed: {e}"))?;
         let install_sh = extract_dir.read_dir()
             .map_err(|e| e.to_string())?
             .filter_map(|e| e.ok())
             .find(|e| e.file_name() == "install.sh")
             .map(|e| e.path())
-            .ok_or("install.sh not found in update archive")?;
+            .ok_or("install.sh not found in archive")?;
         std::process::Command::new("bash")
-            .arg(install_sh)
-            .arg("-y")
+            .arg(&install_sh).arg("-y")
             .spawn()
-            .map_err(|e| format!("install.sh launch failed: {e}"))?;
+            .map_err(|e| format!("install.sh failed: {e}"))?;
     }
 
-    // Give installer a moment then quit this process
-    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-    std::process::exit(0);
+    window.emit("update_progress", serde_json::json!({"stage": "done", "pct": 100}))
+        .ok();
+
+    // Wait for the installer to start, then restart this process.
+    // On Windows the installer runs SILENT in the background and replaces
+    // the binary; on Unix install.sh does the same. Either way we relaunch
+    // so the user lands on the fresh version immediately.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tauri::api::process::restart(&app.env());
+    unreachable!() // restart() terminates the process
 }
 
 
@@ -1808,6 +1852,7 @@ fn main() {
             pty_session::pty_kill,
             check_for_updates,
             apply_update,
+            get_app_version,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

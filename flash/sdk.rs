@@ -47,14 +47,18 @@ pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
     match crate::cores::ensure_arch(arch, variant, verbose) {
         Ok(paths) => return Ok(paths),
         Err(e) => {
-            if verbose {
-                eprintln!("  [sdk] tsuki-modules unavailable ({}), trying .arduino15…", e);
-            }
+            eprintln!("  {} tsuki-modules unavailable for '{}': {}", "⚠".yellow(), arch, e);
+            eprintln!("  Falling back to arduino-cli package cache…");
         }
     }
 
     // ── 3. arduino-cli package cache (fallback) ────────────────────────────
     let arduino15_dirs = arduino15_candidates();
+    if verbose {
+        for d in &arduino15_dirs {
+            eprintln!("  [sdk] checking arduino15: {}", d.display());
+        }
+    }
     for base in &arduino15_dirs {
         if let Some(paths) = scan_arduino15(base, arch, variant) {
             return Ok(paths);
@@ -104,8 +108,23 @@ pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
 /// All candidate arduino15 base dirs on the current OS.
 fn arduino15_candidates() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+
+    // ── Windows ──────────────────────────────────────────────────────────────
+    // LOCALAPPDATA\Arduino15 is the standard path for Arduino IDE 2.x on Windows
+    // and must be checked unconditionally — not gated behind HOME/USERPROFILE.
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(&local).join("Arduino15"));
+        }
+        // arduino-cli also uses LOCALAPPDATA\Arduino15 but sometimes APPDATA
+        if let Ok(roaming) = std::env::var("APPDATA") {
+            dirs.push(PathBuf::from(&roaming).join("Arduino15"));
+        }
+    }
+
     if let Some(home) = dirs_home() {
-        // Standard
+        // Standard Linux/macOS
         dirs.push(home.join(".arduino15"));
         // Snap on Ubuntu
         dirs.push(home.join("snap/arduino/current/.arduino15"));
@@ -116,11 +135,6 @@ fn arduino15_candidates() -> Vec<PathBuf> {
         // macOS
         #[cfg(target_os = "macos")]
         dirs.push(home.join("Library/Arduino15"));
-        // Windows
-        #[cfg(target_os = "windows")]
-        if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            dirs.push(PathBuf::from(local).join("Arduino15"));
-        }
     }
     dirs
 }

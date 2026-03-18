@@ -1,6 +1,6 @@
 [package]
 name = "tsuki-ide"
-version = "0.1.0"
+version = "5.1.1"
 description = "tsuki IDE — Write Go, Flash Arduino"
 authors = ["s7lver"]
 license = "MIT"
@@ -39,8 +39,9 @@ tauri = { version = "1.6", features = [
   "window-unmaximize",
   "window-unminimize",
   "window-start-dragging",
-  "http-all",
 ] }
+reqwest  = { version = "0.11", features = ["json", "rustls-tls", "stream"], default-features = false }
+futures-util = "0.3"
 tsuki_core  = { path = "../../", package = "tsuki" }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"

@@ -1,6 +1,6 @@
 'use client'
 import { create } from 'zustand'
-import { applyTheme, applyUiScale, applyFontRendering } from './themes'
+import { applyTheme, applyUiScale, applyFontRendering, applyCompactMode } from './themes'
 
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
@@ -123,6 +123,14 @@ export interface SettingsState {
   autoCheckUpdates: boolean
   lastUpdateCheck: number | null    // unix ms
   lastSeenVersion: string | null    // last version the user dismissed
+  /** If set, forces re-show of onboarding when this version > tsuki-onboarding-version in localStorage */
+  forcedOnboardingVersion: string | null
+  /** If set, shows a What's New popup for this version (major updates) */
+  whatsNewVersion: string | null
+  /** JSON-encoded changelog entries for the What's New popup */
+  whatsNewChangelog: string | null
+  /** User's selected plan */
+  plan: 'normal' | 'pro'
   // ── Editor ───────────────────────────────────────────────────────────────
   fontSize: number
   tabSize: number
@@ -163,6 +171,10 @@ export interface SettingsState {
   docsLang: 'en' | 'es'
   // ── Advanced ─────────────────────────────────────────────────────────────
   fontRendering: 'auto' | 'crisp' | 'smooth' | 'subpixel'
+  compactMode: boolean          // tighter spacing, smaller topbar
+  topbarLabels: boolean         // show text labels on topbar action buttons
+  adaptiveSidebar: boolean      // auto-collapse sidebar below minWindowWidth
+  minWindowWidth: number        // px threshold for auto-sidebar collapse
   tsukiFlashPath: string
   insertSpaces: boolean
   autoCloseBrackets: boolean
@@ -369,6 +381,10 @@ const DEFAULT_SETTINGS: SettingsState = {
   autoCheckUpdates: true,
   lastUpdateCheck: null,
   lastSeenVersion: null,
+  forcedOnboardingVersion: null,
+  whatsNewVersion: null,
+  whatsNewChangelog: null,
+  plan: 'normal',
   fontSize: 13,
   tabSize: 2,
   minimap: false,
@@ -432,6 +448,10 @@ const DEFAULT_SETTINGS: SettingsState = {
   language: 'en',
   docsLang: 'en',
   fontRendering: 'auto',
+  compactMode: false,
+  topbarLabels: true,
+  adaptiveSidebar: true,
+  minWindowWidth: 1024,
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -972,6 +992,9 @@ export const useStore = create<AppState>((set, get) => ({
         if (key === 'uiScale') {
           applyUiScale(value as number)
         }
+        if (key === 'compactMode') {
+          applyCompactMode(value as boolean)
+        }
         if (key === 'fontRendering') {
           applyFontRendering(value as 'auto' | 'crisp' | 'smooth' | 'subpixel')
         }
@@ -1114,6 +1137,7 @@ if (typeof window !== 'undefined') {
           applyTheme(merged.ideTheme, merged.syntaxTheme)
           applyUiScale(merged.uiScale)
           applyFontRendering(merged.fontRendering)
+          applyCompactMode(merged.compactMode ?? false)
           // Sync legacy theme flag
           const { IDE_THEMES } = require('./themes') as typeof import('./themes')
           const base = IDE_THEMES.find(t => t.id === merged.ideTheme)?.base ?? 'dark'

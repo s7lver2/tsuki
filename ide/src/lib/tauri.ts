@@ -678,6 +678,12 @@ export interface UpdateInfo {
   pub_date: string
   notes: string
   platforms: Record<string, { url: string; signature: string; size: number }>
+  /** If set, the IDE re-shows the onboarding wizard when updating to this version */
+  forced_onboarding_version?: string
+  /** If set, the IDE shows the What's New popup for this version */
+  whats_new_version?: string
+  /** JSON array of ChangelogEntry ({type, text}) for the What's New popup */
+  whats_new_changelog?: string
 }
 
 /**
@@ -699,4 +705,11 @@ export async function checkForUpdates(
 export async function applyUpdate(info: UpdateInfo): Promise<void> {
   if (!isTauri()) throw new Error('applyUpdate: not in Tauri')
   return invoke<void>('apply_update', { info })
+}
+
+
+/** Returns the current app version from Cargo.toml (e.g. "5.1.0"). */
+export async function getAppVersion(): Promise<string> {
+  if (!isTauri()) return '0.0.0'
+  return invoke<string>('get_app_version')
 }

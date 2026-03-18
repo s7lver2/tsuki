@@ -280,3 +280,7 @@ export function applyFontRendering(mode: 'auto' | 'crisp' | 'smooth' | 'subpixel
   s['webkitFontSmoothing'] = smoothing[mode]
   s['MozOsxFontSmoothing'] = mode === 'smooth' ? 'grayscale' : mode === 'subpixel' ? 'auto' : ''
 }
+
+export function applyCompactMode(compact: boolean): void {
+  document.documentElement.setAttribute('data-compact', compact ? 'true' : 'false')
+}

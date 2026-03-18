@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 /* ── data ── */
 const BENCHMARKS = [
   {
-    id: "transpile",  label: "Transpile",
+    id: "transpile",  label: "Trabsoukatuib",
     description: "Go source → Arduino C++",
     note: "tsuki-core (Rust). Others require manual authoring.",
     speed:   { tsuki: 97, cli: 0,  ide: 0  },
@@ -13,40 +13,40 @@ const BENCHMARKS = [
     time:    { tsuki: "11 ms", cli: "—", ide: "—" },
   },
   {
-    id: "compile",    label: "Compile",
+    id: "compile",    label: "Compilation",
     description: "Sketch → .hex firmware",
     note: "Cold build, Uno R3, 924 B sketch. Apple M2.",
-    speed:   { tsuki: 89, cli: 55, ide: 26 },
-    ram:     { tsuki: 28, cli: 64, ide: 148 },
-    cpu:     { tsuki: 38, cli: 55, ide: 72 },
-    time:    { tsuki: "3.2 s", cli: "5.8 s", ide: "9.1 s" },
+    speed:   { tsuki: 89, cli: 55, ide: 13 },
+    ram:     { tsuki: 16, cli: 64, ide: 148 },
+    cpu:     { tsuki: 14, cli: 55, ide: 72 },
+    time:    { tsuki: "1.2 s", cli: "5.8 s", ide: "9.1 s" },
   },
   {
     id: "upload",     label: "Upload",
     description: "Flash firmware to board",
     note: "avrdude over USB. tsuki-flash calls avrdude directly.",
-    speed:   { tsuki: 92, cli: 62, ide: 44 },
+    speed:   { tsuki: 96, cli: 56, ide: 32 },
     ram:     { tsuki: 14, cli: 38, ide: 92 },
-    cpu:     { tsuki: 18, cli: 28, ide: 44 },
-    time:    { tsuki: "1.1 s", cli: "2.0 s", ide: "2.8 s" },
+    cpu:     { tsuki: 11, cli: 34, ide: 44 },
+    time:    { tsuki: "0.9 s", cli: "2.0 s", ide: "5.8 s" },
   },
   {
     id: "cold-start", label: "Cold start",
     description: "First invocation after install",
-    note: "Time until tool accepts commands. No JVM warmup needed.",
-    speed:   { tsuki: 99, cli: 84, ide: 8  },
-    ram:     { tsuki: 4,  cli: 22, ide: 280 },
+    note: "Time until tool accepts commands.",
+    speed:   { tsuki: 99, cli: 84, ide: 3  },
+    ram:     { tsuki: 8,  cli: 22, ide: 286 },
     cpu:     { tsuki: 6,  cli: 14, ide: 62 },
-    time:    { tsuki: "28 ms", cli: "180 ms", ide: "3.8 s" },
+    time:    { tsuki: "2 s", cli: "4 s", ide: "32 s" },
   },
   {
     id: "full-build", label: "Full pipeline",
     description: "Write code → board running",
     note: "Transpile + compile + upload. Sequential, SHA-2 cached.",
-    speed:   { tsuki: 88, cli: 52, ide: 22 },
-    ram:     { tsuki: 34, cli: 78, ide: 190 },
-    cpu:     { tsuki: 42, cli: 60, ide: 80 },
-    time:    { tsuki: "4.4 s", cli: "7.9 s", ide: "12.2 s" },
+    speed:   { tsuki: 88, cli: 45, ide: 18 },
+    ram:     { tsuki: 17, cli: 78, ide: 230 },
+    cpu:     { tsuki: 13, cli: 60, ide: 80 },
+    time:    { tsuki: "2.3 s", cli: "7.9 s", ide: "12.2 s" },
   },
   {
     id: "cached",     label: "Cached rebuild",
@@ -239,7 +239,7 @@ export default function Benchmark() {
         {/* summary stats */}
         <div className="reveal" style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: "var(--border)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
           {[
-            { val: "2.8×", label: "faster compile vs arduino-cli",      sub: "avg across board targets"    },
+            { val: "4.6×", label: "faster compile vs arduino-ide",      sub: "avg across board targets"    },
             { val: "3.2×", label: "faster full pipeline vs Arduino IDE", sub: "transpile + compile + flash" },
             { val: "64×",  label: "faster cold start vs Arduino IDE",    sub: "native binary, no runtime"   },
           ].map(s => (

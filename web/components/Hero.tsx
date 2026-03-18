@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 
-const WORDS = ["firmware", "sketches", "libraries", "projects"];
+const WORDS = ["Go", "Rust", "C++", "C", "Python", "Java", "Javascript"];
 
 type OS = "unix" | "windows";
 
@@ -122,19 +122,19 @@ export default function Hero() {
 
         <div className="badge animate-up" style={{ marginBottom: 36, animationDelay: "0.05s" }}>
           <span className="led led-green" />
-          Open Beta · v6.0
+          DEMO SOON · v5.1
         </div>
 
         <h1 className="t-display animate-up" style={{ textAlign: "center", animationDelay: "0.12s" }}>
-          Arduino{" "}
+          Building Arduino in {" "}
           <span style={{ color: "var(--accent)", display: "inline-block", transition: "opacity 0.28s", opacity: fade ? 1 : 0 }}>
             {WORDS[wordIdx]}
           </span>
-          {" "}in anything.
+          {" "}
         </h1>
 
         <p className="t-body animate-up" style={{ textAlign: "center", maxWidth: 500, marginTop: 24, fontSize: 16, animationDelay: "0.22s" }}>
-          write code in the language you want, we take care of the rest. Transpilation toolchain with native librarie support
+          write code in the language you want, we take care of the rest. Transpilation toolchain with native library support
         </p>
 
         <div className="animate-up" style={{ display: "flex", gap: 10, marginTop: 36, flexWrap: "wrap", justifyContent: "center", animationDelay: "0.32s" }}>
@@ -175,10 +175,10 @@ export default function Hero() {
         {/* stats */}
         <div className="animate-up" style={{ display: "flex", gap: 52, marginTop: 68, animationDelay: "0.52s", flexWrap: "wrap", justifyContent: "center" }}>
           {[
-            { val: "~11ms", label: "Transpile"               },
-            { val: "3.2×",  label: "Faster than arduino-cli" },
-            { val: "14+",   label: "Target boards"           },
-            { val: "0",     label: "Dependencies"            },
+            { val: "~11ms", label: "Transpile"              },
+            { val: "~1s",  label: "Compilation"             },
+            { val: "~20MB",   label: "Disk Space"           },
+            { val: "14+",     label: "Boards"               },
           ].map(s => (
             <div key={s.label} style={{ textAlign: "center" }}>
               <div style={{ fontFamily: "var(--f-sans)", fontSize: 22, fontWeight: 700, letterSpacing: "-0.04em", color: "var(--fg)" }}>{s.val}</div>

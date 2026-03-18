@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "tsuki — Write Arduino firmware in Go",
+  title: "Tsuki",
   description:
-    "A complete toolkit for Arduino development. Transpile Go to C++, compile without arduino-cli, and flash your boards from a beautiful IDE.",
+    "Your next favourite IDE",
   keywords: ["arduino", "go", "firmware", "transpiler", "IDE", "embedded"],
   openGraph: {
     title: "tsuki — Write Arduino firmware in Go",

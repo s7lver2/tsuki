@@ -208,39 +208,39 @@ function VisualSimulator() {
 const FEATURES = [
   {
     n:"01", accent:"var(--ok)",      tag:"Rust · tsuki-core",
-    title:"Go → C++ Transpiler",
+    title:"Native Transpilation",
     visual:<VisualTranspiler/>,
-    note:"Full recursive-descent parser. Real compiler frontend in Rust, not a template engine.",
+    note:"Full transpilation support for 4 languages",
   },
   {
     n:"02", accent:"var(--accent2)", tag:"Rust · tsuki-flash",
-    title:"Compile without arduino-cli",
+    title:"Fast and secure uploads",
     visual:<VisualFlash/>,
     note:"Direct avr-gcc / xtensa invocation. SHA-2 incremental cache. 14+ boards.",
   },
   {
-    n:"03", accent:"#e879f9",        tag:"Go · Cobra CLI",
+    n:"03", accent:"#e879f9",        tag:"Go · Tsuki CLI",
     title:"Project CLI",
     visual:<VisualCLI/>,
-    note:"init · build · upload · check · pkg · config — single binary, ~28ms cold start.",
+    note:"Create your projects with our dedicated CLI tool",
   },
   {
-    n:"04", accent:"var(--warn)",    tag:"tsukilib",
+    n:"04", accent:"var(--warn)",    tag:"tsuki lib",
     title:"Package ecosystem",
     visual:<VisualPackages/>,
-    note:"Go imports map to C++ headers via TOML manifests. Ed25519 verified.",
+    note:"Use your favourite libraries in a easier way than ever",
   },
   {
     n:"05", accent:"var(--accent)",  tag:"Tauri + Next.js",
-    title:"Desktop IDE",
+    title:"Tsuki IDE",
     visual:<VisualIDE/>,
-    note:"Monaco + Git panel + serial monitor + live C++ preview. Native Rust backend.",
+    note:"Bring your experience to the next level with our dedicated IDE, full of tools for make development easier",
   },
   {
-    n:"06", accent:"#f1fa8c",        tag:"Rust · WASM",
-    title:"Arduino simulator",
+    n:"06", accent:"#f1fa8c",        tag:"Rust · tsuki-core sim",
+    title:"Simulation",
     visual:<VisualSimulator/>,
-    note:"Firmware compiled to WebAssembly. Flip pins, watch LEDs — no hardware needed.",
+    note:"Simulate your code without need to plug in your board",
   },
 ];
 

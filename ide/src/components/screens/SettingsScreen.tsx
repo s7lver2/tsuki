@@ -52,7 +52,7 @@ function SettingsField({ name, desc, children }: { name: string; desc: string; c
         <div className="text-sm font-medium">{name}</div>
         <div className="text-xs text-[var(--fg-muted)] mt-0.5">{desc}</div>
       </div>
-      <div className="w-52 flex-shrink-0">{children}</div>
+      <div className="flex-shrink-0" style={{ width: "var(--settings-field-ctrl)" }}>{children}</div>
     </div>
   )
 }
@@ -126,7 +126,7 @@ export default function SettingsScreen() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* ── Sidebar ── */}
-        <div className="w-48 border-r border-[var(--border)] bg-[var(--surface-1)] flex flex-col flex-shrink-0 overflow-y-auto">
+        <div className="border-r border-[var(--border)] bg-[var(--surface-1)] flex flex-col flex-shrink-0 overflow-y-auto" style={{ width: "var(--settings-sidebar-w)" }}>
 
           {/* Main settings group */}
           <div className="p-2 flex flex-col gap-0.5">
@@ -206,7 +206,7 @@ export default function SettingsScreen() {
 
         {/* ── Content ── */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl px-10 py-8">
+          <div className="w-full" style={{ maxWidth: "min(760px, 100%)", padding: "clamp(12px,4vw,40px) var(--settings-content-px)" }}>
             {settingsTab === 'appearance'   && <AppearanceTab />}
             {settingsTab === 'cli'          && <CliTab />}
             {settingsTab === 'defaults'     && <DefaultsTab />}
@@ -948,7 +948,7 @@ function AppearanceTab() {
             <div className="text-sm font-medium mb-0.5">Sidebar width</div>
             <div className="text-xs text-[var(--fg-muted)]">Left file-tree panel. Min 140px · Max 480px</div>
           </div>
-          <div className="flex items-center gap-3 w-52 flex-shrink-0">
+          <div className="flex items-center gap-3 flex-shrink-0" style={{ width: "var(--settings-field-ctrl)" }}>
             <input type="range" min={140} max={480} step={4}
               value={settings.sidebarWidth}
               onChange={e => {
@@ -968,7 +968,7 @@ function AppearanceTab() {
             <div className="text-sm font-medium mb-0.5">Bottom panel height</div>
             <div className="text-xs text-[var(--fg-muted)]">Output / Problems / Terminal area. Min 80px · Max 600px</div>
           </div>
-          <div className="flex items-center gap-3 w-52 flex-shrink-0">
+          <div className="flex items-center gap-3 flex-shrink-0" style={{ width: "var(--settings-field-ctrl)" }}>
             <input type="range" min={80} max={600} step={4}
               value={settings.bottomPanelHeight}
               onChange={e => {
@@ -1100,7 +1100,57 @@ function AppearanceTab() {
         })}
       </div>
 
-      <GroupHeader title="Interface Scale" />
+      <GroupHeader title="Adaptive layout" />
+      <SettingsField
+        name="Compact mode"
+        desc="Reduces topbar height, padding, and base font size. Useful on small or low-resolution screens."
+      >
+        <Toggle
+          on={settings.compactMode ?? false}
+          onToggle={() => updateSetting('compactMode', !(settings.compactMode ?? false))}
+        />
+      </SettingsField>
+
+      <SettingsField
+        name="Topbar labels"
+        desc="Show text labels next to topbar action buttons (Check, Build, Flash…). Hidden automatically below 1200px wide."
+      >
+        <Toggle
+          on={settings.topbarLabels ?? true}
+          onToggle={() => updateSetting('topbarLabels', !(settings.topbarLabels ?? true))}
+        />
+      </SettingsField>
+
+      <SettingsField
+        name="Auto-collapse sidebar"
+        desc="Automatically collapse the file tree sidebar when the window is narrower than the threshold below."
+      >
+        <Toggle
+          on={settings.adaptiveSidebar ?? true}
+          onToggle={() => updateSetting('adaptiveSidebar', !(settings.adaptiveSidebar ?? true))}
+        />
+      </SettingsField>
+
+      {(settings.adaptiveSidebar ?? true) && (
+        <SettingsField
+          name="Collapse threshold"
+          desc="Sidebar auto-collapses when window width falls below this value."
+        >
+          <div className="flex items-center gap-3">
+            <input
+              type="range" min={800} max={1600} step={40}
+              value={settings.minWindowWidth ?? 1024}
+              onChange={e => updateSetting('minWindowWidth', Number(e.target.value))}
+              className="flex-1 accent-[var(--fg)]"
+            />
+            <span className="text-xs font-mono w-16 text-right text-[var(--fg-muted)]">
+              {settings.minWindowWidth ?? 1024}px
+            </span>
+          </div>
+        </SettingsField>
+      )}
+
+            <GroupHeader title="Interface Scale" />
       <SettingsField
         name="UI Scale"
         desc="Scales all interface elements proportionally. Editor font size is controlled separately in the Editor tab."
@@ -1874,24 +1924,90 @@ interface UpdateInfo {
   platforms: Record<string, { url: string; signature: string; size: number }>
 }
 
+/** Compare two semver strings. Returns: 1 if a > b, -1 if a < b, 0 if equal. */
+function compareSemver(a: string, b: string): number {
+  const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number)
+  const [aMaj, aMin, aPatch] = parse(a)
+  const [bMaj, bMin, bPatch] = parse(b)
+  if (aMaj !== bMaj) return aMaj > bMaj ? 1 : -1
+  if (aMin !== bMin) return aMin > bMin ? 1 : -1
+  if (aPatch !== bPatch) return aPatch > bPatch ? 1 : -1
+  return 0
+}
+
+function fmtBytes(n: number): string {
+  if (n === 0) return '?'
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
 function UpdatesTab() {
   const { settings, updateSetting } = useStore()
-  const [checking, setChecking]     = useState(false)
-  const [info, setInfo]             = useState<UpdateInfo | null>(null)
-  const [checkErr, setCheckErr]     = useState<string | null>(null)
-  const [installing, setInstalling] = useState(false)
 
   const channel: 'stable' | 'testing' = settings.updateChannel ?? 'stable'
 
+  // ── State ────────────────────────────────────────────────────────────────
+  const [currentVersion, setCurrentVersion] = useState<string | null>(null)
+  const [checking, setChecking]             = useState(false)
+  const [manifest, setManifest]             = useState<UpdateInfo | null>(null)
+  const [checkErr, setCheckErr]             = useState<string | null>(null)
+
+  // Download progress  { pct: 0-100, downloaded: bytes, total: bytes, stage }
+  const [progress, setProgress] = useState<{
+    pct: number; downloaded: number; total: number; stage: string
+  } | null>(null)
+  const [installErr, setInstallErr] = useState<string | null>(null)
+
+  // Fetch the current app version once on mount
+  useEffect(() => {
+    import('@/lib/tauri').then(({ getAppVersion }) =>
+      getAppVersion().then(v => setCurrentVersion(v)).catch(() => setCurrentVersion('0.0.0'))
+    )
+  }, [])
+
+  // Listen for progress events from Rust
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<{ stage: string; pct?: number; downloaded?: number; total?: number }>(
+        'update_progress',
+        ({ payload }) => {
+          setProgress({
+            stage:      payload.stage,
+            pct:        payload.pct        ?? 0,
+            downloaded: payload.downloaded ?? 0,
+            total:      payload.total      ?? 0,
+          })
+        }
+      ).then(fn => { unlisten = fn })
+    })
+    return () => { unlisten?.() }
+  }, [])
+
+  // ── Actions ──────────────────────────────────────────────────────────────
   async function checkNow() {
     setChecking(true)
     setCheckErr(null)
-    setInfo(null)
+    setManifest(null)
+    setInstallErr(null)
     try {
       const { checkForUpdates } = await import('@/lib/tauri')
       const result = await checkForUpdates(channel, UPDATE_MANIFEST_URLS[channel])
-      setInfo(result)
+      setManifest(result)
       updateSetting('lastUpdateCheck', Date.now())
+      // Persist update-flag fields from the manifest into settings so that
+      // page.tsx can read them on next launch (after the update is applied).
+      // forcedOnboardingVersion → triggers re-show of the wizard
+      // whatsNewVersion + whatsNewChangelog → triggers What's New popup
+      if (result.forced_onboarding_version) {
+        updateSetting('forcedOnboardingVersion' as any, result.forced_onboarding_version)
+      }
+      if (result.whats_new_version) {
+        updateSetting('whatsNewVersion' as any, result.whats_new_version)
+      }
+      if (result.whats_new_changelog) {
+        updateSetting('whatsNewChangelog' as any, result.whats_new_changelog)
+      }
     } catch (e: unknown) {
       setCheckErr(e instanceof Error ? e.message : String(e))
     }
@@ -1899,20 +2015,31 @@ function UpdatesTab() {
   }
 
   async function installUpdate() {
-    if (!info) return
-    setInstalling(true)
+    if (!manifest) return
+    setInstallErr(null)
+    setProgress({ stage: 'downloading', pct: 0, downloaded: 0, total: 0 })
     try {
       const { applyUpdate } = await import('@/lib/tauri')
-      await applyUpdate(info)
+      await applyUpdate(manifest)
+      // If we get here the app is restarting — nothing more to do
     } catch (e: unknown) {
-      setCheckErr(e instanceof Error ? e.message : String(e))
+      setInstallErr(e instanceof Error ? e.message : String(e))
+      setProgress(null)
     }
-    setInstalling(false)
   }
 
+  // ── Derived ──────────────────────────────────────────────────────────────
   const lastCheck = settings.lastUpdateCheck
     ? new Date(settings.lastUpdateCheck).toLocaleString()
     : 'Never'
+
+  const installing = progress !== null && progress.stage !== 'done'
+
+  // Version comparison result
+  const cmp = manifest && currentVersion ? compareSemver(manifest.version, currentVersion) : null
+  // cmp > 0 → remote is newer (update available)
+  // cmp = 0 → same version
+  // cmp < 0 → remote is older
 
   return (
     <div>
@@ -1925,24 +2052,12 @@ function UpdatesTab() {
       <GroupHeader title="Update channel" />
       <div className="flex flex-col gap-2 mt-3 mb-5">
         {([
-          {
-            id: 'stable' as const,
-            label: 'Stable',
-            desc: 'Recommended. Releases are tested and signed before publishing. Checked against the stable public key.',
-            badge: 'recommended',
-            badgeColor: 'text-green-400 bg-green-400/10',
-          },
-          {
-            id: 'testing' as const,
-            label: 'Testing',
-            desc: 'Early access builds. May contain bugs or incomplete features. Signed with a separate testing key.',
-            badge: 'beta',
-            badgeColor: 'text-yellow-400 bg-yellow-400/10',
-          },
+          { id: 'stable'  as const, label: 'Stable',  badge: 'recommended', badgeColor: 'text-green-400 bg-green-400/10',  desc: 'Tested and signed before publishing.' },
+          { id: 'testing' as const, label: 'Testing', badge: 'beta',         badgeColor: 'text-yellow-400 bg-yellow-400/10', desc: 'Early access — may contain bugs. Separate signing key.' },
         ]).map(ch => (
           <button
             key={ch.id}
-            onClick={() => { updateSetting('updateChannel', ch.id); setInfo(null); setCheckErr(null) }}
+            onClick={() => { updateSetting('updateChannel', ch.id); setManifest(null); setCheckErr(null) }}
             className={clsx(
               'flex items-start gap-3 px-4 py-3.5 rounded-xl border text-left cursor-pointer transition-all w-full bg-transparent',
               channel === ch.id
@@ -1956,14 +2071,14 @@ function UpdatesTab() {
                 <span className="text-sm font-semibold">{ch.label}</span>
                 <span className={clsx('text-[9px] font-mono px-1.5 py-0.5 rounded', ch.badgeColor)}>{ch.badge}</span>
               </div>
-              <p className="text-xs text-[var(--fg-muted)] leading-relaxed">{ch.desc}</p>
+              <p className="text-xs text-[var(--fg-muted)]">{ch.desc}</p>
             </div>
             {channel === ch.id && <Check size={13} className="text-green-400 mt-0.5 flex-shrink-0" />}
           </button>
         ))}
       </div>
 
-      {/* ── Auto-check toggle ── */}
+      {/* ── Auto-check ── */}
       <GroupHeader title="Behaviour" />
       <SettingsField name="Check on startup" desc="Automatically check for updates when the IDE opens.">
         <Toggle
@@ -1972,42 +2087,38 @@ function UpdatesTab() {
         />
       </SettingsField>
 
-      {/* ── Manual check ── */}
+      {/* ── Check now panel ── */}
       <GroupHeader title="Check now" />
       <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] overflow-hidden">
+
+        {/* Header row */}
         <div className="px-4 py-3 flex items-center gap-3 border-b border-[var(--border)]">
           <div className="flex-1">
             <div className="text-sm font-medium">
               Channel: <span className="font-mono text-[var(--fg-muted)]">{channel}</span>
+              {currentVersion && (
+                <span className="ml-2 text-xs text-[var(--fg-faint)]">· current: v{currentVersion}</span>
+              )}
             </div>
-            <div className="text-xs text-[var(--fg-muted)] mt-0.5">
-              Last checked: {lastCheck}
-            </div>
+            <div className="text-xs text-[var(--fg-muted)] mt-0.5">Last checked: {lastCheck}</div>
           </div>
-          <Btn
-            variant="outline"
-            size="sm"
-            onClick={checkNow}
-            disabled={checking}
-            className="gap-1.5 flex-shrink-0"
-          >
+          <Btn variant="outline" size="sm" onClick={checkNow} disabled={checking || installing} className="gap-1.5 flex-shrink-0">
             <RefreshCw size={12} className={checking ? 'animate-spin' : ''} />
             {checking ? 'Checking…' : 'Check for updates'}
           </Btn>
         </div>
 
         {/* Result area */}
-        <div className="px-4 py-3 min-h-[60px] flex items-center">
-          {!info && !checkErr && !checking && (
-            <p className="text-xs text-[var(--fg-faint)]">
+        <div className="px-4 py-3 min-h-[64px]">
+          {!manifest && !checkErr && !checking && !progress && (
+            <p className="text-xs text-[var(--fg-faint)] leading-relaxed">
               Press "Check for updates" to query the {channel} manifest.
             </p>
           )}
 
           {checking && (
             <div className="flex items-center gap-2 text-xs text-[var(--fg-muted)]">
-              <RefreshCw size={12} className="animate-spin" />
-              Fetching {channel} manifest…
+              <RefreshCw size={12} className="animate-spin" /> Fetching {channel} manifest…
             </div>
           )}
 
@@ -2018,44 +2129,125 @@ function UpdatesTab() {
             </div>
           )}
 
-          {info && (
-            <div className="w-full flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <Check size={14} className="text-green-400 flex-shrink-0" />
-                <span className="text-sm font-medium">
-                  Version <span className="font-mono">{info.version}</span> available
+          {/* ── Download / install progress ── */}
+          {progress && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[var(--fg-muted)] capitalize font-medium">
+                  {progress.stage === 'downloading' ? 'Downloading…'
+                   : progress.stage === 'installing' ? 'Installing…'
+                   : 'Done — restarting…'}
                 </span>
-                <span className="text-xs text-[var(--fg-faint)]">· {new Date(info.pub_date).toLocaleDateString()}</span>
+                <span className="font-mono text-[var(--fg-faint)]">
+                  {progress.stage === 'downloading'
+                    ? `${fmtBytes(progress.downloaded)} / ${fmtBytes(progress.total)}`
+                    : `${progress.pct}%`}
+                </span>
               </div>
-              {info.notes && (
-                <p className="text-xs text-[var(--fg-muted)] leading-relaxed whitespace-pre-wrap border-l-2 border-[var(--border)] pl-3">
-                  {info.notes}
-                </p>
+              {/* Progress bar */}
+              <div className="h-1.5 rounded-full bg-[var(--surface-3)] overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${progress.pct}%`,
+                    background: progress.stage === 'done'
+                      ? 'var(--ok, #22c55e)'
+                      : 'var(--fg-muted)',
+                  }}
+                />
+              </div>
+              {installErr && (
+                <div className="flex items-start gap-1.5 text-xs text-[var(--err)]">
+                  <AlertTriangle size={11} className="mt-0.5 flex-shrink-0" />
+                  {installErr}
+                </div>
               )}
-              <div className="flex gap-2 mt-1">
-                <Btn
-                  variant="outline"
-                  size="sm"
-                  onClick={installUpdate}
-                  disabled={installing}
-                  className="gap-1.5"
-                >
-                  <Download size={12} className={installing ? 'animate-bounce' : ''} />
-                  {installing ? 'Installing…' : 'Download & install'}
-                </Btn>
-                <Btn variant="ghost" size="sm" onClick={() => {
-                  updateSetting('lastSeenVersion', info.version)
-                  setInfo(null)
-                }}>
-                  Dismiss
-                </Btn>
-              </div>
+            </div>
+          )}
+
+          {/* ── Manifest result (no active download) ── */}
+          {manifest && !progress && (
+            <div className="flex flex-col gap-3">
+
+              {/* Newer version available */}
+              {cmp !== null && cmp > 0 && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Download size={14} className="text-green-400 flex-shrink-0" />
+                    <span className="text-sm font-semibold text-green-400">
+                      v{manifest.version} available
+                    </span>
+                    <span className="text-xs text-[var(--fg-faint)]">
+                      · {new Date(manifest.pub_date).toLocaleDateString()}
+                    </span>
+                  </div>
+                  {manifest.notes && (
+                    <p className="text-xs text-[var(--fg-muted)] leading-relaxed border-l-2 border-[var(--border)] pl-3 whitespace-pre-wrap">
+                      {manifest.notes}
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <Btn variant="outline" size="sm" onClick={installUpdate} className="gap-1.5">
+                      <Download size={12} /> Download & install
+                    </Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => {
+                      updateSetting('lastSeenVersion', manifest.version)
+                      setManifest(null)
+                    }}>
+                      Dismiss
+                    </Btn>
+                  </div>
+                </div>
+              )}
+
+              {/* Same version */}
+              {cmp !== null && cmp === 0 && (
+                <div className="flex items-center gap-2 text-xs text-green-400">
+                  <Check size={13} className="flex-shrink-0" />
+                  <span>You&apos;re on the latest version (v{currentVersion}).</span>
+                </div>
+              )}
+
+              {/* Older version in channel (shown below, greyed out) */}
+              {cmp !== null && cmp < 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2 text-xs text-green-400">
+                    <Check size={13} className="flex-shrink-0" />
+                    <span>Your version (v{currentVersion}) is newer than {channel}.</span>
+                  </div>
+                  <div className="mt-1 px-3 py-2 rounded border border-[var(--border)] bg-[var(--surface)] opacity-60">
+                    <p className="text-[10px] text-[var(--fg-faint)]">
+                      <span className="font-mono">{channel}</span> channel is at v{manifest.version}
+                      {' · '}{new Date(manifest.pub_date).toLocaleDateString()}
+                    </p>
+                    {manifest.notes && (
+                      <p className="text-[10px] text-[var(--fg-faint)] mt-0.5 truncate">{manifest.notes}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Unknown comparison (no local version yet) */}
+              {cmp === null && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Download size={14} className="text-[var(--fg-muted)] flex-shrink-0" />
+                    <span className="text-sm font-medium">v{manifest.version}</span>
+                    <span className="text-xs text-[var(--fg-faint)]">
+                      · {new Date(manifest.pub_date).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <Btn variant="outline" size="sm" onClick={installUpdate} className="gap-1.5 w-fit">
+                    <Download size={12} /> Download & install
+                  </Btn>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Key fingerprints ── */}
+      {/* ── Signing keys ── */}
       <GroupHeader title="Signing keys" />
       <div className="mt-3 mb-6 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] divide-y divide-[var(--border-subtle)]">
         {(['stable', 'testing'] as const).map(ch => (
@@ -2070,10 +2262,6 @@ function UpdatesTab() {
           </div>
         ))}
       </div>
-      <p className="text-xs text-[var(--fg-faint)] leading-relaxed">
-        All update bundles are verified against these Ed25519 public keys before installation.
-        Keys are embedded at build time and cannot be changed without rebuilding the IDE.
-      </p>
     </div>
   )
 }

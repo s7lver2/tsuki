@@ -2,12 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Geist fonts via CDN (loaded in layout) ── */
-
 /* ── Design tokens ── */
 :root {
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+
+  /* Adaptive sizing — scales with viewport width between breakpoints.
+     At 1024px wide → ~12px base. At 1440px → 13px. At 1920px → 14px.
+     min() prevents it going huge on ultrawide displays. */
+  --base-size:    clamp(11px, 0.85vw, 14px);
+
+  /* Topbar/row heights — tighter on compact mode, normal otherwise */
+  --topbar-h:     clamp(34px, 3.5vh, 44px);
+  --row-h:        clamp(26px, 2.8vh, 32px);
+
+  /* Sidebar width: fluid between 140px and 220px based on viewport */
+  --sidebar-min:  140px;
+  --sidebar-max:  220px;
+
+  /* Settings layout */
+  --settings-sidebar-w: clamp(152px, 14vw, 200px);
+  --settings-field-ctrl: clamp(180px, 22vw, 220px);
+  --settings-content-px: clamp(16px, 4vw, 40px);
 }
 
 /* DARK MODE (default) */
@@ -26,7 +42,7 @@ html, html.dark {
   --accent-inv: #0a0a0a;
   --hover:      rgba(255,255,255,0.04);
   --active:     rgba(255,255,255,0.08);
-  /* syntax — greyscale with just enough distinction */
+  --active-border: #555;
   --syn-kw:     #ededed;
   --syn-fn:     #d4d4d4;
   --syn-str:    #a0a0a0;
@@ -35,7 +51,6 @@ html, html.dark {
   --syn-typ:    #c8c8c8;
   --syn-pkg:    #b8b8b8;
   --syn-op:     #ededed;
-  /* status */
   --ok:         #22c55e;
   --err:        #ef4444;
   --warn:       #f59e0b;
@@ -58,6 +73,7 @@ html.light {
   --accent-inv: #ffffff;
   --hover:      rgba(0,0,0,0.03);
   --active:     rgba(0,0,0,0.06);
+  --active-border: #999;
   --syn-kw:     #111111;
   --syn-fn:     #2d2d2d;
   --syn-str:    #595959;
@@ -79,9 +95,16 @@ body {
   background: var(--surface);
   color: var(--fg);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--base-size);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Compact mode — applied via data-compact="true" on <html> */
+html[data-compact="true"] {
+  --topbar-h:  clamp(28px, 3vh, 34px);
+  --row-h:     clamp(22px, 2.4vh, 26px);
+  --base-size: clamp(10px, 0.78vw, 12px);
 }
 
 /* ── Scrollbar ── */
@@ -100,7 +123,10 @@ body {
   border-radius: 3px;
 }
 
-/* ── Code editor overlay trick ── */
+/* ── Topbar height utility ── */
+.topbar { height: var(--topbar-h); }
+
+/* ── Code editor ── */
 .editor-textarea {
   position: absolute;
   inset: 0;
@@ -113,10 +139,9 @@ body {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 21px;
-  padding: 12px 0 12px 16px;
+  padding: 12px 80px 200px 16px;
   white-space: pre;
   overflow: auto;
-  overflow-x: auto;
   tab-size: 4;
   z-index: 2;
   scrollbar-width: thin;
@@ -129,7 +154,7 @@ body {
 .editor-textarea::-webkit-scrollbar-corner { background: transparent; }
 
 .editor-highlight {
-  padding: 12px 0 12px 16px;
+  padding: 12px 80px 200px 16px;
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 21px;
@@ -138,16 +163,12 @@ body {
   z-index: 1;
   word-break: normal;
   overflow-wrap: normal;
-  padding-bottom: 200px;
-  padding-right: 80px;
 }
-.editor-textarea { padding-bottom: 200px; padding-right: 80px; }
 
 /* ── Current line highlight ── */
 .editor-curline {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: 0; right: 0;
   pointer-events: none;
   z-index: 0;
   background: rgba(255,255,255,0.03);
@@ -175,15 +196,14 @@ html.light .editor-curline {
 /* ── Indent guides ── */
 .editor-indent-guide {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 0; bottom: 0;
   width: 1px;
   background: var(--border-subtle);
   pointer-events: none;
   z-index: 0;
 }
 
-/* Syntax token colours */
+/* Syntax tokens */
 .syn-kw  { color: var(--syn-kw);  font-weight: 500; }
 .syn-fn  { color: var(--syn-fn); }
 .syn-str { color: var(--syn-str); }
@@ -192,6 +212,14 @@ html.light .editor-curline {
 .syn-typ { color: var(--syn-typ); }
 .syn-pkg { color: var(--syn-pkg); }
 .syn-op  { color: var(--syn-op); }
+
+/* ── Topbar label hide below 1200px ── */
+@media (max-width: 1200px) {
+  .topbar-label { display: none; }
+}
+@media (max-width: 960px) {
+  .topbar-label-sm { display: none; }
+}
 
 /* ── Animations ── */
 @keyframes fadeUp {
@@ -207,8 +235,8 @@ html.light .editor-curline {
 }
 .animate-fade-up { animation: fadeUp 200ms ease forwards; }
 .animate-fade-in { animation: fadeIn 150ms ease forwards; }
-.animate-spin { animation: spin 1s linear infinite; }
+.animate-spin    { animation: spin 1s linear infinite; }
 
 /* ── Utility ── */
 .no-select { user-select: none; }
-.truncate { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.truncate  { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

@@ -192,22 +192,79 @@ def _version_to_numeric(semver):
     return "1.0.0.0"
 
 
+def _read_cargo_version():
+    """Lee la version del Cargo.toml raiz como fallback cuando git no tiene tags."""
+    import re
+    cargo = os.path.join(PROJECT_ROOT, "Cargo.toml")
+    if not os.path.exists(cargo):
+        return None
+    try:
+        with open(cargo, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r'version\s*=\s*"([^"]+)"', line.strip())
+                if m:
+                    return m.group(1)
+    except OSError:
+        return None
+    return None
+
+
 def get_version(forced=None):
+    """Determina la version del build.
+
+    Orden de prioridad:
+      1. --version X.Y.Z  (flag explicito — siempre recomendado para releases)
+      2. git describe --tags (si el repo tiene tags alcanzables desde HEAD)
+      3. Cargo.toml [package].version  (fallback cuando no hay tags)
+      4. "0.1.0"  (ultimo recurso, emite un aviso claro)
+    """
+    d = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     if forced:
         clean = _sanitize_version(forced)
-        d = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        info(f"Version forzada: {clean}")
         return clean, "manual", d
+
+    # ── Intentar git describe ──────────────────────────────────────────────
+    commit = "unknown"
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        pass
+
     try:
         raw = subprocess.check_output(
             ["git", "describe", "--tags", "--always", "--dirty"],
-            cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL).decode().strip() or "0.1.0"
-        c = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL).decode().strip()
+            cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL
+        ).decode().strip()
     except Exception:
-        raw, c = "0.1.0", "unknown"
-    d = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return _sanitize_version(raw), c, d
+        raw = ""
+
+    if raw:
+        # git describe devuelve algo — pero puede ser solo un hash sin tags
+        # Un hash puro no contiene puntos ni empieza con v+digito
+        import re
+        has_tag = bool(re.match(r"v?\d", raw))
+        if has_tag:
+            return _sanitize_version(raw), commit, d
+
+        # Solo un hash — no hay tags en el repo
+        warn(f"git describe devolvio solo un hash ({raw!r}) — el repo no tiene tags alcanzables.")
+
+    # ── Fallback 1: Cargo.toml ────────────────────────────────────────────
+    cargo_v = _read_cargo_version()
+    if cargo_v:
+        warn(f"Usando version de Cargo.toml: {cargo_v}")
+        warn("Para fijar la version usa:  python tools/build.py release --version X.Y.Z")
+        return _sanitize_version(cargo_v), commit, d
+
+    # ── Fallback 2: placeholder ───────────────────────────────────────────
+    warn("No se pudo determinar la version automaticamente.")
+    warn("Usa:  python tools/build.py release --version X.Y.Z")
+    return "0.1.0", commit, d
 
 def _rmtree_force(path):
     """rmtree que maneja PermissionError en Windows.
@@ -397,10 +454,41 @@ def build_rust(platform_key, force_cross=False):
 # ─────────────────────────────────────────────
 #  BUILD: TAURI IDE  (solo host actual)
 # ─────────────────────────────────────────────
+
+def _patch_cargo_version(cargo_path, version):
+    """Actualiza version = \"X.Y.Z\" en un Cargo.toml.
+
+    Evita backreferences en re.subn — usa reemplazo de línea directa.
+    """
+    import re
+    with open(cargo_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    patched = False
+    for i, line in enumerate(lines):
+        if re.match(r'^version\s*=\s*"[^"]+"', line):
+            lines[i] = f'version = "{version}"\n'
+            patched = True
+            break  # solo la primera aparicion ([package], no dependencias)
+    if not patched:
+        warn(f"  No se encontro 'version = ...' en {cargo_path}")
+        return False
+    with open(cargo_path, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    return True
+
+
 def build_tauri(platform_key, version):
     step(f"Compilando Tauri IDE → {platform_key}")
     plat        = PLATFORMS[platform_key]
     rust_target = plat["rust_target"]
+
+    # Patch version into ide/src-tauri/Cargo.toml so env!("CARGO_PKG_VERSION")
+    # inside main.rs reports the correct version at runtime.
+    ide_cargo = os.path.join(IDE_DIR, "src-tauri", "Cargo.toml")
+    if _patch_cargo_version(ide_cargo, version):
+        info(f"ide/src-tauri/Cargo.toml → version = \"{version}\"")
+    else:
+        warn("No se pudo actualizar version en ide/src-tauri/Cargo.toml")
 
     npm = shutil.which("npm")
     if not npm:
@@ -790,8 +878,8 @@ DefaultDirName={autopf}\tsuki
 DefaultGroupName=@@app_name@@
 AllowNoIcons=yes
 ; Use native 64-bit Program Files on x64/arm64 — never Program Files (x86)
-ArchitecturesAllowed=x64 arm64 x86
-ArchitecturesInstallIn64BitMode=x64 arm64
+ArchitecturesAllowed=x64compatible arm64 x86
+ArchitecturesInstallIn64BitMode=x64compatible arm64
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=@@release_dir@@
@@ -800,8 +888,8 @@ SetupIconFile=@@icon_file@@
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-WizardImageFile=compiler:WizModernImage.bmp
-WizardSmallImageFile=compiler:WizModernSmallImage.bmp
+WizardImageFile=compiler:WizClassicImage.bmp
+WizardSmallImageFile=compiler:WizClassicSmallImage.bmp
 ShowLanguageDialog=auto
 ChangesEnvironment=yes
 ChangesAssociations=yes
@@ -842,9 +930,6 @@ Name: "addtopath";      Description: "Agregar @@app_name@@ al PATH del sistema (
 Name: "desktopicon";    Description: "Crear icono en el &Escritorio"; \
                         GroupDescription: "Accesos directos:"; \
                         Components: shortcuts
-Name: "quicklaunch";    Description: "Crear icono en &Barra de tareas"; \
-                        GroupDescription: "Accesos directos:"; \
-                        Components: shortcuts; OnlyBelowVersion: 6.1
 Name: "startmenuicon";  Description: "Crear grupo en el &menú Inicio"; \
                         GroupDescription: "Accesos directos:"; \
                         Components: shortcuts
@@ -854,7 +939,7 @@ Name: "{app}\\bin"
 Name: "{app}\\libs"
 Name: "{app}\\pkg"
 Name: "{app}\\logs"
-Name: "{app}\\ide"
+@@ide_dir_entry@@
 Name: "{localappdata}\\@@app_name@@";    Flags: uninsalwaysuninstall
 Name: "{localappdata}\\@@app_name@@\\config"; Flags: uninsalwaysuninstall
 
@@ -1145,7 +1230,8 @@ end;
 // ─── Detectar si hay bundle de IDE disponible ─────────────────────────
 function HasIdeBundle: Boolean;
 begin
-  Result := DirExists(ExpandConstant('{app}\ide'));
+  // Check the actual exe exists, not just the folder (folder is always created by [Dirs])
+  Result := FileExists(ExpandConstant('{app}\\ide\\@@ide_exe_name@@'));
 end;
 
 function InitializeSetup: Boolean;
@@ -1286,16 +1372,22 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@registry_url@@": REGISTRY_URL,
         "@@ide_exe_name@@": ide_exe_name or f"{APP_NAME}.exe",
         "@@platform_key@@": platform_key,
+        "@@ide_dir_entry@@": 'Name: "{app}\\\\ide"' if ide_bundle else "",
     }
     iss_content = INNO_SCRIPT
+
+    # Comment out the IDE bundle block BEFORE placeholder substitution.
+    # After substitution @@ide_bundle@@ becomes "" making the pattern unmatchable.
+    if not ide_bundle:
+        iss_content = iss_content.replace(
+            'Source: "@@ide_bundle@@\\\\*"; DestDir: "{app}\\\\ide"; \\\n'
+            '        Components: ide; Flags: ignoreversion recursesubdirs createallsubdirs; \\\n'
+            '        Check: HasIdeBundle',
+            '; IDE bundle not built on this platform'
+        )
+
     for placeholder, value in iss_subs.items():
         iss_content = iss_content.replace(placeholder, value)
-
-    if not ide_bundle:
-      iss_content = iss_content.replace(
-          'Source: "\\*"; DestDir: "{app}\\ide";',
-          '; Source: ""; DestDir: "{app}\\ide";'
-      )
 
     iss_path = os.path.join(PROJECT_ROOT, f"{APP_NAME}-setup.iss")
     with open(iss_path, "w", encoding="utf-8") as f:
@@ -1538,8 +1630,14 @@ USAGE = """
   python tools/build.py release                       Build para todas las plataformas (version desde git)
   python tools/build.py release --version 1.2.3      Forzar version explicita (recomendado para releases)
   python tools/build.py release --version 1.2.3 --no-publish   Sólo compilar y firmar, sin crear GitHub Release
+  python tools/build.py release --version 1.2.3 --flags "restartOnBoarding"         Forzar re-onboarding en esta version
+  python tools/build.py release --version 1.2.3 --flags "restartOnBoarding,whatsNew" --notes "Nota"
   python tools/build.py gen-keys      Genera par de claves Ed25519 para stable y testing
   python tools/build.py show-keys     Muestra las claves publicas actuales (para incrustar en el IDE)
+
+  Flags disponibles (--flags, separados por coma):
+    restartOnBoarding   Fuerza que el wizard de onboarding aparezca de nuevo en esta version
+    whatsNew            Muestra el popup What's New (usa --notes como cuerpo del changelog o JSON)
 """
 
 
@@ -1552,6 +1650,7 @@ def parse_command():
     channel        = "stable"
     notes          = ""
     no_publish     = False
+    flags_str      = ""   # comma-separated update flags: "restartOnBoarding,whatsNew"
 
     filtered = []
     i = 0
@@ -1575,6 +1674,9 @@ def parse_command():
         elif raw[i] == "--notes" and i + 1 < len(raw):
             notes = raw[i + 1]
             i += 2
+        elif raw[i] == "--flags" and i + 1 < len(raw):
+            flags_str = raw[i + 1]
+            i += 2
         elif raw[i] == "--no-publish":
             no_publish = True
             i += 1
@@ -1593,7 +1695,7 @@ def parse_command():
         print(USAGE)
         sys.exit(1)
 
-    return command, forced_version, deep_clean, quick, channel, notes, no_publish
+    return command, forced_version, deep_clean, quick, channel, notes, no_publish, flags_str
 
 
 def _print_header(subtitle=""):
@@ -2095,20 +2197,108 @@ def _file_size(path):
 #  }
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_update_manifests(version, date, channel="stable", notes=""):
+def parse_flags(flags_str):
+    """Parsea la cadena de --flags y devuelve las opciones de release.
+
+    Formato soportado (separar múltiples flags con coma):
+
+      restartOnBoarding
+        → El IDE forzará re-show del wizard de onboarding al actualizar
+          a esta versión. Se incrusta como forcedOnboardingVersion en el
+          manifiesto de actualización.
+
+      whatsNew:Texto 1;improvement:Texto 2;fix:Fix crasheo;breaking:API cambia
+        → Muestra el popup What's New al arrancar tras actualizar.
+          Prefijos opcionales por entrada: feature (default), improvement, fix, breaking.
+          Las entradas se separan con ';'.
+          Se incrusta como whatsNewVersion + whatsNewChangelog (JSON).
+
+    Ejemplo completo:
+      --flags "restartOnBoarding,whatsNew:Nuevo transpiler Go 2;fix:Fix crash serial"
+
+    Devuelve:
+      {
+        "restart_onboarding": bool,
+        "whats_new_entries": [{"type": ..., "text": ...}, ...]  ← vacío si no activo
+      }
+    """
+    result = {"restart_onboarding": False, "whats_new_entries": []}
+    if not flags_str:
+        return result
+
+    for part in flags_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        lpart = part.lower()
+
+        if lpart == "restartonboarding":
+            result["restart_onboarding"] = True
+
+        elif lpart.startswith("whatsnew"):
+            raw_entries = part.split(":", 1)[1].strip() if ":" in part else ""
+            entries = []
+            for entry in raw_entries.split(";"):
+                entry = entry.strip()
+                if not entry:
+                    continue
+                entry_type = "feature"
+                text = entry
+                for t in ("feature", "improvement", "fix", "breaking"):
+                    if entry.lower().startswith(f"{t}:"):
+                        entry_type = t
+                        text = entry[len(t) + 1:].strip()
+                        break
+                if text:
+                    entries.append({"type": entry_type, "text": text})
+            result["whats_new_entries"] = entries
+
+        else:
+            warn(f"Flag desconocido ignorado: {part!r}  (válidos: restartOnBoarding, whatsNew:...)")
+
+    return result
+
+
+def generate_update_manifests(version, date, channel="stable", notes="", flags_str=""):
     """Genera update-{channel}.json con todas las plataformas disponibles en releases/.
 
     Firma cada artefacto con la clave privada del canal si está disponible.
     Se llama automáticamente al final de cmd_release.
+
+    flags_str: cadena de flags separada por comas, ej:
+      "restartOnBoarding"
+      "whatsNew:Nueva feature;fix:Fix crash"
+      "restartOnBoarding,whatsNew:Feat 1;Feat 2"
     """
     step(f"Generando manifiesto de actualización → {channel}")
 
     import json as _json
 
-    # Collect built artifacts from RELEASE_DIR
-    # Expected filenames (from create_unix_installer / create_windows_installer):
-    #   tsuki-{version}-{platform}.tar.gz      (Linux / macOS)
-    #   tsuki-Setup-{version}-{platform}.exe   (Windows)
+    # ── Parsear flags ──────────────────────────────────────────────────────────
+    flags = parse_flags(flags_str)
+    restart_onboarding = flags["restart_onboarding"]
+    whats_new_entries  = flags["whats_new_entries"]
+    whats_new          = len(whats_new_entries) > 0
+
+    if restart_onboarding:
+        info(f"  Flag restartOnBoarding → forcedOnboardingVersion = {version}")
+    if whats_new:
+        info(f"  Flag whatsNew → {len(whats_new_entries)} changelog entries para v{version}")
+        for e in whats_new_entries:
+            info(f"    [{e['type']}] {e['text']}")
+
+    # ── Serializar changelog ───────────────────────────────────────────────────
+    # Si no hay entries de --flags pero hay --notes, intentar parsear notes como
+    # JSON de ChangelogEntry[], o convertir texto plano a un único entry.
+    changelog_json = None
+    if whats_new:
+        changelog_json = _json.dumps(whats_new_entries, ensure_ascii=False)
+    elif notes:
+        # --notes sin --flags whatsNew: úsalo como changelog de texto plano si queremos
+        # (no se activa por defecto — evita mostrar el popup accidentalmente)
+        pass
+
+    # ── Collect built artifacts ────────────────────────────────────────────────
     platforms = {}
 
     if os.path.isdir(RELEASE_DIR):
@@ -2116,11 +2306,9 @@ def generate_update_manifests(version, date, channel="stable", notes=""):
             fpath = os.path.join(RELEASE_DIR, fname)
             if not os.path.isfile(fpath):
                 continue
-            # Skip the manifest files themselves
             if fname.startswith("update-") and fname.endswith(".json"):
                 continue
 
-            # Determine platform key from filename
             pk = None
             for candidate in PLATFORMS:
                 if candidate in fname:
@@ -2129,7 +2317,8 @@ def generate_update_manifests(version, date, channel="stable", notes=""):
             if pk is None:
                 continue
 
-            asset_url = f"{GITHUB_RELEASES_BASE}/v{version}/{fname}"
+            release_tag = f"v{version}" if channel == "stable" else f"v{version}-testing"
+            asset_url = f"{GITHUB_RELEASES_BASE}/{release_tag}/{fname}"
             signature = _sign_file(fpath, channel)
             platforms[pk] = {
                 "url":       asset_url,
@@ -2149,6 +2338,20 @@ def generate_update_manifests(version, date, channel="stable", notes=""):
         "platforms": platforms,
     }
 
+    # ── Incrustar flags en el manifiesto ───────────────────────────────────────
+    # El IDE lee estos campos en page.tsx (handleSplashDone / checkWhatsNew).
+    # forcedOnboardingVersion: si > tsuki-onboarding-version en localStorage,
+    #   el wizard se vuelve a mostrar con modo 'update'.
+    # whatsNewVersion + whatsNewChangelog: si whatsNewVersion > tsuki-whats-new-seen,
+    #   se muestra el popup WhatsNewModal.
+    if restart_onboarding:
+        manifest["forced_onboarding_version"] = version
+        info(f"  ✓ forcedOnboardingVersion = {version}")
+    if whats_new and changelog_json:
+        manifest["whats_new_version"]   = version
+        manifest["whats_new_changelog"] = changelog_json
+        info(f"  ✓ whatsNewVersion = {version}")
+
     manifest_path = UPDATE_MANIFEST_STABLE if channel == "stable" else UPDATE_MANIFEST_TESTING
     with open(manifest_path, "w", encoding="utf-8") as f:
         _json.dump(manifest, f, indent=2, ensure_ascii=False)
@@ -2161,7 +2364,7 @@ def generate_update_manifests(version, date, channel="stable", notes=""):
 
     return manifest_path
 
-def cmd_release(forced_version, channel="stable", notes="", no_publish=False):
+def cmd_release(forced_version, channel="stable", notes="", no_publish=False, flags_str=""):
     _print_header(f"→ release [{channel}]")
 
     warn("Esto intentara compilar para TODAS las plataformas.")
@@ -2180,13 +2383,27 @@ def cmd_release(forced_version, channel="stable", notes="", no_publish=False):
     else:
         warn("Version derivada de git — usa --version X.Y.Z para fijarla.")
     print(f"\n  Version : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}")
-    print(f"  Canal   : {BOLD}{channel}{RESET}\n")
+    print(f"  Canal   : {BOLD}{channel}{RESET}")
+
+    # Show active flags summary
+    if flags_str:
+        flags = parse_flags(flags_str)
+        flag_labels = []
+        if flags["restart_onboarding"]:
+            flag_labels.append("restartOnBoarding")
+        if flags["whats_new_entries"]:
+            flag_labels.append(f"whatsNew ({len(flags['whats_new_entries'])} entries)")
+        if flag_labels:
+            print(f"  Flags   : {BOLD}{', '.join(flag_labels)}{RESET}")
+    print()
 
     _build_platforms(list(PLATFORMS.keys()), version, commit, date)
     _print_summary(version)
 
     # Generate update manifests and sign artifacts
-    manifest_path = generate_update_manifests(version, date, channel=channel, notes=notes)
+    manifest_path = generate_update_manifests(
+        version, date, channel=channel, notes=notes, flags_str=flags_str
+    )
 
     # Publish to GitHub Releases — the web API reads it automatically, no commits needed
     if not no_publish:
@@ -2200,12 +2417,12 @@ def cmd_release(forced_version, channel="stable", notes="", no_publish=False):
 
 
 def main():
-    command, forced_version, deep_clean, quick, channel, notes, no_publish = parse_command()
+    command, forced_version, deep_clean, quick, channel, notes, no_publish, flags_str = parse_command()
 
     if command == "clean":
         cmd_clean(deep=deep_clean)
     elif command == "release":
-        cmd_release(forced_version, channel=channel, notes=notes, no_publish=no_publish)
+        cmd_release(forced_version, channel=channel, notes=notes, no_publish=no_publish, flags_str=flags_str)
     elif command == "gen-keys":
         cmd_gen_keys()
     elif command == "show-keys":

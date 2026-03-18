@@ -145,12 +145,11 @@ export default function IdeShowcase() {
             <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.1em", color: "var(--accent)", marginBottom: 16, textTransform: "uppercase" }}>
               tsuki-ide
             </div>
-            <h2 className="t-h2">A full IDE.<br />Built for firmware.</h2>
+            <h2 className="t-h2">A full IDE.<br />Built for developers.</h2>
           </div>
           <div>
             <p className="t-body" style={{ fontSize: 15 }}>
-              Desktop application built with Tauri + Next.js. Monaco editor, file tree, git panel,
-              package manager, serial monitor — all with native performance.
+              All your needs in one tool — circuit simulation, git integration, librarie managment, project exports, etc
             </p>
           </div>
         </div>
