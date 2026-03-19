@@ -10,6 +10,7 @@ import ExamplesSidebar from '@/components/other/ExamplesSidebar'
 import CodeEditor from '@/components/other/CodeEditor'
 import BottomPanel from '@/components/other/BottomPanel'
 import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
+import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
   Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, BookOpen,
@@ -59,7 +60,6 @@ export default function IdeScreen() {
 
   const workstationsEnabled = settings.experimentsEnabled && settings.expWorkstationsEnabled
   const sandboxEnabled      = settings.experimentsEnabled && settings.expSandboxEnabled
-
   // Auto-open sandbox when a circuit is dispatched from Examples
   const pendingCircuit = useStore(s => s.pendingCircuit)
   useEffect(() => {
@@ -76,6 +76,7 @@ export default function IdeScreen() {
   const parentNode = activeNode
     ? tree.find(p => p.type === 'dir' && p.children?.includes(activeNode.id) && p.id !== 'root')
     : null
+
 
   const tsuki = (settings.tsukiPath?.trim() || 'tsuki').replace(/^\"|\"$/g, '')
   const cwd   = projectPath || undefined
@@ -116,9 +117,9 @@ export default function IdeScreen() {
       if (e.key === 'm' && !e.shiftKey) { e.preventDefault(); handleMonitor(); return }
       // Workstation shortcuts: Ctrl+1/2/3 when workstations enabled
       if (workstationsEnabled) {
-        if (e.key === '1') { setWorkstation('code'); return }
+        if (e.key === '1') { setWorkstation('code');    return }
         if (e.key === '2') { setWorkstation('sandbox'); return }
-        if (e.key === '3') { setWorkstation('export'); return }
+        if (e.key === '3') { setWorkstation('export');  return }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -126,9 +127,14 @@ export default function IdeScreen() {
   })
 
   useEffect(() => {
+    const { addLog } = useStore.getState()
+    addLog('info', `IDE ready · project: ${projectName || '(none)'} · board: ${board} · lang: ${projectLanguage}`)
+    addLog('info', `Experiments: sandbox=${settings.expSandboxEnabled} git=${settings.expGitEnabled} lsp=${settings.expLspEnabled}`)
+
     const currentPath = settings.tsukiPath?.trim()
     const isAbsolutePath = currentPath?.includes('\\') || currentPath?.includes('/')
     if (!isAbsolutePath) {
+      addLog('info', 'Detecting tsuki binary in PATH…')
       import('@/lib/tauri').then(({ detectTool }) => {
         detectTool('tsuki')
           .then(resolved => {
@@ -138,9 +144,12 @@ export default function IdeScreen() {
           .catch(() => {
             useStore.getState().addLog('warn', 'tsuki not found in PATH. Go to Settings → CLI Tools → set full path.')
           })
+        }
       })
+    } else {
+      addLog('ok', `tsuki path configured: ${currentPath}`)
     }
-  }, [])
+  }, []) // eslint-disable-line
 
   // Sandbox resize (legacy mode)
   useEffect(() => {
@@ -167,6 +176,7 @@ export default function IdeScreen() {
     window.addEventListener('mouseup', onUp)
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [resizingSidebar]) // eslint-disable-line
+
 
 
   // Adaptive sidebar: auto-collapse when window narrower than threshold
@@ -368,6 +378,7 @@ export default function IdeScreen() {
                 <SandboxWorkstation />
               </div>
 
+
               {/* Export workstation */}
               <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'export' && 'hidden')}>
                 <ExportWorkstation board={board} projectName={projectName} />
@@ -433,6 +444,7 @@ export default function IdeScreen() {
                     <CodeEditor />
                   </div>
                 </div>
+
 
                 {/* Legacy sandbox side panel */}
                 {sandboxEnabled && sandboxOpen && (
@@ -710,6 +722,7 @@ function SandboxWorkstation() {
     </div>
   )
 }
+
 
 // ── Export workstation ────────────────────────────────────────────────────────
 

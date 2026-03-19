@@ -5,7 +5,7 @@ import { applyTheme, applyUiScale, applyFontRendering, applyCompactMode } from '
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
 export type BottomTab = 'output' | 'problems' | 'terminal'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'language' | 'developer' | 'profile' | 'updates'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'exp-webkit' | 'language' | 'developer' | 'profile' | 'updates'
 
 export interface FileNode {
   id: string
@@ -163,6 +163,8 @@ export interface SettingsState {
   expGitEnabled: boolean
   expLspEnabled: boolean
   expWorkstationsEnabled: boolean  // Workstation page bar (DaVinci-style Code/Sandbox/Export)
+  expWebkitEnabled: boolean        // tsuki-webkit JSX panel + Simulate Webkit sandbox toggle
+  tsukiWebkitPath: string          // path to tsuki-webkit binary (auto-detect if empty)
   // ── Developer ─────────────────────────────────────────────────────────────
   developerOptions: boolean
   // ── Language / i18n ──────────────────────────────────────────────────────
@@ -415,6 +417,8 @@ const DEFAULT_SETTINGS: SettingsState = {
   expGitEnabled: false,
   expLspEnabled: false,
   expWorkstationsEnabled: false,
+  expWebkitEnabled: false,
+  tsukiWebkitPath: '',
   developerOptions: false,
   // advanced
   tsukiFlashPath: '',

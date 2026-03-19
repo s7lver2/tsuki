@@ -778,3 +778,109 @@ export function getMissingLibDiags(diags: Diagnostic[]): Diagnostic[] {
 export function lookupLib(name: string): LibraryInfo | undefined {
   return KNOWN_LIBS[name]
 }
+
+// ── tsuki-webkit recommendation ───────────────────────────────────────────────
+
+/**
+ * Libraries that duplicate functionality already covered by tsuki-webkit.
+ * When the user imports any of these on an ESP board, we suggest migrating.
+ */
+const WEBKIT_EQUIVALENT_LIBS = new Set([
+  'ESP8266WebServer', 'WebServer', 'ESP_AsyncWebServer', 'ESPAsyncWebServer',
+  'AsyncTCP', 'WiFiServer', 'ESP8266WiFi', 'WiFi', 'WiFiNINA',
+])
+
+export interface WebkitRecommendation {
+  importName: string
+  line:       number
+  message:    string
+}
+
+/**
+ * Scan code for imports of Arduino web-server libraries on an ESP board.
+ * Returns a recommendation to switch to tsuki-webkit if any are found.
+ */
+export function getWebkitRecommendations(
+  code:    string,
+  ext:     string,
+  boardId: string,
+): WebkitRecommendation[] {
+  const isEsp = boardId === 'esp8266' || boardId === 'esp32'
+  if (!isEsp) return []
+
+  const results: WebkitRecommendation[] = []
+  const lines = code.split('\n')
+
+  lines.forEach((raw, i) => {
+    // Go imports:  import "ESP8266WiFi"  or  "ESP_AsyncWebServer"
+    if (ext === 'go') {
+      const m = raw.match(/import\s+["']([^"']+)["']/)
+      if (m && WEBKIT_EQUIVALENT_LIBS.has(m[1])) {
+        results.push({
+          importName: m[1],
+          line: i + 1,
+          message: `Consider replacing "${m[1]}" with tsuki-webkit — it compiles JSX directly to an ESP-hosted control panel, no manual WebServer boilerplate needed.`,
+        })
+      }
+    }
+    // C++ / .ino:  #include <ESP8266WebServer.h>
+    if (ext === 'cpp' || ext === 'ino') {
+      const m = raw.match(/#include\s+[<"]([^>"]+\.h)[>"]/)
+      if (m) {
+        const libName = m[1].replace(/\.h$/, '')
+        if (WEBKIT_EQUIVALENT_LIBS.has(libName)) {
+          results.push({
+            importName: libName,
+            line: i + 1,
+            message: `Consider tsuki-webkit instead of "${libName}" — write your control panel in JSX and let tsuki-webkit compile it for ${boardId === 'esp8266' ? 'ESP8266' : 'ESP32'}.`,
+          })
+        }
+      }
+    }
+  })
+
+  return results
+}
+
+// ── JSX / tsuki-webkit.conf.json diagnostics ─────────────────────────────────
+
+export interface JsxDiagnostic {
+  line:    number
+  message: string
+  severity: 'error' | 'warning' | 'info'
+}
+
+/** Light-weight JSX linter — runs on .jsx files in tsuki-webkit projects. */
+export function diagnoseJsx(code: string): JsxDiagnostic[] {
+  const diags: JsxDiagnostic[] = []
+  const lines = code.split('\n')
+
+  // Check for tsuki-webkit import
+  const hasWebkitImport = lines.some(l => l.includes('tsuki-webkit'))
+  if (!hasWebkitImport) {
+    diags.push({ line: 1, severity: 'info', message: 'No tsuki-webkit import found — add: import { Api, Json, Serial } from \'tsuki-webkit\'' })
+  }
+
+  // Check for default export
+  if (!code.includes('export default')) {
+    diags.push({ line: lines.length, severity: 'error', message: 'Missing default export — tsuki-webkit needs export default function App() { … }' })
+  }
+
+  // Check for return with JSX
+  const returnJsx = code.match(/return\s*\(\s*</)
+  if (!returnJsx) {
+    diags.push({ line: lines.length, severity: 'warning', message: 'No JSX found in return() — the page will be empty' })
+  }
+
+  // Check for unclosed JSX tags (very naive balance)
+  let opens = 0
+  for (const l of lines) {
+    opens += (l.match(/<[A-Za-z]/g) || []).length
+    opens -= (l.match(/<\/[A-Za-z]|\/>/g) || []).length
+  }
+  if (opens > 2) {
+    diags.push({ line: lines.length, severity: 'warning', message: `Possible unclosed JSX tags (${opens} opens without matching close)` })
+  }
+
+  return diags
+}

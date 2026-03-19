@@ -1,0 +1,8 @@
+{
+  "name": "webkit-dashboard",
+  "version": "0.1.0",
+  "board": "esp8266",
+  "backend": "tsuki-flash",
+  "language": "go",
+  "packages": []
+}

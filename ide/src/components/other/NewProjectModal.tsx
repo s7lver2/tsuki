@@ -313,10 +313,13 @@ function StepTemplate({
 }
 
 function StepOptions({
-  gitInit, setGitInit,
+  gitInit, setGitInit, board, useWebkit, setUseWebkit,
 }: {
   gitInit: boolean; setGitInit: (v: boolean) => void
+  board: string; useWebkit: boolean; setUseWebkit: (v: boolean) => void
 }) {
+  const isEsp = board === 'esp8266' || board === 'esp32' || board === 'd1_mini'
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -345,6 +348,43 @@ function StepOptions({
           </RadioCard>
         </div>
       </div>
+
+      {/* tsuki-webkit question — only for ESP boards */}
+      {isEsp && (
+        <div>
+          <label className="text-xs font-semibold text-[var(--fg-muted)] uppercase tracking-widest block mb-2">
+            Web control panel
+          </label>
+          <div className="flex gap-2">
+            <RadioCard selected={useWebkit} onClick={() => setUseWebkit(true)} className="flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🌐</span>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-medium text-[var(--fg)]">Use tsuki-webkit</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold bg-emerald-500/15 text-emerald-400">
+                        ESP only
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--fg-faint)] mt-0.5">
+                      Scaffold an <span className="font-mono">app.jsx</span> web panel — served over WiFi from your board.
+                    </p>
+                  </div>
+                </div>
+                {useWebkit && <Check size={12} className="text-green-400 flex-shrink-0" />}
+              </div>
+            </RadioCard>
+            <RadioCard selected={!useWebkit} onClick={() => setUseWebkit(false)} className="flex-1">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-[var(--fg)]">Skip</span>
+                {!useWebkit && <Check size={12} className="text-green-400" />}
+              </div>
+              <p className="text-xs text-[var(--fg-faint)] mt-1">Standard project, no web panel.</p>
+            </RadioCard>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -369,16 +409,17 @@ export interface NewProjectModalProps {
 export default function NewProjectModal({ onClose }: NewProjectModalProps) {
   const { loadProject } = useStore()
 
-  const [step,     setStep    ] = useState<StepId>('name')
-  const [name,     setName    ] = useState('')
-  const [location, setLocation] = useState('')
-  const [language, setLanguage] = useState('go')
-  const [board,    setBoard   ] = useState('uno')
-  const [backend,  setBackend ] = useState('tsuki-flash')
-  const [template, setTemplate] = useState('blink')
-  const [gitInit,  setGitInit ] = useState(true)
-  const [creating, setCreating] = useState(false)
-  const [error,    setError   ] = useState('')
+  const [step,      setStep    ] = useState<StepId>('name')
+  const [name,      setName    ] = useState('')
+  const [location,  setLocation] = useState('')
+  const [language,  setLanguage] = useState('go')
+  const [board,     setBoard   ] = useState('uno')
+  const [backend,   setBackend ] = useState('tsuki-flash')
+  const [template,  setTemplate] = useState('blink')
+  const [gitInit,   setGitInit ] = useState(true)
+  const [useWebkit, setUseWebkit] = useState(false)
+  const [creating,  setCreating] = useState(false)
+  const [error,     setError   ] = useState('')
 
   const stepIdx    = STEPS.findIndex(s => s.id === step)
   const isLastStep = stepIdx === STEPS.length - 1
@@ -420,6 +461,38 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
       const sep      = location.includes('\\') ? '\\' : '/'
       const fullPath = location ? `${location}${sep}${projName}` : ''
       await loadProject(projName, board, template, backend, gitInit, fullPath, language)
+
+      // Scaffold tsuki-webkit files if requested
+      if (useWebkit && fullPath) {
+        try {
+          const { writeFile } = await import('@/lib/tauri')
+          const confJson = JSON.stringify({
+            Name: projName, Author: '', Version: '0.1.0',
+            Description: '', app: { Entrypoint: 'app.jsx' },
+          }, null, 2)
+          const appJsx = `import { Api, Json, Serial } from 'tsuki-webkit'
+
+export default function App() {
+  return (
+    <div className="wk-card">
+      <h1>${projName}</h1>
+      <p>Your web control panel.</p>
+      <div className="wk-row" style="margin-top:12px">
+        <button className="wk-btn"
+          onClick={() => Api.get('/api/status', d => Serial.log(Json.stringify(d)))}>
+          Get Status
+        </button>
+      </div>
+      <div id="__serial_log" className="wk-serial" style="margin-top:12px"></div>
+    </div>
+  )
+}
+`
+          await writeFile(`${fullPath}${sep}app.jsx`, appJsx)
+          await writeFile(`${fullPath}${sep}tsuki-webkit.conf.json`, confJson)
+        } catch { /* non-fatal — project already created */ }
+      }
+
       onClose()
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -520,7 +593,7 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
             {step === 'board'    && <StepBoard board={board} setBoard={setBoard} />}
             {step === 'backend'  && <StepBackend backend={backend} setBackend={setBackend} />}
             {step === 'template' && <StepTemplate template={template} setTemplate={setTemplate} templates={currentTemplates} />}
-            {step === 'options'  && <StepOptions gitInit={gitInit} setGitInit={setGitInit} />}
+            {step === 'options'  && <StepOptions gitInit={gitInit} setGitInit={setGitInit} board={board} useWebkit={useWebkit} setUseWebkit={setUseWebkit} />}
           </div>
 
           <div className="flex items-center justify-between px-6 py-4 border-t border-[var(--border)] flex-shrink-0 bg-[var(--surface)]">

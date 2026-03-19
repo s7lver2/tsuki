@@ -12,6 +12,7 @@ Argumentos opcionales:
   --platform  linux-amd64 | linux-arm64 | darwin-amd64 | darwin-arm64 | windows-amd64
   --skip-go       Omite compilar el CLI Go
   --skip-rust     Omite compilar los binarios Rust
+  --skip-webkit   Omite compilar tsuki-webkit
   --skip-ide      Omite compilar la IDE Tauri
   --no-clean      No limpiar dist/ antes de compilar
   --version X.Y.Z Fuerza una versión específica
@@ -35,9 +36,16 @@ APP_NAME       = "tsuki"
 BINARY         = "tsuki"          # CLI principal
 CORE_BINARY    = "tsuki-core"
 FLASH_BINARY   = "tsuki-flash"
+WEBKIT_BINARY  = "tsuki-webkit"
+WEBKIT_DIR     = os.path.join(PROJECT_ROOT, "libs", "tsuki-webkit")
 GO_MODULE      = "github.com/tsuki/cli"
 BUILD_DIR      = os.path.join(PROJECT_ROOT, "dist")
-RELEASE_DIR    = os.path.join(PROJECT_ROOT, "releases")
+# RELEASE_DIR can be overridden via env var to avoid antivirus interference.
+# Example: set TSUKI_RELEASE_DIR=C:\Users\you\Desktop\tsuki-releases
+RELEASE_DIR    = os.environ.get(
+    "TSUKI_RELEASE_DIR",
+    os.path.join(PROJECT_ROOT, "releases")
+)
 IDE_DIR        = os.path.join(PROJECT_ROOT, "ide")
 FLASH_DIR      = PROJECT_ROOT   # Rust crate: tsuki-core + tsuki-flash
 REGISTRY_URL   = "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/packages.json"
@@ -477,6 +485,75 @@ def _patch_cargo_version(cargo_path, version):
     return True
 
 
+# ─────────────────────────────────────────────
+#  BUILD: tsuki-webkit  (Rust, libs/tsuki-webkit/)
+#
+#  Compiles the JSX→HTML/CSS/JS compiler for ESP8266/ESP32.
+#  Same cross-compilation strategy as build_rust:
+#    - Native host → cargo build --release (fast)
+#    - Cross       → cross build (if available)
+#    - Skip        → warn and return None
+# ─────────────────────────────────────────────
+def build_webkit(platform_key, force_cross=False):
+    """Compila tsuki-webkit y copia el binario a dist/.
+
+    Devuelve la ruta al binario copiado, o None si falla / se omite.
+    """
+    if not os.path.isdir(WEBKIT_DIR):
+        warn(f"libs/tsuki-webkit/ no existe — omitiendo compilación de tsuki-webkit")
+        warn("  Crea el directorio o ejecuta: git submodule update --init")
+        return None
+
+    plat        = PLATFORMS[platform_key]
+    ext         = ".exe" if plat["goos"] == "windows" else ""
+    needs_cross = plat.get("cross", False) and platform_key != HOST_PLATFORM
+
+    # -- Compilación nativa --------------------------------------------------
+    if not needs_cross and platform_key == HOST_PLATFORM:
+        step(f"Compilando tsuki-webkit (nativo) → {platform_key}")
+        try:
+            run(["cargo", "build", "--release"], cwd=WEBKIT_DIR)
+        except subprocess.CalledProcessError as e:
+            warn(f"tsuki-webkit build falló para {platform_key} (exit={e.returncode}) — omitiendo")
+            return None
+
+        src = os.path.join(WEBKIT_DIR, "target", "release", f"{WEBKIT_BINARY}{ext}")
+        dst = os.path.join(BUILD_DIR, f"{WEBKIT_BINARY}-{platform_key}{ext}")
+        if not os.path.isfile(src):
+            warn(f"tsuki-webkit binary no encontrado en {src}")
+            return None
+        shutil.copy(src, dst)
+        info(f"tsuki-webkit binary → {os.path.basename(dst)}")
+        return dst
+
+    # -- Cross-compilación ---------------------------------------------------
+    rust_target = plat["rust_target"]
+    if _has_cross() or force_cross:
+        tool = "cross" if _has_cross() else "cargo"
+        step(f"Compilando tsuki-webkit ({tool}) → {platform_key}  [{rust_target}]")
+        try:
+            run([tool, "build", "--release", "--target", rust_target], cwd=WEBKIT_DIR)
+        except subprocess.CalledProcessError as e:
+            warn(f"tsuki-webkit cross-build falló (exit={e.returncode}) — omitiendo")
+            return None
+
+        src = os.path.join(WEBKIT_DIR, "target", rust_target, "release", f"{WEBKIT_BINARY}{ext}")
+        dst = os.path.join(BUILD_DIR, f"{WEBKIT_BINARY}-{platform_key}{ext}")
+        if not os.path.isfile(src):
+            warn(f"tsuki-webkit binary no encontrado en {src}")
+            return None
+        shutil.copy(src, dst)
+        info(f"tsuki-webkit binary → {os.path.basename(dst)}")
+        return dst
+
+    # -- Sin herramienta de cross-compilación --------------------------------
+    warn(
+        f"tsuki-webkit omitido para {platform_key} (host={HOST_PLATFORM}).\n"
+        f"  Para compilarlo: cargo install cross && ejecuta build de nuevo."
+    )
+    return None
+
+
 def build_tauri(platform_key, version):
     step(f"Compilando Tauri IDE → {platform_key}")
     plat        = PLATFORMS[platform_key]
@@ -586,6 +663,7 @@ VERSION="@@version@@"
 BINARY="@@binary@@"
 CORE_BINARY="@@core_binary@@"
 FLASH_BINARY="@@flash_binary@@"
+WEBKIT_BINARY="@@webkit_binary@@"
 REGISTRY_URL="@@registry_url@@"
 
 # ── Defaults ──────────────────────────────────────────────────────
@@ -638,7 +716,7 @@ CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/$BINARY"
 # ── Función de desinstalación ─────────────────────────────────────
 do_uninstall() {
   info "Desinstalando $APP v$VERSION..."
-  for f in "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"; do
+  for f in "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY" "$BINDIR/$WEBKIT_BINARY"; do
     [ -f "$f" ] && { sudo rm -f "$f"; ok "Eliminado $f"; } || true
   done
   [ -d "$DATADIR" ] && { sudo rm -rf "$DATADIR"; ok "Eliminado $DATADIR"; } || true
@@ -690,7 +768,9 @@ $SUDO mkdir -p "$BINDIR"
 $SUDO cp "$BINARY"        "$BINDIR/$BINARY"
 $SUDO cp "$CORE_BINARY"   "$BINDIR/$CORE_BINARY"
 $SUDO cp "$FLASH_BINARY"  "$BINDIR/$FLASH_BINARY"
+[ -f "$WEBKIT_BINARY" ] && $SUDO cp "$WEBKIT_BINARY" "$BINDIR/$WEBKIT_BINARY" || true
 $SUDO chmod +x "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"
+[ -f "$BINDIR/$WEBKIT_BINARY" ] && $SUDO chmod +x "$BINDIR/$WEBKIT_BINARY" || true
 ok "Binarios instalados"
 
 # ── Datos y configuración ─────────────────────────────────────────
@@ -945,9 +1025,10 @@ Name: "{localappdata}\\@@app_name@@\\config"; Flags: uninsalwaysuninstall
 
 [Files]
 ; ── CLI Binarios ───────────────────────────────────────────────────
-Source: "@@go_bin@@";    DestDir: "{app}\\bin"; DestName: "@@binary@@.exe";       Components: cli; Flags: ignoreversion
-Source: "@@core_bin@@";  DestDir: "{app}\\bin"; DestName: "@@core_binary@@.exe";  Components: cli; Flags: ignoreversion skipifsourcedoesntexist
-Source: "@@flash_bin@@"; DestDir: "{app}\\bin"; DestName: "@@flash_binary@@.exe"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+Source: "@@go_bin@@";      DestDir: "{app}\\bin"; DestName: "@@binary@@.exe";        Components: cli; Flags: ignoreversion
+Source: "@@core_bin@@";    DestDir: "{app}\\bin"; DestName: "@@core_binary@@.exe";   Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+Source: "@@flash_bin@@";   DestDir: "{app}\\bin"; DestName: "@@flash_binary@@.exe";  Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+Source: "@@webkit_bin@@";  DestDir: "{app}\\bin"; DestName: "@@webkit_binary@@.exe"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Paquetes locales ───────────────────────────────────────────────
 Source: "@@pkg_dir@@\\*"; DestDir: "{app}\\pkg"; Components: cli; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -1000,6 +1081,10 @@ Root: HKCU; Subkey: "Software\@@app_name@@"; \
 Root: HKCU; Subkey: "Software\@@app_name@@"; \
       ValueType: string; ValueName: "FlashBinary"; \
       ValueData: "{app}\bin\@@flash_binary@@.exe"; \
+      Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\@@app_name@@"; \
+      ValueType: string; ValueName: "WebkitBinary"; \
+      ValueData: "{app}\bin\@@webkit_binary@@.exe"; \
       Flags: uninsdeletekey
 
 ; ── Asociación de archivos .goino ───────────────────────────────────
@@ -1194,6 +1279,7 @@ begin
       Lines.Add('libs_dir     = "' + edLibsDir.Text + '"');
       Lines.Add('core_binary  = "' + ExpandConstant('{app}\bin\@@core_binary@@.exe') + '"');
       Lines.Add('flash_binary = "' + ExpandConstant('{app}\bin\@@flash_binary@@.exe') + '"');
+      Lines.Add('webkit_binary = "' + ExpandConstant('{app}\bin\@@webkit_binary@@.exe') + '"');
       Lines.Add('');
       Lines.Add('[registry]');
       Lines.Add('url = "' + edRegistry.Text + '"');
@@ -1244,7 +1330,7 @@ end;
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR LINUX / MACOS
 # ─────────────────────────────────────────────
-def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
+def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, webkit_bin=None):
     step(f"Creando instalador CLI → {platform_key}")
     plat_dir = os.path.join(RELEASE_DIR, f"{APP_NAME}-{version}-{platform_key}")
     os.makedirs(plat_dir, exist_ok=True)
@@ -1256,6 +1342,9 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
         shutil.copy(core_bin,  os.path.join(plat_dir, CORE_BINARY))
     if flash_bin:
         shutil.copy(flash_bin, os.path.join(plat_dir, FLASH_BINARY))
+    if webkit_bin:
+        shutil.copy(webkit_bin, os.path.join(plat_dir, WEBKIT_BINARY))
+        info(f"tsuki-webkit incluido en el instalador")
 
     # Copiar paquetes
     pkg_src = os.path.join(PROJECT_ROOT, "pkg")
@@ -1264,11 +1353,12 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
 
     # install.sh
     sh_subs = {
-        '@@app_name@@':    APP_NAME,
-        '@@version@@':     version,
-        '@@binary@@':      BINARY,
-        '@@core_binary@@': CORE_BINARY,
+        '@@app_name@@':     APP_NAME,
+        '@@version@@':      version,
+        '@@binary@@':       BINARY,
+        '@@core_binary@@':  CORE_BINARY,
         '@@flash_binary@@': FLASH_BINARY,
+        '@@webkit_binary@@': WEBKIT_BINARY,
         '@@registry_url@@': REGISTRY_URL,
         '@@platform_key@@': platform_key,
     }
@@ -1331,7 +1421,7 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR WINDOWS (Inno Setup)
 # ─────────────────────────────────────────────
-def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64"):
+def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64", webkit_bin=None):
     step("Creando instalador GUI Windows (Inno Setup)")
 
     # Buscar ícono
@@ -1361,9 +1451,11 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@binary@@":       BINARY,
         "@@core_binary@@":  CORE_BINARY,
         "@@flash_binary@@": FLASH_BINARY,
-        "@@go_bin@@":       _w(go_bin),
-        "@@core_bin@@":     _w(core_bin),
-        "@@flash_bin@@":    _w(flash_bin),
+        "@@webkit_binary@@": WEBKIT_BINARY,
+        "@@go_bin@@":        _w(go_bin),
+        "@@core_bin@@":      _w(core_bin),
+        "@@flash_bin@@":     _w(flash_bin),
+        "@@webkit_bin@@":    _w(webkit_bin) if webkit_bin else "",
         "@@icon_file@@":    _w(icon_file),
         "@@ide_bundle@@":   _w(ide_bundle) if ide_bundle else "",
         "@@pkg_dir@@":      _w(pkg_dir),
@@ -1372,7 +1464,7 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@registry_url@@": REGISTRY_URL,
         "@@ide_exe_name@@": ide_exe_name or f"{APP_NAME}.exe",
         "@@platform_key@@": platform_key,
-        "@@ide_dir_entry@@": 'Name: "{app}\\\\ide"' if ide_bundle else "",
+        "@@ide_dir_entry@@": 'Name: "{app}\\ide"' if ide_bundle else "",
     }
     iss_content = INNO_SCRIPT
 
@@ -1384,6 +1476,15 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
             '        Components: ide; Flags: ignoreversion recursesubdirs createallsubdirs; \\\n'
             '        Check: HasIdeBundle',
             '; IDE bundle not built on this platform'
+        )
+
+    # Comment out webkit entry when not built for this platform
+    if not webkit_bin:
+        iss_content = iss_content.replace(
+            'Source: "@@webkit_bin@@";  DestDir: "{app}\\\\bin"; '
+            'DestName: "@@webkit_binary@@.exe"; Components: cli; '
+            'Flags: ignoreversion skipifsourcedoesntexist',
+            '; tsuki-webkit not built for this platform'
         )
 
     for placeholder, value in iss_subs.items():
@@ -1432,6 +1533,7 @@ def check_dependencies(skip_go, skip_rust, skip_ide):
     missing = []
     if not skip_go   and not check_tool("go", "version"):      missing.append("go  →  https://go.dev/dl/")
     if not skip_rust and not check_tool("cargo", "--version"):  missing.append("cargo (Rust)  →  https://rustup.rs/")
+    # tsuki-webkit uses cargo too — no extra tool check needed (same binary)
     if not skip_ide:
         if not check_tool("npm", "--version"):   missing.append("npm  →  https://nodejs.org/")
     if missing:
@@ -1494,10 +1596,86 @@ def _kill_tsuki_ide():
         if "tsuki-ide.exe" in result.stdout:
             subprocess.run(["taskkill", "/F", "/IM", "tsuki-ide.exe"],
                            capture_output=True)
-            import time; time.sleep(1)  # esperar a que el proceso libere el archivo
+            import time; time.sleep(1.5)  # esperar a que el proceso libere el archivo
             info("  proceso tsuki-ide anterior terminado")
     except Exception:
         pass  # si falla, el usuario tendrá que cerrarlo manualmente
+
+
+def _copy_exe_win(src: str, dst: str) -> bool:
+    """
+    Copia src → dst en Windows con lógica robusta para Win10/Win11:
+
+    Problemas conocidos en Windows 10:
+      - Windows Defender puede mantener el exe bloqueado ~2 s después de
+        que el proceso termina (el antivirus escanea antes de liberar).
+      - shutil.copy2 falla con PermissionError/WinError 5 (ACCESS DENIED)
+        si el exe destino sigue bloqueado.
+
+    Estrategia:
+      1. Intentar la copia directa hasta MAX_RETRIES veces con back-off.
+      2. Si falla, intentar renombrar el exe anterior a .bak y copiar.
+      3. Si aún falla, mover el exe antiguo y usar replace() atómico.
+
+    Devuelve True si la copia tuvo éxito, False en caso contrario.
+    """
+    import time
+
+    MAX_RETRIES = 5
+    RETRY_DELAY = 1.0   # segundos entre reintentos
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            shutil.copy2(src, dst)
+            return True
+        except PermissionError as e:
+            if attempt < MAX_RETRIES:
+                warn(f"  copia bloqueada (intento {attempt}/{MAX_RETRIES}): {e} — reintentando en {RETRY_DELAY}s…")
+                time.sleep(RETRY_DELAY)
+                RETRY_DELAY = min(RETRY_DELAY * 1.5, 4.0)  # back-off exponencial
+            else:
+                warn(f"  copia directa fallida tras {MAX_RETRIES} intentos: {e}")
+
+    # ── Estrategia 2: renombrar el exe antiguo a .bak y copiar ───────────────
+    bak = dst + ".bak"
+    try:
+        if os.path.exists(bak):
+            os.remove(bak)
+        if os.path.exists(dst):
+            os.rename(dst, bak)
+        shutil.copy2(src, dst)
+        # Eliminar el .bak si la copia fue bien
+        try:
+            os.remove(bak)
+        except Exception:
+            pass
+        info("  copiado mediante estrategia rename-bak")
+        return True
+    except Exception as e2:
+        warn(f"  estrategia rename-bak fallida: {e2}")
+
+    # ── Estrategia 3: os.replace (atómico en NTFS) ────────────────────────────
+    tmp = dst + ".new"
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+        info("  copiado mediante os.replace atómico")
+        return True
+    except Exception as e3:
+        warn(f"  os.replace fallido: {e3}")
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+    # ── Diagnóstico final ─────────────────────────────────────────────────────
+    warn(f"  FALLO DEFINITIVO copiando a {dst}")
+    warn("  Posibles causas en Windows 10:")
+    warn("    · Windows Defender sigue escaneando el exe anterior")
+    warn("    · Excluye la carpeta de instalación del antivirus:")
+    warn(f"      {os.path.dirname(dst)}")
+    warn("    · O ejecuta el instalador como Administrador")
+    return False
 
 
 def install_ide_direct(platform_key):
@@ -1727,7 +1905,8 @@ def _build_platforms(target_platforms, version, commit, date,
             continue
 
         core_bin, flash_bin = build_rust(pk)
-        results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin}
+        webkit_bin = build_webkit(pk)
+        results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin, "webkit": webkit_bin}
 
         # Tauri solo en host
         ide_bundle = ide_exe_name = None
@@ -1760,6 +1939,7 @@ def _build_platforms(target_platforms, version, commit, date,
                     go_bin=r["go"],
                     core_bin=r["core"],
                     flash_bin=r["flash"],
+                    webkit_bin=r.get("webkit"),
                     version=version,
                     ide_bundle_dir=ide_bundle,
                     ide_exe_name=ide_exe_name,
@@ -1771,6 +1951,7 @@ def _build_platforms(target_platforms, version, commit, date,
                 go_bin=r["go"],
                 core_bin=r["core"],
                 flash_bin=r["flash"],
+                webkit_bin=r.get("webkit"),
                 version=version,
             )
 

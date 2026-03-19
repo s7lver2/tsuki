@@ -249,11 +249,93 @@ export function highlightPython(code: string): string {
   return code.split('\n').map(tokenizePyLine).join('\n')
 }
 
+// ── JSX / tsuki-webkit highlighter ─────────────────────────────────────────────
+const JSX_KW = new Set([
+  'import', 'export', 'default', 'from', 'function', 'return',
+  'const', 'let', 'var', 'if', 'else', 'for', 'while', 'switch', 'case',
+  'break', 'continue', 'new', 'typeof', 'instanceof', 'null', 'undefined',
+  'true', 'false', 'async', 'await', 'class', 'extends', 'super', 'this',
+])
+const JSX_WEBKIT_NAMES = new Set(['Api', 'Json', 'Serial'])
+const JSX_HTML_TAGS = new Set([
+  'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'button', 'input', 'select', 'option', 'form', 'label',
+  'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'thead', 'tbody',
+  'img', 'a', 'nav', 'main', 'header', 'footer', 'section', 'article',
+  'br', 'hr', 'strong', 'em', 'code', 'pre',
+])
+
+function tokenizeJsxLine(line: string): string {
+  if (/^\s*\/\//.test(line)) return `<span class="syn-com">${esc(line)}</span>`
+
+  let out = ''
+  let i = 0
+
+  while (i < line.length) {
+    // comment
+    if (line[i] === '/' && line[i + 1] === '/') {
+      out += `<span class="syn-com">${esc(line.slice(i))}</span>`
+      break
+    }
+    // string
+    if (line[i] === '"' || line[i] === "'" || line[i] === '`') {
+      const q = line[i]; let j = i + 1
+      while (j < line.length && !(line[j] === q && line[j - 1] !== '\\')) j++
+      out += `<span class="syn-str">${esc(line.slice(i, j + 1))}</span>`
+      i = j + 1; continue
+    }
+    // JSX tag: <TagName or </TagName
+    if (line[i] === '<') {
+      let j = i + 1
+      if (line[j] === '/') j++
+      const start = j
+      while (j < line.length && /[\w-]/.test(line[j])) j++
+      const tagName = line.slice(start, j)
+      if (tagName.length > 0) {
+        const isHtml = JSX_HTML_TAGS.has(tagName.toLowerCase())
+        const tagClass = isHtml ? 'syn-pkg' : 'syn-fn'
+        out += `<span class="syn-op">${esc(line.slice(i, i + (line[i+1] === '/' ? 2 : 1)))}</span>`
+        out += `<span class="${tagClass}">${esc(tagName)}</span>`
+        i = j; continue
+      }
+      out += esc(line[i]); i++; continue
+    }
+    // number
+    if (/\d/.test(line[i]) && (i === 0 || /[\s(,=+\-*/<>!&|^~%]/.test(line[i - 1]))) {
+      let j = i
+      while (j < line.length && /[0-9._]/.test(line[j])) j++
+      out += `<span class="syn-num">${esc(line.slice(i, j))}</span>`
+      i = j; continue
+    }
+    // word
+    if (/[a-zA-Z_$]/.test(line[i])) {
+      let j = i
+      while (j < line.length && /[\w$]/.test(line[j])) j++
+      const word = line.slice(i, j)
+      if (JSX_KW.has(word))            out += `<span class="syn-kw">${esc(word)}</span>`
+      else if (JSX_WEBKIT_NAMES.has(word)) out += `<span class="syn-pkg">${esc(word)}</span>`
+      else if (j < line.length && line[j] === '(') out += `<span class="syn-fn">${esc(word)}</span>`
+      else if (/^[A-Z]/.test(word))    out += `<span class="syn-typ">${esc(word)}</span>`
+      else out += esc(word)
+      i = j; continue
+    }
+    // braces/arrows
+    if ('{}()[]'.includes(line[i])) { out += `<span class="syn-op">${esc(line[i])}</span>`; i++; continue }
+    out += esc(line[i]); i++
+  }
+  return out
+}
+
+export function highlightJsx(code: string): string {
+  return code.split('\n').map(tokenizeJsxLine).join('\n')
+}
+
 export function highlightByExt(code: string, ext: string): string {
   switch (ext) {
     case 'cpp': case 'h': case 'hpp': return highlightCpp(code)
     case 'ino': return highlightIno(code)
     case 'py':  return highlightPython(code)
+    case 'jsx': return highlightJsx(code)
     default:    return highlightGo(code)
   }
 }

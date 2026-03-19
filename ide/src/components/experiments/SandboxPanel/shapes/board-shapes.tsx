@@ -268,3 +268,153 @@ export function XiaoRp2040Body({ w, h, g }: { w: number; h: number; g: string })
     </>
   )
 }
+// ── ESP8266 NodeMCU body ──────────────────────────────────────────────────────
+export function Esp8266Body({ w, h, g }: { w: number; h: number; g: string }) {
+  return (
+    <>
+      <defs>
+        <linearGradient id={`esp8266_${g}`} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%"   stopColor="#1c3a20" />
+          <stop offset="55%"  stopColor="#0f2412" />
+          <stop offset="100%" stopColor="#070f08" />
+        </linearGradient>
+      </defs>
+
+      {/* PCB */}
+      <rect width={w} height={h} rx={4} fill={`url(#esp8266_${g})`} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={3}
+        fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+
+      {/* Left pin header */}
+      <rect x={0} y={h*0.04} width={11} height={h*0.92} rx={2}
+        fill="#141414" stroke="#2a2a2a" strokeWidth={0.8} />
+
+      {/* Right pin header */}
+      <rect x={w-11} y={h*0.04} width={11} height={h*0.56} rx={2}
+        fill="#141414" stroke="#2a2a2a" strokeWidth={0.8} />
+
+      {/* ESP8266 module (blue box) */}
+      <rect x={w*0.15} y={h*0.10} width={w*0.70} height={h*0.40} rx={3}
+        fill="#1a2a7a" stroke="#243580" strokeWidth={0.8} />
+      <text x={w*0.50} y={h*0.27} textAnchor="middle" fontSize={5.5}
+        fill="rgba(255,255,255,0.8)" fontFamily="monospace" fontWeight="700">ESP8266</text>
+      <text x={w*0.50} y={h*0.35} textAnchor="middle" fontSize={4}
+        fill="rgba(255,255,255,0.5)" fontFamily="monospace">NodeMCU v3</text>
+      {/* WiFi antenna lines */}
+      {[0,1,2,3,4].map(i => (
+        <line key={i}
+          x1={w*0.70} y1={h*(0.12 + i*0.07)}
+          x2={w*0.82} y2={h*(0.12 + i*0.07)}
+          stroke="rgba(100,200,100,0.5)" strokeWidth={0.8} />
+      ))}
+
+      {/* USB micro-B */}
+      <rect x={w*0.32} y={-6} width={w*0.36} height={8} rx={1.5} fill="#c0c0c0" />
+      <rect x={w*0.35} y={-5} width={w*0.30} height={6} rx={1} fill="#888" />
+
+      {/* Power LED */}
+      <circle cx={w*0.22} cy={h*0.60} r={2.5} fill="#22c55e" opacity={0.9} />
+      <text x={w*0.22} y={h*0.66} textAnchor="middle" fontSize={3}
+        fill="rgba(255,255,255,0.4)" fontFamily="monospace">PWR</text>
+
+      {/* Flash/User LED */}
+      <circle cx={w*0.60} cy={h*0.60} r={2.5} fill="#3b82f6" opacity={0.85} />
+      <text x={w*0.60} y={h*0.66} textAnchor="middle" fontSize={3}
+        fill="rgba(255,255,255,0.4)" fontFamily="monospace">D4</text>
+
+      {/* RST button */}
+      <rect x={w*0.20} y={h*0.72} width={14} height={8} rx={2} fill="#b91c1c" stroke="#7f1d1d" strokeWidth={0.5} />
+      <text x={w*0.27} y={h*0.77} textAnchor="middle" fontSize={3}
+        fill="white" fontFamily="monospace">RST</text>
+
+      {/* Flash button */}
+      <rect x={w*0.58} y={h*0.72} width={14} height={8} rx={2} fill="#1d4ed8" stroke="#1e3a8a" strokeWidth={0.5} />
+      <text x={w*0.65} y={h*0.77} textAnchor="middle" fontSize={3}
+        fill="white" fontFamily="monospace">FLASH</text>
+
+      {/* Tsuki-webkit WiFi badge */}
+      <rect x={w*0.18} y={h*0.84} width={w*0.64} height={10} rx={3}
+        fill="rgba(34,197,94,0.12)" stroke="rgba(34,197,94,0.25)" strokeWidth={0.6} />
+      <text x={w*0.50} y={h*0.90} textAnchor="middle" fontSize={4}
+        fill="#4ade80" fontFamily="monospace">tsuki-webkit ✓</text>
+    </>
+  )
+}
+
+// ── ESP32 Dev Module body ────────────────────────────────────────────────────
+export function Esp32Body({ w, h, g }: { w: number; h: number; g: string }) {
+  return (
+    <>
+      <defs>
+        <linearGradient id={`esp32_${g}`} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%"   stopColor="#162030" />
+          <stop offset="55%"  stopColor="#0a1520" />
+          <stop offset="100%" stopColor="#050a10" />
+        </linearGradient>
+      </defs>
+
+      {/* PCB */}
+      <rect width={w} height={h} rx={4} fill={`url(#esp32_${g})`} />
+      <rect x={1} y={1} width={w-2} height={h-2} rx={3}
+        fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+
+      {/* Left pin header */}
+      <rect x={0} y={h*0.02} width={11} height={h*0.96} rx={2}
+        fill="#141414" stroke="#2a2a2a" strokeWidth={0.8} />
+
+      {/* Right pin header */}
+      <rect x={w-11} y={h*0.02} width={11} height={h*0.96} rx={2}
+        fill="#141414" stroke="#2a2a2a" strokeWidth={0.8} />
+
+      {/* ESP32-WROOM module */}
+      <rect x={w*0.12} y={h*0.08} width={w*0.76} height={h*0.46} rx={3}
+        fill="#1a1f35" stroke="#2a3050" strokeWidth={0.8} />
+      {/* Metal shielding texture */}
+      {[0,1,2,3,4,5].map(i => (
+        <line key={`hl${i}`}
+          x1={w*0.13} y1={h*(0.10 + i*0.065)}
+          x2={w*0.87} y2={h*(0.10 + i*0.065)}
+          stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
+      ))}
+      <text x={w*0.50} y={h*0.27} textAnchor="middle" fontSize={6}
+        fill="rgba(255,255,255,0.8)" fontFamily="monospace" fontWeight="700">ESP32</text>
+      <text x={w*0.50} y={h*0.35} textAnchor="middle" fontSize={4}
+        fill="rgba(255,255,255,0.45)" fontFamily="monospace">WROOM-32</text>
+      <text x={w*0.50} y={h*0.42} textAnchor="middle" fontSize={3.5}
+        fill="rgba(255,255,255,0.30)" fontFamily="monospace">240MHz · BT+WiFi</text>
+      {/* Antenna */}
+      {[0,1,2,3,4].map(i => (
+        <line key={i}
+          x1={w*0.72} y1={h*(0.10 + i*0.07)}
+          x2={w*0.85} y2={h*(0.10 + i*0.07)}
+          stroke="rgba(100,180,255,0.45)" strokeWidth={0.8} />
+      ))}
+
+      {/* USB micro-B */}
+      <rect x={w*0.32} y={-6} width={w*0.36} height={8} rx={1.5} fill="#c0c0c0" />
+      <rect x={w*0.35} y={-5} width={w*0.30} height={6} rx={1} fill="#888" />
+
+      {/* LEDs */}
+      <circle cx={w*0.22} cy={h*0.62} r={2.5} fill="#22c55e" opacity={0.9} />
+      <text x={w*0.22} y={h*0.67} textAnchor="middle" fontSize={3}
+        fill="rgba(255,255,255,0.4)" fontFamily="monospace">PWR</text>
+      <circle cx={w*0.55} cy={h*0.62} r={2.5} fill="#3b82f6" opacity={0.8} />
+      <text x={w*0.55} y={h*0.67} textAnchor="middle" fontSize={3}
+        fill="rgba(255,255,255,0.4)" fontFamily="monospace">D2</text>
+
+      {/* Buttons */}
+      <rect x={w*0.18} y={h*0.74} width={14} height={8} rx={2} fill="#b91c1c" stroke="#7f1d1d" strokeWidth={0.5} />
+      <text x={w*0.25} y={h*0.79} textAnchor="middle" fontSize={3}
+        fill="white" fontFamily="monospace">EN</text>
+      <rect x={w*0.58} y={h*0.74} width={14} height={8} rx={2} fill="#1d4ed8" stroke="#1e3a8a" strokeWidth={0.5} />
+      <text x={w*0.65} y={h*0.79} textAnchor="middle" fontSize={3}
+        fill="white" fontFamily="monospace">BOOT</text>
+
+      {/* tsuki-webkit badge */}
+      <rect x={w*0.15} y={h*0.87} width={w*0.70} height={10} rx={3}
+        fill="rgba(59,130,246,0.12)" stroke="rgba(59,130,246,0.25)" strokeWidth={0.6} />
+      <text x={w*0.50} y={h*0.93} textAnchor="middle" fontSize={4}
+        fill="#60a5fa" fontFamily="monospace">tsuki-webkit ✓</text>
+    </>
+  )
+}

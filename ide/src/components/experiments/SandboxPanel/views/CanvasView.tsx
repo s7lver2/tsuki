@@ -59,6 +59,8 @@ interface CanvasViewProps {
   onButtonPress: (compId: string) => void
   onButtonRelease: (compId: string) => void
   onSwitchToggle: (compId: string) => void
+  /** Called when the user enables "Simulate Webkit" on an ESP board */
+  onWebkitSimulate?: (boardId: string | null) => void
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -69,6 +71,7 @@ export default function CanvasView({
   pressedComps, toggledComps,
   probes, setProbes,
   onButtonPress, onButtonRelease, onSwitchToggle,
+  onWebkitSimulate,
 }: CanvasViewProps) {
 
   // ── Local state ────────────────────────────────────────────────────────────
@@ -108,6 +111,32 @@ export default function CanvasView({
   const [panning, setPanning]         = useState<{ sx: number; sy: number; px: number; py: number } | null>(null)
   const [hoveredWireId, setHoveredWireId] = useState<string | null>(null)
   const [showMeasurements, setShowMeasurements] = useState(false)
+
+  // ── tsuki-webkit context menu ───────────────────────────────────────────────
+  const [webkitCtxMenu, setWebkitCtxMenu] = useState<{
+    comp: PlacedComponent; x: number; y: number
+  } | null>(null)
+  const [webkitActiveBoard, setWebkitActiveBoard] = useState<string | null>(null)
+
+  const ESP_TYPES = new Set(['esp8266', 'esp32', 'esp32s2', 'esp32s3', 'esp32c3', 'nodemcu', 'wemos_d1'])
+  const isEspBoard = (comp: PlacedComponent) => {
+    const t = comp.type.toLowerCase().replace(/[^a-z0-9_]/g, '')
+    return ESP_TYPES.has(t) || t.includes('esp')
+  }
+
+  function handleCompContextMenu(e: React.MouseEvent, comp: PlacedComponent) {
+    if (!isEspBoard(comp)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setWebkitCtxMenu({ comp, x: e.clientX, y: e.clientY })
+  }
+
+  function handleWebkitToggle(compId: string, enabled: boolean) {
+    const next = enabled ? compId : null
+    setWebkitActiveBoard(next)
+    onWebkitSimulate?.(next)
+    setWebkitCtxMenu(null)
+  }
 
   // ── New canvas tool overlay state ──────────────────────────────────────────
   const [voltmeters, setVoltmeters]   = useState<VoltmeterPin[]>([])
@@ -573,6 +602,7 @@ export default function CanvasView({
                   }}
                   onPointerDown={e => onCompPointerDown(e, comp.id)}
                   onPinClick={pinId => onPinClick(comp.id, pinId)}
+                  onContextMenu={isEspBoard(comp) ? (e: React.MouseEvent) => handleCompContextMenu(e, comp) : undefined}
                 />
               )
             })}
@@ -700,6 +730,103 @@ export default function CanvasView({
           circuit={circuit}
           onClose={() => setShowMeasurements(false)}
         />
+      )}
+
+      {/* ── tsuki-webkit context menu (ESP boards) ── */}
+      {webkitCtxMenu && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setWebkitCtxMenu(null)}
+          />
+          {/* Menu */}
+          <div
+            className="fixed z-50 rounded-lg overflow-hidden shadow-2xl"
+            style={{
+              left: webkitCtxMenu.x,
+              top:  webkitCtxMenu.y,
+              background:   'var(--surface-1)',
+              border:       '1px solid var(--border)',
+              minWidth:     220,
+              boxShadow:    '0 12px 32px rgba(0,0,0,0.5)',
+            }}
+          >
+            {/* Header */}
+            <div className="px-3 py-2 border-b flex items-center gap-2"
+                 style={{ borderColor: 'var(--border)', background: 'var(--surface-2)' }}>
+              <span className="text-[10px] font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--text-muted)' }}>
+                {webkitCtxMenu.comp.label}
+              </span>
+              <span className="text-[10px] px-1.5 rounded"
+                    style={{ background: '#003a20', color: '#00e5b0' }}>
+                ESP
+              </span>
+            </div>
+
+            {/* Simulate Webkit toggle */}
+            <button
+              className="w-full flex items-center justify-between px-3 py-2.5 text-left text-xs transition-colors"
+              style={{
+                background:   'transparent',
+                border:       'none',
+                color:        'var(--text)',
+                cursor:       'pointer',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-2)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              onClick={() => handleWebkitToggle(
+                webkitCtxMenu.comp.id,
+                webkitActiveBoard !== webkitCtxMenu.comp.id,
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <span style={{ color: '#00e5b0' }}>◈</span>
+                <div>
+                  <div className="font-medium">Simulate Webkit</div>
+                  <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    Enable live JSX preview in the Webkit panel
+                  </div>
+                </div>
+              </div>
+              {/* Toggle indicator */}
+              <div
+                className="w-7 h-4 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                style={{
+                  background: webkitActiveBoard === webkitCtxMenu.comp.id
+                    ? '#00e5b0' : 'var(--surface-3, #2a2a2a)',
+                }}
+              >
+                <div
+                  className="w-3 h-3 rounded-full transition-transform"
+                  style={{
+                    background: '#fff',
+                    transform: webkitActiveBoard === webkitCtxMenu.comp.id
+                      ? 'translateX(12px)' : 'translateX(0)',
+                  }}
+                />
+              </div>
+            </button>
+
+            {/* Separator */}
+            <div style={{ height: 1, background: 'var(--border)' }} />
+
+            {/* Close */}
+            <button
+              className="w-full px-3 py-2 text-left text-xs transition-colors"
+              style={{
+                background: 'transparent', border: 'none',
+                color: 'var(--text-muted)', cursor: 'pointer',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-2)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              onClick={() => setWebkitCtxMenu(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </>
       )}
     </div>
   )

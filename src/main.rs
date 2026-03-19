@@ -88,20 +88,23 @@ fn main() {
 
     // ── Build pipeline with optional external libs ────────────────────────────
     let opts = PipelineOptions {
-        libs_dir:  libs_dir,
-        pkg_names: pkg_names,
+        libs_dir:           libs_dir,
+        pkg_names:          pkg_names,
+        webkit_project_dir: None,
     };
 
     // Dispatch to the appropriate pipeline based on language
     let run_pipeline = |source: &str, filename: &str| -> tsuki_core::Result<String> {
         match lang.as_str() {
             "py" | "python" => PythonPipeline::new(cfg.clone()).with_options(PipelineOptions {
-                libs_dir:  opts.libs_dir.clone(),
-                pkg_names: opts.pkg_names.clone(),
+                libs_dir:           opts.libs_dir.clone(),
+                pkg_names:          opts.pkg_names.clone(),
+                webkit_project_dir: opts.webkit_project_dir.clone(),
             }).run(source, filename),
             _ => Pipeline::new(cfg.clone()).with_options(PipelineOptions {
-                libs_dir:  opts.libs_dir.clone(),
-                pkg_names: opts.pkg_names.clone(),
+                libs_dir:           opts.libs_dir.clone(),
+                pkg_names:          opts.pkg_names.clone(),
+                webkit_project_dir: opts.webkit_project_dir.clone(),
             }).run(source, filename),
         }
     };

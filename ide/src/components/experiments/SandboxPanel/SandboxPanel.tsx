@@ -137,6 +137,8 @@ export default function SandboxPanel({ onClose, fullscreen = false }: { onClose?
   const [view, setView]     = useState<View>('canvas')
   const [confirmClear, setConfirmClear] = useState(false)
 
+  const isEspBoard = board === 'esp8266' || board === 'esp32'
+
   // ── Hooks ──────────────────────────────────────────────────────────────────
   const { circuit, setCircuit } = useCircuit(board || 'uno')
 
@@ -330,6 +332,7 @@ export default function SandboxPanel({ onClose, fullscreen = false }: { onClose?
           stopSigGen={sim.stopSigGen}
         />
       )}
+
     </div>
   )
 }

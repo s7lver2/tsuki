@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { PlacedComponent, CircuitPin, CircuitComponentDef, COMP_DEFS, pinColor } from './SandboxDefs'
 
 // ── Shape sub-modules ─────────────────────────────────────────────────────────
-import { ArduinoUnoBody, ArduinoNanoBody, XiaoRp2040Body }           from './shapes/board-shapes'
+import { ArduinoUnoBody, ArduinoNanoBody, XiaoRp2040Body, Esp8266Body, Esp32Body } from './shapes/board-shapes'
 import { LedBody, RgbLedBody, BuzzerBody, ServoBody,
          LcdBody, OledBody, SevenSegBody, NeopixelRingBody }          from './shapes/output-shapes'
 import { ButtonBody, PotBody, SlideSwitchBody, RotaryEncoderBody,
@@ -134,6 +134,8 @@ function ComponentBody({ comp, def, simPinValues }: {
     case 'arduino_uno':    return <ArduinoUnoBody  w={w} h={h} g={g} />
     case 'arduino_nano':   return <ArduinoNanoBody w={w} h={h} g={g} />
     case 'xiao_rp2040':    return <XiaoRp2040Body  w={w} h={h} g={g} />
+    case 'esp8266':        return <Esp8266Body      w={w} h={h} g={g} />
+    case 'esp32':          return <Esp32Body        w={w} h={h} g={g} />
 
     // Output
     case 'led': {
@@ -208,7 +210,7 @@ function ComponentBody({ comp, def, simPinValues }: {
 // ── CompShape wrapper ──────────────────────────────────────────────────────────
 export function CompShape({
   comp, selected, simPinValues, wireMode, onPointerDown, onPinClick,
-  pressed, onInteractStart, onInteractEnd,
+  pressed, onInteractStart, onInteractEnd, onContextMenu,
 }: {
   comp: PlacedComponent; selected: boolean
   simPinValues: Record<string, number>; wireMode: boolean
@@ -217,6 +219,7 @@ export function CompShape({
   pressed?: boolean
   onInteractStart?: () => void
   onInteractEnd?: () => void
+  onContextMenu?: (e: React.MouseEvent) => void
 }) {
   const def = COMP_DEFS[comp.type]
   if (!def) return null
@@ -231,7 +234,8 @@ export function CompShape({
         else onPointerDown(e)
       }}
       onPointerUp={() => { if (isInteractive && onInteractEnd) onInteractEnd() }}
-      onPointerLeave={() => { if (isInteractive && onInteractEnd && comp.type === 'button') onInteractEnd() }}>
+      onPointerLeave={() => { if (isInteractive && onInteractEnd && comp.type === 'button') onInteractEnd() }}
+      onContextMenu={onContextMenu}>
 
       <rect x={3} y={4} width={def.w} height={def.h} rx={6} fill="rgba(0,0,0,0.4)" />
 

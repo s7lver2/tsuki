@@ -1,0 +1,9 @@
+{
+  "Name": "ESP Dashboard",
+  "Author": "",
+  "Version": "0.1.0",
+  "Description": "Real-time ESP8266 control panel built with tsuki-webkit",
+  "app": {
+    "Entrypoint": "app.jsx"
+  }
+}

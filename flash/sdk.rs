@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::path::{Path, PathBuf};
+use colored::Colorize;
 use crate::error::{FlashError, Result};
 
 /// All filesystem paths required to compile for a given architecture.

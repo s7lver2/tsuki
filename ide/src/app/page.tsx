@@ -6,6 +6,7 @@ import { ContextMenuProvider } from '@/components/shared/ContextMenu'
 import SplashScreen from '@/components/screens/SplashScreen'
 import OnboardingModal from '@/components/other/OnboardingModal'
 import WhatsNewModal from '@/components/other/WhatsNewModal'
+import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import type { ChangelogEntry } from '@/components/other/WhatsNewModal'
 
 const WelcomeScreen  = dynamic(() => import('@/components/screens/WelcomeScreen'),  { ssr: false })
@@ -164,10 +165,18 @@ export default function Page() {
         <SplashScreen ready={splashReady} onDone={handleSplashDone} />
       )}
 
-      {screen === 'welcome'  && <WelcomeScreen />}
-      {screen === 'ide'      && <IdeScreen />}
-      {screen === 'settings' && <SettingsScreen />}
-      {screen === 'docs'     && <DocsScreen />}
+      <ErrorBoundary name="WelcomeScreen">
+        {screen === 'welcome'  && <WelcomeScreen />}
+      </ErrorBoundary>
+      <ErrorBoundary name="IdeScreen">
+        {screen === 'ide'      && <IdeScreen />}
+      </ErrorBoundary>
+      <ErrorBoundary name="SettingsScreen">
+        {screen === 'settings' && <SettingsScreen />}
+      </ErrorBoundary>
+      <ErrorBoundary name="DocsScreen">
+        {screen === 'docs'     && <DocsScreen />}
+      </ErrorBoundary>
 
       <ContextMenuProvider />
 

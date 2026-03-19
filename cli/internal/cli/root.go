@@ -75,6 +75,7 @@ func init() {
 		newVersionCmd(),
 		newPkgCmd(),
 		newSimulateCmd(),
+		newWebkitCmd(),
 	)
 }
 

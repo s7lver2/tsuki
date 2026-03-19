@@ -1,4 +1,5 @@
 'use client'
+import React from 'react'
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
 import ProfilesPanel from '@/components/other/ProfilesPanel'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
@@ -9,7 +10,7 @@ import {
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
   Beaker, ToggleLeft, GitBranch, Languages, Bug, FileText,
   Trash2, ExternalLink, AlertTriangle, RotateCcw, User, Layers,
-  Download, Plus, X, Radio, Package,
+  Download, Plus, X, Radio, Package, Globe,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { clsx } from 'clsx'
@@ -33,12 +34,13 @@ const DEV_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = 
   { id: 'developer', labelKey: 'settings.tab_developer', icon: <Beaker size={13} /> },
 ]
 
-const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled' }[] = [
+const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled' | 'expWebkitEnabled' }[] = [
   { id: 'experiments', label: 'General',   icon: <FlaskConical size={13} /> },
   { id: 'exp-sandbox', label: 'Sandbox',   icon: <Cpu          size={13} />, settingKey: 'expSandboxEnabled' },
   { id: 'exp-git',     label: 'Git',       icon: <GitBranch    size={13} />, settingKey: 'expGitEnabled'     },
   { id: 'exp-lsp',     label: 'LSP',       icon: <Zap          size={13} />, settingKey: 'expLspEnabled'     },
   { id: 'exp-workstations', label: 'Workstations', icon: <Layers size={13} />, settingKey: 'expWorkstationsEnabled' },
+  { id: 'exp-webkit',  label: 'Webkit',    icon: <Globe        size={13} />, settingKey: 'expWebkitEnabled'  },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +170,8 @@ export default function SettingsScreen() {
 
             {/* Per-experiment tabs — only when that specific experiment is enabled */}
             {expEnabled && EXP_NAV.filter(n => n.id !== 'experiments').map(n => {
-              if (n.settingKey && !settings[n.settingKey]) return null
+              // exp-webkit is always visible so users can enable it from there
+              if (n.id !== 'exp-webkit' && n.settingKey && !settings[n.settingKey]) return null
               return (
                 <NavItem
                   key={n.id} id={n.id as SettingsTab} label={n.label} icon={n.icon}
@@ -217,6 +220,7 @@ export default function SettingsScreen() {
             {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
             {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
             {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
+            {settingsTab === 'exp-webkit'   && expEnabled && <WebkitExpTab />}
             {settingsTab === 'updates'      && <UpdatesTab />}
             {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
           </div>
@@ -241,7 +245,7 @@ interface ExpDef {
   tag: string
   icon: React.ReactNode
   desc: string
-  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled'  // union grows as experiments are added
+  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled' | 'expWebkitEnabled'  // union grows as experiments are added
   resources: string                 // what it costs when enabled
 }
 
@@ -285,6 +289,16 @@ const EXPERIMENTS: ExpDef[] = [
     desc: 'DaVinci Resolve-style page bar at the bottom of the IDE. Switch between Code, Sandbox, and Export workstations — each occupies the full screen area.',
     settingKey: 'expWorkstationsEnabled',
     resources: 'Zero overhead when inactive. Sandbox workstation re-uses the existing simulator — no extra bundle cost.',
+  },
+  {
+    id: 'webkit',
+    tab: 'exp-webkit',
+    name: 'tsuki-webkit',
+    tag: 'α',
+    icon: <Globe size={16} />,
+    desc: 'JSX → HTML/CSS/JS compiler for ESP8266/ESP32 web control panels. Write React-style components; tsuki-webkit serves them over WiFi from your board.',
+    settingKey: 'expWebkitEnabled',
+    resources: 'In-browser JSX preview only — no background processes. Requires tsuki-webkit binary for full builds.',
   },
 ]
 
@@ -2840,6 +2854,134 @@ function DeveloperTab() {
         <span className="text-amber-400 text-xs mt-0.5">⚠</span>
         <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
           Developer options are intended for contributors and debugging. Disable them in the Experiments → General tab when done.
+        </p>
+      </div>
+    </div>
+  )
+}
+// ─────────────────────────────────────────────────────────────────────────────
+//  tsuki-webkit experiment settings tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function WebkitExpTab() {
+  const { settings, updateSetting } = useStore()
+  const [detecting, setDetecting] = React.useState(false)
+  const [detected,  setDetected]  = React.useState<string | null>(null)
+
+  async function autoDetect() {
+    setDetecting(true); setDetected(null)
+    try {
+      const { detectTool } = await import('@/lib/tauri')
+      const p = await detectTool('tsuki-webkit')
+      updateSetting('tsukiWebkitPath' as any, p)
+      setDetected(p)
+    } catch {
+      setDetected('not found')
+    } finally {
+      setDetecting(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        <Globe size={16} className="text-emerald-400" />
+        <h2 className="text-sm font-semibold">tsuki-webkit</h2>
+        <Badge variant="default">experimental</Badge>
+      </div>
+
+      <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+        A lightweight JSX → HTML/CSS/JS compiler that targets ESP8266 and ESP32 boards.
+        Write React-style components; tsuki-webkit bundles them into a self-contained
+        HTML page served directly from your board over WiFi.
+      </p>
+
+      {/* Binary + detection */}
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
+        <GroupHeader title="Binary" />
+
+        <SettingsField
+          name="tsuki-webkit path"
+          desc="Path to the tsuki-webkit binary. Leave blank to auto-detect from PATH."
+        >
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <input
+              value={(settings as any).tsukiWebkitPath ?? ''}
+              onChange={e => updateSetting('tsukiWebkitPath' as any, e.target.value)}
+              placeholder="auto (tsuki-webkit)"
+              className="flex-1 font-mono text-xs bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 outline-none text-[var(--fg)] placeholder-[var(--fg-faint)] min-w-0"
+            />
+            <Btn variant="ghost" size="xs" onClick={autoDetect} disabled={detecting}>
+              {detecting ? '…' : 'Detect'}
+            </Btn>
+          </div>
+        </SettingsField>
+
+        {detected && (
+          <p className={clsx('text-xs font-mono', detected === 'not found' ? 'text-red-400' : 'text-green-400')}>
+            {detected === 'not found' ? '✗ not found in PATH' : `✓ ${detected}`}
+          </p>
+        )}
+
+        <p className="text-xs text-[var(--fg-faint)] leading-relaxed">
+          Build the binary from source:{' '}
+          <code className="bg-[var(--surface-3)] px-1.5 py-0.5 rounded text-[10px]">
+            cd libs/tsuki-webkit && cargo build --release
+          </code>
+        </p>
+      </div>
+
+      {/* Preview settings */}
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
+        <GroupHeader title="Preview" />
+
+        <SettingsField
+          name="Webkit panel"
+          desc="Show the webkit preview panel in the editor when app.jsx is open."
+        >
+          <Toggle
+            on={settings.expWebkitEnabled}
+            onToggle={() => updateSetting('expWebkitEnabled', !settings.expWebkitEnabled)}
+          />
+        </SettingsField>
+
+        <SettingsField
+          name="LSP recommendations"
+          desc="Suggest switching to tsuki-webkit when ESP web-server libraries are detected."
+        >
+          <Toggle
+            on={settings.lspShowLibPrompt}
+            onToggle={() => updateSetting('lspShowLibPrompt', !settings.lspShowLibPrompt)}
+          />
+        </SettingsField>
+      </div>
+
+      {/* How to use */}
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-3">
+        <GroupHeader title="Quick reference" />
+        <div className="flex flex-col gap-2 text-xs font-mono">
+          {[
+            ['# Scaffold a webkit project', null],
+            ['tsuki webkit init', 'text-amber-400'],
+            ['# Build for ESP8266', null],
+            ['tsuki webkit build --board esp8266', 'text-amber-400'],
+            ['# Open preview in browser', null],
+            ['tsuki webkit preview', 'text-amber-400'],
+          ].map(([text, color], i) => (
+            <div key={i} className={clsx('leading-tight', color ?? 'text-[var(--fg-faint)]')}>
+              {text}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Built-in classes */}
+      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+        <p className="text-xs text-emerald-300 leading-relaxed">
+          <strong>Built-in CSS classes: </strong>
+          {['wk-card','wk-btn','wk-input','wk-label','wk-badge','wk-row','wk-col','wk-serial','wk-value','wk-grid'].map((c, i) => (
+            <span key={c}>{i > 0 && ' · '}<code className="text-emerald-400">{c}</code></span>
+          ))}
         </p>
       </div>
     </div>

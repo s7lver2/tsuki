@@ -2,7 +2,7 @@
 import { useStore, BottomTab } from '@/lib/store'
 import { useEffect, useRef, useState, useCallback, KeyboardEvent as RKE } from 'react'
 import { IconBtn } from '@/components/shared/primitives'
-import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle } from 'lucide-react'
+import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Filter, Copy, ChevronDown } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
 import { ptyCreate, ptyWrite, ptyKill, ptyOnData, ptyOnExit, spawnProcess, listShells, pathExists, type ShellInfo, isTauri } from '@/lib/tauri'
@@ -773,18 +773,59 @@ export default function BottomPanel() {
   const t = useT()
   const endRef = useRef<HTMLDivElement>(null)
 
+  // ── Output filter state ───────────────────────────────────────────────────
+  const [logFilter,   setLogFilter]   = useState<'all' | 'ok' | 'err' | 'warn' | 'info'>('all')
+  const [logSearch,   setLogSearch]   = useState('')
+  const [showSearch,  setShowSearch]  = useState(false)
+  const [autoScroll,  setAutoScroll]  = useState(true)
+  const searchRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
-    if (bottomTab === 'output') endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [logs, bottomTab])
+    if (bottomTab === 'output' && autoScroll) {
+      endRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logs, bottomTab, autoScroll])
+
+  useEffect(() => {
+    if (showSearch) searchRef.current?.focus()
+  }, [showSearch])
 
   const errCount  = problems.filter(p => p.severity === 'error').length
   const warnCount = problems.filter(p => p.severity === 'warning').length
+
+  // ── Log counters ──────────────────────────────────────────────────────────
+  const logCounts = {
+    ok:   logs.filter(l => l.type === 'ok').length,
+    err:  logs.filter(l => l.type === 'err').length,
+    warn: logs.filter(l => l.type === 'warn').length,
+    info: logs.filter(l => l.type === 'info').length,
+  }
+
+  // ── Filtered logs ─────────────────────────────────────────────────────────
+  const filteredLogs = logs.filter(l => {
+    if (logFilter !== 'all' && l.type !== logFilter) return false
+    if (logSearch && !l.msg.toLowerCase().includes(logSearch.toLowerCase())) return false
+    return true
+  })
+
+  function copyLogs() {
+    const text = filteredLogs.map(l => `[${l.time}] [${l.type.toUpperCase()}] ${l.msg}`).join('\n')
+    navigator.clipboard.writeText(text).catch(() => {})
+  }
+
+  const LOG_ICON: Record<string, React.ReactNode> = {
+    ok:   <span className="text-green-400  select-none">✓</span>,
+    err:  <span className="text-red-400    select-none">✗</span>,
+    warn: <span className="text-yellow-400 select-none">⚠</span>,
+    info: <span className="text-[var(--fg-faint)] select-none">·</span>,
+  }
 
   return (
     <div className="flex flex-col border-t border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0 relative"
       style={{ height: bottomHeight }}>
       <ResizeHandle />
 
+      {/* ── Tab bar ── */}
       <div className="h-8 flex items-center px-2 gap-0.5 border-b border-[var(--border)] flex-shrink-0">
         {useTabs().map(tab => (
           <button key={tab.id} onClick={() => setBottomTab(tab.id)}
@@ -797,23 +838,122 @@ export default function BottomPanel() {
                 {warnCount > 0 && <span className="text-yellow-400">{warnCount}</span>}
               </span>
             )}
+            {tab.id === 'output' && logCounts.err > 0 && (
+              <span className="text-2xs font-mono text-red-400">{logCounts.err}</span>
+            )}
           </button>
         ))}
         <div className="flex-1" />
-        {bottomTab === 'output' && <IconBtn tooltip="Clear output" onClick={clearLogs}><Trash2 size={11} /></IconBtn>}
+
+        {/* Output toolbar */}
+        {bottomTab === 'output' && (
+          <div className="flex items-center gap-0.5">
+            {/* Type filter pills */}
+            <div className="flex items-center gap-px mr-1">
+              {(['all', 'err', 'warn', 'ok', 'info'] as const).map(f => (
+                <button key={f} onClick={() => setLogFilter(f)}
+                  className={clsx(
+                    'px-1.5 py-0.5 text-[9px] font-mono rounded border-0 cursor-pointer transition-colors',
+                    logFilter === f
+                      ? f === 'err'  ? 'bg-red-500/20 text-red-400'
+                      : f === 'warn' ? 'bg-yellow-500/20 text-yellow-400'
+                      : f === 'ok'   ? 'bg-green-500/20 text-green-400'
+                      : f === 'info' ? 'bg-[var(--active)] text-[var(--fg-muted)]'
+                                     : 'bg-[var(--active)] text-[var(--fg)]'
+                      : 'bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)]',
+                  )}>
+                  {f === 'all'
+                    ? `all ${logs.length}`
+                    : f === 'err'  ? `err ${logCounts.err}`
+                    : f === 'warn' ? `warn ${logCounts.warn}`
+                    : f === 'ok'   ? `ok ${logCounts.ok}`
+                    : `info ${logCounts.info}`}
+                </button>
+              ))}
+            </div>
+
+            {/* Search toggle */}
+            <IconBtn tooltip="Search logs" onClick={() => setShowSearch(s => !s)}>
+              <Filter size={11} className={showSearch ? 'text-blue-400' : ''} />
+            </IconBtn>
+
+            {/* Auto-scroll toggle */}
+            <IconBtn tooltip={autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF'}
+              onClick={() => setAutoScroll(s => !s)}>
+              <ChevronDown size={11} className={autoScroll ? 'text-green-400' : 'text-[var(--fg-faint)]'} />
+            </IconBtn>
+
+            {/* Copy */}
+            <IconBtn tooltip="Copy visible logs" onClick={copyLogs}>
+              <Copy size={11} />
+            </IconBtn>
+
+            {/* Clear */}
+            <IconBtn tooltip="Clear output" onClick={clearLogs}>
+              <Trash2 size={11} />
+            </IconBtn>
+          </div>
+        )}
       </div>
 
+      {/* ── Output tab ── */}
       {bottomTab === 'output' && (
-        <div className="flex-1 overflow-y-auto px-3 py-2">
-          {!logs.length && <span className="text-xs text-[var(--fg-faint)]">No output yet.</span>}
-          {logs.map(l => (
-            <div key={l.id} className="flex gap-3 font-mono text-xs leading-[18px]">
-              <span className="text-[var(--fg-faint)] flex-shrink-0 select-none">{l.time}</span>
-              <span className={clsx({ 'text-green-400': l.type==='ok', 'text-red-400': l.type==='err',
-                'text-yellow-400': l.type==='warn', 'text-[var(--fg-muted)]': l.type==='info' })}>{l.msg}</span>
+        <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+
+          {/* Search bar */}
+          {showSearch && (
+            <div className="flex items-center gap-1.5 px-3 py-1 border-b border-[var(--border)] bg-[var(--surface)] flex-shrink-0">
+              <Filter size={9} className="text-[var(--fg-faint)] flex-shrink-0" />
+              <input
+                ref={searchRef}
+                value={logSearch}
+                onChange={e => setLogSearch(e.target.value)}
+                onKeyDown={e => e.key === 'Escape' && (setShowSearch(false), setLogSearch(''))}
+                placeholder="Filter log messages…"
+                className="flex-1 text-xs bg-transparent outline-none text-[var(--fg)] placeholder-[var(--fg-faint)]"
+              />
+              {logSearch && (
+                <span className="text-[9px] text-[var(--fg-faint)] font-mono">
+                  {filteredLogs.length} / {logs.length}
+                </span>
+              )}
             </div>
-          ))}
-          <div ref={endRef} />
+          )}
+
+          {/* Log list */}
+          <div className="flex-1 overflow-y-auto px-3 py-1.5 min-h-0"
+            onScroll={e => {
+              const el = e.currentTarget
+              const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+              setAutoScroll(atBottom)
+            }}>
+            {!filteredLogs.length && (
+              <span className="text-xs text-[var(--fg-faint)]">
+                {logs.length === 0 ? 'No output yet.' : 'No entries match the current filter.'}
+              </span>
+            )}
+            {filteredLogs.map(l => (
+              <div key={l.id}
+                className="flex gap-2 font-mono text-xs leading-[18px] hover:bg-[var(--hover)] rounded px-1 -mx-1 group cursor-default"
+                title={l.msg}>
+                <span className="text-[var(--fg-faint)] flex-shrink-0 select-none w-14 text-right">{l.time}</span>
+                <span className="flex-shrink-0 w-3">{LOG_ICON[l.type]}</span>
+                <span className={clsx('flex-1 min-w-0 break-all', {
+                  'text-green-400':          l.type === 'ok',
+                  'text-red-400':            l.type === 'err',
+                  'text-yellow-400':         l.type === 'warn',
+                  'text-[var(--fg-muted)]':  l.type === 'info',
+                })}>{l.msg}</span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(l.msg).catch(() => {})}
+                  className="opacity-0 group-hover:opacity-100 w-4 h-4 flex items-center justify-center text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent flex-shrink-0 transition-opacity"
+                  title="Copy line">
+                  <Copy size={9} />
+                </button>
+              </div>
+            ))}
+            <div ref={endRef} />
+          </div>
         </div>
       )}
 

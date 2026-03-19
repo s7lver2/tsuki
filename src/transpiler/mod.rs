@@ -73,17 +73,21 @@ impl Transpiler {
         for i in &incs { out += &format!("#include <{}>\n", i); }
         out += "\n";
 
-        for td in &typedefs { out += &self.emit_typedef(td)?; }
+        for td in &typedefs  { out += &self.emit_typedef(td)?; }
         if !typedefs.is_empty() { out += "\n"; }
 
-        for s in &structs { out += &self.emit_struct(s)?; }
+        for s in &structs    { out += &self.emit_struct(s)?; }
         if !structs.is_empty() { out += "\n"; }
 
-        for c in &constants { out += &self.emit_const(c)?; }
-        if !constants.is_empty() { out += "\n"; }
+        // Clone to release the shared borrow on prog.decls so emit_const
+        // can take &mut self (needed to update var_types for webkit consts).
+        let constants_owned: Vec<_> = constants.iter().map(|d| (*d).clone()).collect();
+        for c in &constants_owned { out += &self.emit_const(c)?; }
+        if !constants_owned.is_empty() { out += "\n"; }
 
-        for g in &globals { out += &self.emit_global(g)?; }
-        if !globals.is_empty() { out += "\n"; }
+        let globals_owned: Vec<_> = globals.iter().map(|d| (*d).clone()).collect();
+        for g in &globals_owned { out += &self.emit_global(g)?; }
+        if !globals_owned.is_empty() { out += "\n"; }
 
         for f in &funcs {
             if let Decl::Func { name, sig, recv: None, .. } = f {
@@ -116,10 +120,36 @@ impl Transpiler {
 
     fn resolve_imports(&mut self, imports: &[Import]) {
         for imp in imports {
-            let canon: String = imp.path.split('/').last()
+            let raw_path: String = imp.path.split('/').last()
                 .unwrap_or(&imp.path).to_owned();
-            let alias = imp.local_name().to_owned();
-            self.pkg_map.insert(alias, canon.clone());
+
+            // Normalise hyphenated package names to a valid C identifier.
+            // e.g. "tsuki-webkit" → "tsuki_webkit"
+            let canon: String = raw_path.replace('-', "_");
+
+            // The Go alias: if user wrote `import tw "tsuki-webkit"` use "tw",
+            // otherwise derive from the last path segment keeping hyphens as
+            // they appear in Go source so the parser can look them up.
+            let alias = if let Some(a) = &imp.alias {
+                a.clone()
+            } else {
+                raw_path.clone()   // keep original (may contain hyphens)
+            };
+
+            // Also register the underscore-normalised alias so both
+            // `tsuki-webkit.X` and `tsuki_webkit.X` resolve correctly.
+            self.pkg_map.insert(alias.clone(), canon.clone());
+            if alias != canon {
+                self.pkg_map.insert(canon.clone(), canon.clone());
+            }
+
+            // ── tsuki-webkit: inject the generated header instead of a pkg lookup ──
+            if canon == "tsuki_webkit" || raw_path == "tsuki-webkit" {
+                self.includes.insert("tsuki_webkit_gen.h".into());
+                // webkit is a C++ lib injected by tsuki-flash — no further
+                // runtime lookup needed.
+                continue;
+            }
 
             if let Some(pkg) = self.rt.pkg(&canon) {
                 if let Some(h) = &pkg.header {
@@ -158,8 +188,27 @@ impl Transpiler {
         } else { Ok(String::new()) }
     }
 
-    fn emit_const(&self, d: &Decl) -> Result<String> {
+    fn emit_const(&mut self, d: &Decl) -> Result<String> {
         if let Decl::Const { name, ty, val, .. } = d {
+            // ── tsuki-webkit: const app = tsuki_webkit.ApiInit() ─────────────
+            if let Expr::Call { func, .. } = val {
+                if let Expr::Select { expr, .. } = func.as_ref() {
+                    if let Expr::Ident { name: pkg_alias, .. } = expr.as_ref() {
+                        if let Some(canon) = self.pkg_map.get(pkg_alias.as_str()).cloned() {
+                            if canon == "tsuki_webkit" {
+                                self.var_types.insert(name.clone(), canon);
+                                // Emit a zero-size tag struct + static instance.
+                                // The actual webkit C++ is injected by tsuki-flash
+                                // via webkit_setup_routes() / webkit_tick().
+                                return Ok(format!(
+                                    "struct WebkitHandle {{}};\nstatic WebkitHandle {};\n",
+                                    name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             let v = self.emit_expr(val)?;
             let t = ty.as_ref().map(|t| t.to_cpp()).unwrap_or_else(|| "auto".into());
             Ok(format!("const {} {} = {};\n", t, name, v))
@@ -168,6 +217,32 @@ impl Transpiler {
 
     fn emit_global(&mut self, d: &Decl) -> Result<String> {
         if let Decl::Var { name, ty, init, .. } = d {
+            // ── tsuki-webkit: detect  `const app = tsuki_webkit.ApiInit()` ────
+            // The init expression is a call like `tsuki_webkit.ApiInit()`.
+            // After the pre-processor the alias is already `tsuki_webkit`.
+            // We register `app` → `tsuki_webkit` so that `app.setup()` and
+            // `app.tick()` resolve correctly, and suppress the C++ initialiser
+            // (webkit_setup_routes is called explicitly from setup()).
+            if let Some(init_expr) = init {
+                if let Expr::Call { func, .. } = init_expr {
+                    if let Expr::Select { expr, field, .. } = func.as_ref() {
+                        if let Expr::Ident { name: pkg_alias, .. } = expr.as_ref() {
+                            if let Some(canon) = self.pkg_map.get(pkg_alias.as_str()).cloned() {
+                                if canon == "tsuki_webkit" {
+                                    // Register the variable so instance calls work
+                                    self.var_types.insert(name.clone(), canon.clone());
+                                    // Emit a WebkitHandle struct — zero-size, just a tag
+                                    return Ok(format!(
+                                        "struct WebkitHandle {{}};\nWebkitHandle {};\n",
+                                        name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Track variable → package for instance-method dispatch
             if let Some(Type::Named(type_name)) = ty {
                 let pkg_part = type_name.split('.').next().unwrap_or("");
@@ -516,6 +591,40 @@ impl Transpiler {
         match func {
             Expr::Select { expr, field, .. } => {
                 if let Expr::Ident { name: alias, .. } = expr.as_ref() {
+                    // ── tsuki-webkit static calls ─────────────────────────────────────
+                    // tsuki_webkit.ApiInit()  → /* webkit: call webkit_setup_routes() in setup() */
+                    // tsuki_webkit.WebInit()  → same
+                    if let Some(canon) = self.pkg_map.get(alias.as_str()) {
+                        if canon == "tsuki_webkit" {
+                            return Ok(match field.as_str() {
+                                "ApiInit" | "WebInit" => {
+                                    // Returns a WebkitHandle — represented as a
+                                    // unit struct in C++. The real work happens in
+                                    // webkit_setup_routes() called from setup().
+                                    "WebkitHandle{}".into()
+                                }
+                                other => format!("webkit_{}({})", other.to_lowercase(), arg_strs.join(", ")),
+                            });
+                        }
+                    }
+                    // ── tsuki-webkit instance method calls ────────────────────────────
+                    // app.setup()  → webkit_setup_routes()
+                    // app.tick()   → webkit_tick()
+                    // app.WiFi(ssid, pass)  → webkit_wifi(ssid, pass)
+                    // app.Handle(m, p, fn) → webkit_handle(m, p, fn)
+                    if let Some(pkg_name) = self.var_types.get(alias.as_str()) {
+                        if pkg_name == "tsuki_webkit" {
+                            return Ok(match field.as_str() {
+                                "setup"  => "webkit_setup_routes()".into(),
+                                "tick"   => "webkit_tick()".into(),
+                                "WiFi"   => format!("webkit_wifi({})", arg_strs.join(", ")),
+                                "Handle" => format!("webkit_handle({})", arg_strs.join(", ")),
+                                "LocalIP"=> "webkit_local_ip()".into(),
+                                other    => format!("webkit_{}({})", other.to_lowercase(), arg_strs.join(", ")),
+                            });
+                        }
+                    }
+
                     // ── Case 1: static package call  e.g. dht.New(pin, type) ──────────
                     if let Some(canon) = self.pkg_map.get(alias.as_str()).cloned() {
                         if let Some(pkg) = self.rt.pkg(&canon) {

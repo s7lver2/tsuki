@@ -92,6 +92,7 @@ impl Runtime {
         r.init_serial();
         r.init_servo();
         r.init_liquidcrystal();
+        r.init_tsuki_webkit();
         r
     }
 
@@ -465,6 +466,31 @@ impl Runtime {
     }
 
     // ── Lookup API ────────────────────────────────────────────────────────────
+
+    // ── tsuki-webkit ─────────────────────────────────────────────────────────
+    // Maps `import "tsuki-webkit"` calls in Go source.
+    // The actual heavy lifting (JSX→C++) happens in tsuki-webkit crate;
+    // this registers the API surface that tsuki-core must know about so it
+    // can transpile the Go glue code correctly.
+    fn init_tsuki_webkit(&mut self) {
+        // ApiInit() → TsukiWebApp()  (constructor)
+        // WebInit() → TsukiWebApp() with web-only mode
+        let m = PkgMap::new(Some("tsuki_webkit_gen.h"))
+            .fun("ApiInit",   FnMap::Direct("TsukiWebApp()".into()))
+            .fun("WebInit",   FnMap::Direct("TsukiWebApp()".into()))
+            // app.setup() / app.tick() — pass-through method calls
+            .fun("Setup",     FnMap::Template("{0}.setup()".into()))
+            .fun("Tick",      FnMap::Template("{0}.tick()".into()))
+            // Serial bridge
+            .fun("SerialWrite",    FnMap::Template("{0}.wsBroadcast({1})".into()))
+            // Json helpers (map to ArduinoJson or String)
+            .fun("JsonStringify",  FnMap::Template("String({0})".into()))
+            .fun("JsonParse",      FnMap::Template("String({0})".into()));
+
+        self.reg("tsuki-webkit", m.clone());
+        self.reg("webkit",       m.clone());
+        self.reg("TsukiWebkit",  m);
+    }
 
     pub fn pkg(&self, name: &str) -> Option<&PkgMap> {
         self.packages.get(name)
