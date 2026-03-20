@@ -31,10 +31,12 @@ pub fn flash(hex: &Path, port: &str, board: &Board, verbose: bool) -> Result<()>
 
     if verbose {
         cmd.arg("-v");
-    } else {
-        // Suppress most avrdude output except errors
-        cmd.args(["-q", "-q"]);
     }
+    // Note: we intentionally do NOT pass -q/-q even in non-verbose mode.
+    // avrdude's stderr is the only source of the actual failure reason
+    // (e.g. "not in sync", "permission denied", "no device on port").
+    // With -q -q that output is suppressed and the user sees only the
+    // generic "upload failed" with no actionable detail.
 
     let out = cmd.output()?;
 
@@ -82,15 +84,35 @@ pub fn verify(hex: &Path, port: &str, board: &Board) -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn find_avrdude() -> String {
-    // 1. Arduino CLI cache location
-    let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [
-        format!("{}/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/bin/avrdude", home),
-        format!("{}/.arduino15/packages/arduino/tools/avrdude/7.1/bin/avrdude", home),
-        "/usr/bin/avrdude".into(),
-        "/usr/local/bin/avrdude".into(),
-        "avrdude".into(), // PATH fallback
+    // Windows does not set HOME — use USERPROFILE / LOCALAPPDATA.
+    #[cfg(target_os = "windows")]
+    let (home, exe) = (std::env::var("USERPROFILE").unwrap_or_default(), ".exe");
+    #[cfg(not(target_os = "windows"))]
+    let (home, exe) = (std::env::var("HOME").unwrap_or_default(), "");
+
+    let bin = format!("avrdude{}", exe);
+
+    let mut candidates: Vec<String> = vec![
+        // tsuki-modules bundled avrdude
+        format!("{}/.tsuki/modules/packages/arduino/tools/avrdude/7.1/bin/{}", home, bin),
+        format!("{}/.tsuki/modules/packages/arduino/tools/avrdude/6.3.0-arduino17/bin/{}", home, bin),
+        // arduino-cli cache — Linux / macOS
+        format!("{}/.arduino15/packages/arduino/tools/avrdude/7.1/bin/{}", home, bin),
+        format!("{}/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino17/bin/{}", home, bin),
     ];
+
+    // arduino-cli cache — Windows uses %LOCALAPPDATA%\Arduino15
+    #[cfg(target_os = "windows")]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidates.push(format!("{}\\Arduino15\\packages\\arduino\\tools\\avrdude\\7.1\\bin\\{}", local, bin));
+        candidates.push(format!("{}\\Arduino15\\packages\\arduino\\tools\\avrdude\\6.3.0-arduino17\\bin\\{}", local, bin));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        candidates.push("/usr/bin/avrdude".into());
+        candidates.push("/usr/local/bin/avrdude".into());
+    }
 
     for c in &candidates {
         if std::path::Path::new(c).exists() {
@@ -98,12 +120,11 @@ fn find_avrdude() -> String {
         }
     }
 
-    // Try arduino15 glob-style search
-    if let Ok(path) = find_in_arduino15_tools(&home, "avrdude") {
+    if let Ok(path) = find_in_arduino15_tools(&home, &bin) {
         return path;
     }
 
-    "avrdude".to_owned() // rely on PATH
+    bin // rely on PATH as last resort
 }
 
 fn avrdude_conf(avrdude_bin: &str) -> String {

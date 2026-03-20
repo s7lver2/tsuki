@@ -231,10 +231,24 @@ fn scan_arduino15_vendor(
     let version = latest_version_dir(&hw_base)?;
     let sdk_dir = hw_base.join(&version);
 
-    let core_dir    = sdk_dir.join("cores").join("arduino");
-    let variant_dir = sdk_dir.join("variants").join(variant);
+    // Different platforms use different subdirectory names under cores/:
+    //   AVR, SAM, RP2040  → cores/arduino/
+    //   ESP8266           → cores/esp8266/   (NOT cores/arduino/)
+    //   ESP32             → cores/esp32/     (NOT cores/arduino/)
+    // Hardcoding "arduino" caused scan to return None for ESP8266/ESP32 even
+    // after a successful SDK download, making the SDK appear "not found".
+    let cores_root = sdk_dir.join("cores");
+    let core_dir = ["arduino", arch, hw_arch, "esp8266", "esp32"]
+        .iter()
+        .map(|name| cores_root.join(name))
+        .find(|p| p.is_dir())
+        .or_else(|| {
+            std::fs::read_dir(&cores_root).ok()
+                .and_then(|rd| rd.flatten().find(|e| e.path().is_dir()))
+                .map(|e| e.path())
+        })?;
 
-    if !core_dir.is_dir() { return None; }
+    let variant_dir = sdk_dir.join("variants").join(variant);
 
     // Variant resolution with smart fallback:
     // 1. Exact match (e.g. "seeed_xiao_rp2040")
