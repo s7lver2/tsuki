@@ -166,6 +166,20 @@ const GO_PKG_MEMBERS: Record<string, Record<string, FuncDef>> = {
   sync:    GO_SYNC,
 }
 
+// Merged lookup used by completions/hover/sig-help — includes arduino + tsuki external pkgs
+// Built lazily so TSUKI_PKG_MEMBERS (declared later) is available at call time
+function getAllPkgMembers(): Record<string, Record<string, FuncDef>> {
+  return {
+    ...GO_PKG_MEMBERS,
+    arduino:  ARDUINO_GO_FUNCS as unknown as Record<string, FuncDef>,
+    // tsuki external packages
+    dht:      DHT_FUNCS     as unknown as Record<string, FuncDef>,
+    ws2812:   WS2812_FUNCS  as unknown as Record<string, FuncDef>,
+    mpu6050:  MPU6050_FUNCS as unknown as Record<string, FuncDef>,
+    Servo:    SERVO_FUNCS   as unknown as Record<string, FuncDef>,
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  ARDUINO FUNCTION DATABASE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -224,6 +238,59 @@ const ARDUINO_GO_FUNCS: Record<string, FuncDef> = {
   Random:        { sig: 'func arduino.Random(min, max int32) int32', doc: 'Returns a pseudo-random integer in [min, max).', params: [{name:'min', type:'int32'}, {name:'max', type:'int32'}], returns: 'int32' },
   Tone:          { sig: 'func arduino.Tone(pin Pin, frequency uint32)', doc: 'Generates a square wave on the given pin.', params: [{name:'pin', type:'Pin'}, {name:'frequency', type:'uint32', doc:'Hz'}] },
   NoTone:        { sig: 'func arduino.NoTone(pin Pin)', doc: 'Stops any tone() on the pin.', params: [{name:'pin', type:'Pin'}] },
+  // arduino.Serial sub-object (Go style)
+  'Serial.Begin':    { sig: 'func arduino.Serial.Begin(baud uint32)', doc: 'Initializes serial at the given baud rate.', params: [{name:'baud', type:'uint32'}] },
+  'Serial.Print':    { sig: 'func arduino.Serial.Print(v any)', doc: 'Prints value to serial.', params: [{name:'v', type:'any'}] },
+  'Serial.Println':  { sig: 'func arduino.Serial.Println(v any)', doc: 'Prints value + newline to serial.', params: [{name:'v', type:'any'}] },
+  'Serial.Available':{ sig: 'func arduino.Serial.Available() int', doc: 'Returns bytes available in the receive buffer.', params: [], returns: 'int' },
+  'Serial.Read':     { sig: 'func arduino.Serial.Read() byte', doc: 'Returns the next byte from the serial receive buffer.', params: [], returns: 'byte' },
+}
+
+// ── Tsuki external package databases ─────────────────────────────────────────
+
+const DHT_FUNCS: Record<string, FuncDef> = {
+  New:             { sig: 'func dht.New(pin Pin, sensorType int) *DHT', doc: 'Creates a new DHT sensor instance.', params: [{name:'pin',type:'Pin'},{name:'sensorType',type:'int',doc:'dht.DHT11 or dht.DHT22'}], returns: '*DHT' },
+  ReadTemperature: { sig: 'func (d *DHT) ReadTemperature() float32', doc: 'Reads temperature in Celsius. Returns NaN on error.', params: [], returns: 'float32' },
+  ReadHumidity:    { sig: 'func (d *DHT) ReadHumidity() float32', doc: 'Reads relative humidity 0–100%. Returns NaN on error.', params: [], returns: 'float32' },
+  Begin:           { sig: 'func (d *DHT) Begin()', doc: 'Initializes the DHT sensor.', params: [] },
+}
+
+const WS2812_FUNCS: Record<string, FuncDef> = {
+  New:            { sig: 'func ws2812.New(count int, pin Pin) *Strip', doc: 'Creates a new WS2812 LED strip.', params: [{name:'count',type:'int',doc:'number of LEDs'},{name:'pin',type:'Pin'}], returns: '*Strip' },
+  Begin:          { sig: 'func (s *Strip) Begin()', doc: 'Initializes the strip.', params: [] },
+  Show:           { sig: 'func (s *Strip) Show()', doc: 'Writes buffered pixel data to the strip.', params: [] },
+  SetPixelColor:  { sig: 'func (s *Strip) SetPixelColor(n int, color uint32)', doc: 'Sets pixel n to a packed RGB color.', params: [{name:'n',type:'int'},{name:'color',type:'uint32',doc:'packed RGB from ws2812.Color()'}] },
+  Color:          { sig: 'func ws2812.Color(r, g, b uint8) uint32', doc: 'Packs red, green, blue (0–255 each) into a single uint32 color value.', params: [{name:'r',type:'uint8'},{name:'g',type:'uint8'},{name:'b',type:'uint8'}], returns: 'uint32' },
+  Fill:           { sig: 'func (s *Strip) Fill(color uint32)', doc: 'Sets all pixels to color.', params: [{name:'color',type:'uint32'}] },
+  NumPixels:      { sig: 'func (s *Strip) NumPixels() int', doc: 'Returns the number of LEDs in the strip.', params: [], returns: 'int' },
+}
+
+const MPU6050_FUNCS: Record<string, FuncDef> = {
+  New:       { sig: 'func mpu6050.New() *MPU6050', doc: 'Creates a new MPU-6050 IMU instance (I2C address 0x68).', params: [], returns: '*MPU6050' },
+  Begin:     { sig: 'func (m *MPU6050) Begin()', doc: 'Initializes the MPU-6050 over I2C.', params: [] },
+  GetAccelX: { sig: 'func (m *MPU6050) GetAccelX() float32', doc: 'Returns X-axis acceleration in m/s².', params: [], returns: 'float32' },
+  GetAccelY: { sig: 'func (m *MPU6050) GetAccelY() float32', doc: 'Returns Y-axis acceleration in m/s².', params: [], returns: 'float32' },
+  GetAccelZ: { sig: 'func (m *MPU6050) GetAccelZ() float32', doc: 'Returns Z-axis acceleration in m/s².', params: [], returns: 'float32' },
+  GetGyroX:  { sig: 'func (m *MPU6050) GetGyroX() float32', doc: 'Returns X-axis rotation rate in deg/s.', params: [], returns: 'float32' },
+  GetGyroY:  { sig: 'func (m *MPU6050) GetGyroY() float32', doc: 'Returns Y-axis rotation rate in deg/s.', params: [], returns: 'float32' },
+  GetGyroZ:  { sig: 'func (m *MPU6050) GetGyroZ() float32', doc: 'Returns Z-axis rotation rate in deg/s.', params: [], returns: 'float32' },
+  GetTemp:   { sig: 'func (m *MPU6050) GetTemp() float32', doc: 'Returns chip temperature in Celsius.', params: [], returns: 'float32' },
+}
+
+const SERVO_FUNCS: Record<string, FuncDef> = {
+  Attach:      { sig: 'func (s *Servo) Attach(pin Pin)', doc: 'Attaches the servo to the specified PWM pin.', params: [{name:'pin',type:'Pin'}] },
+  Write:       { sig: 'func (s *Servo) Write(angle int)', doc: 'Sets the servo angle (0–180 degrees).', params: [{name:'angle',type:'int',doc:'0–180'}] },
+  WriteMicros: { sig: 'func (s *Servo) WriteMicros(us int)', doc: 'Sets position with a pulse width in microseconds.', params: [{name:'us',type:'int',doc:'pulse width μs'}] },
+  Read:        { sig: 'func (s *Servo) Read() int', doc: 'Returns the current servo angle in degrees.', params: [], returns: 'int' },
+  Detach:      { sig: 'func (s *Servo) Detach()', doc: 'Detaches the servo, stopping PWM output.', params: [] },
+  Attached:    { sig: 'func (s *Servo) Attached() bool', doc: 'Returns true if the servo is attached to a pin.', params: [], returns: 'bool' },
+}
+
+const TSUKI_PKG_MEMBERS: Record<string, Record<string, FuncDef>> = {
+  dht:     DHT_FUNCS,
+  ws2812:  WS2812_FUNCS,
+  mpu6050: MPU6050_FUNCS,
+  Servo:   SERVO_FUNCS,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -423,70 +490,589 @@ function collectUserSymbolsCpp(code: string): CompletionItem[] {
 //  PUBLIC API — COMPLETIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PYTHON KEYWORD COMPLETIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PYTHON_KEYWORD_COMPLETIONS: CompletionItem[] = [
+  { label: 'def',      kind: 'keyword', insertText: 'def $1($2):\n    $0', insertSnippet: true, detail: 'function definition', sortOrder: 5 },
+  { label: 'class',    kind: 'keyword', insertText: 'class $1:\n    $0', insertSnippet: true, detail: 'class definition', sortOrder: 5 },
+  { label: 'if',       kind: 'keyword', insertText: 'if $1:\n    $0', insertSnippet: true, sortOrder: 5 },
+  { label: 'elif',     kind: 'keyword', insertText: 'elif $1:\n    $0', insertSnippet: true, sortOrder: 6 },
+  { label: 'else',     kind: 'keyword', insertText: 'else:\n    $0', insertSnippet: true, sortOrder: 6 },
+  { label: 'for',      kind: 'keyword', insertText: 'for $1 in $2:\n    $0', insertSnippet: true, sortOrder: 5 },
+  { label: 'while',    kind: 'keyword', insertText: 'while $1:\n    $0', insertSnippet: true, sortOrder: 5 },
+  { label: 'return',   kind: 'keyword', insertText: 'return', sortOrder: 5 },
+  { label: 'import',   kind: 'keyword', insertText: 'import $1', insertSnippet: true, sortOrder: 5 },
+  { label: 'from',     kind: 'keyword', insertText: 'from $1 import $2', insertSnippet: true, sortOrder: 5 },
+  { label: 'pass',     kind: 'keyword', insertText: 'pass', sortOrder: 7 },
+  { label: 'break',    kind: 'keyword', insertText: 'break', sortOrder: 7 },
+  { label: 'continue', kind: 'keyword', insertText: 'continue', sortOrder: 7 },
+  { label: 'and',      kind: 'keyword', insertText: 'and', sortOrder: 8 },
+  { label: 'or',       kind: 'keyword', insertText: 'or', sortOrder: 8 },
+  { label: 'not',      kind: 'keyword', insertText: 'not', sortOrder: 8 },
+  { label: 'in',       kind: 'keyword', insertText: 'in', sortOrder: 8 },
+  { label: 'is',       kind: 'keyword', insertText: 'is', sortOrder: 8 },
+  { label: 'lambda',   kind: 'keyword', insertText: 'lambda $1: $0', insertSnippet: true, sortOrder: 7 },
+  { label: 'try',      kind: 'keyword', insertText: 'try:\n    $0\nexcept Exception as e:\n    pass', insertSnippet: true, sortOrder: 6 },
+  { label: 'except',   kind: 'keyword', insertText: 'except $1:\n    $0', insertSnippet: true, sortOrder: 6 },
+  { label: 'finally',  kind: 'keyword', insertText: 'finally:\n    $0', insertSnippet: true, sortOrder: 7 },
+  { label: 'with',     kind: 'keyword', insertText: 'with $1 as $2:\n    $0', insertSnippet: true, sortOrder: 6 },
+  { label: 'global',   kind: 'keyword', insertText: 'global $1', insertSnippet: true, sortOrder: 8 },
+  { label: 'nonlocal', kind: 'keyword', insertText: 'nonlocal $1', insertSnippet: true, sortOrder: 9 },
+  { label: 'yield',    kind: 'keyword', insertText: 'yield $1', insertSnippet: true, sortOrder: 7 },
+  { label: 'assert',   kind: 'keyword', insertText: 'assert $1', insertSnippet: true, sortOrder: 8 },
+  { label: 'del',      kind: 'keyword', insertText: 'del $1', insertSnippet: true, sortOrder: 9 },
+  { label: 'raise',    kind: 'keyword', insertText: 'raise $1', insertSnippet: true, sortOrder: 7 },
+  // types
+  { label: 'int',   kind: 'type', insertText: 'int',   sortOrder: 4 },
+  { label: 'float', kind: 'type', insertText: 'float', sortOrder: 4 },
+  { label: 'str',   kind: 'type', insertText: 'str',   sortOrder: 4 },
+  { label: 'bool',  kind: 'type', insertText: 'bool',  sortOrder: 4 },
+  { label: 'list',  kind: 'type', insertText: 'list',  sortOrder: 5 },
+  { label: 'dict',  kind: 'type', insertText: 'dict',  sortOrder: 5 },
+  { label: 'tuple', kind: 'type', insertText: 'tuple', sortOrder: 6 },
+  { label: 'set',   kind: 'type', insertText: 'set',   sortOrder: 6 },
+  { label: 'None',  kind: 'constant', insertText: 'None',  sortOrder: 3 },
+  { label: 'True',  kind: 'constant', insertText: 'True',  sortOrder: 3 },
+  { label: 'False', kind: 'constant', insertText: 'False', sortOrder: 3 },
+  // builtins
+  { label: 'print',     kind: 'function', insertText: 'print($0)', insertSnippet: true, detail: 'print(value, ..., sep=\'\', end=\'\\n\')', documentation: 'Prints values to stdout.', sortOrder: 2 },
+  { label: 'len',       kind: 'function', insertText: 'len($1)', insertSnippet: true, detail: 'len(obj) → int', sortOrder: 2 },
+  { label: 'range',     kind: 'function', insertText: 'range($1)', insertSnippet: true, detail: 'range(stop) | range(start, stop[, step])', sortOrder: 2 },
+  { label: 'enumerate', kind: 'function', insertText: 'enumerate($1)', insertSnippet: true, detail: 'enumerate(iterable, start=0)', sortOrder: 3 },
+  { label: 'zip',       kind: 'function', insertText: 'zip($1)', insertSnippet: true, detail: 'zip(*iterables)', sortOrder: 3 },
+  { label: 'map',       kind: 'function', insertText: 'map($1, $2)', insertSnippet: true, detail: 'map(func, iterable)', sortOrder: 3 },
+  { label: 'filter',    kind: 'function', insertText: 'filter($1, $2)', insertSnippet: true, detail: 'filter(func, iterable)', sortOrder: 3 },
+  { label: 'sorted',    kind: 'function', insertText: 'sorted($1)', insertSnippet: true, detail: 'sorted(iterable, key=None, reverse=False)', sortOrder: 3 },
+  { label: 'reversed',  kind: 'function', insertText: 'reversed($1)', insertSnippet: true, detail: 'reversed(sequence)', sortOrder: 4 },
+  { label: 'isinstance',kind: 'function', insertText: 'isinstance($1, $2)', insertSnippet: true, detail: 'isinstance(obj, classinfo) → bool', sortOrder: 3 },
+  { label: 'type',      kind: 'function', insertText: 'type($1)', insertSnippet: true, detail: 'type(obj) → type', sortOrder: 3 },
+  { label: 'str',       kind: 'function', insertText: 'str($1)', insertSnippet: true, detail: 'str(obj) → str', sortOrder: 3 },
+  { label: 'int',       kind: 'function', insertText: 'int($1)', insertSnippet: true, detail: 'int(x) → int', sortOrder: 3 },
+  { label: 'float',     kind: 'function', insertText: 'float($1)', insertSnippet: true, detail: 'float(x) → float', sortOrder: 3 },
+  { label: 'abs',       kind: 'function', insertText: 'abs($1)', insertSnippet: true, detail: 'abs(x)', sortOrder: 3 },
+  { label: 'min',       kind: 'function', insertText: 'min($1)', insertSnippet: true, detail: 'min(iterable)', sortOrder: 3 },
+  { label: 'max',       kind: 'function', insertText: 'max($1)', insertSnippet: true, detail: 'max(iterable)', sortOrder: 3 },
+  { label: 'sum',       kind: 'function', insertText: 'sum($1)', insertSnippet: true, detail: 'sum(iterable)', sortOrder: 3 },
+  { label: 'open',      kind: 'function', insertText: 'open($1, $2)', insertSnippet: true, detail: 'open(file, mode=\'r\')', sortOrder: 4 },
+]
+
+/** Python package members (snake_case tsuki bindings) */
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PYTHON PACKAGE MEMBERS  (tsuki snake_case bindings)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PyMember { label: string; detail: string; doc: string; kind?: CompletionKind }
+
+const PYTHON_PKG_MEMBERS: Record<string, PyMember[]> = {
+
+  // ── arduino ──────────────────────────────────────────────────────────────
+  arduino: [
+    // Functions
+    { label: 'pin_mode',             detail: 'pin_mode(pin: int, mode: int)',                     doc: 'Configures pin direction. mode is arduino.INPUT, OUTPUT, or INPUT_PULLUP.' },
+    { label: 'digital_write',        detail: 'digital_write(pin: int, value: bool)',               doc: 'Sets a digital pin HIGH (True) or LOW (False).' },
+    { label: 'digital_read',         detail: 'digital_read(pin: int) → bool',                     doc: 'Reads the digital state of a pin. Returns True if HIGH.' },
+    { label: 'analog_write',         detail: 'analog_write(pin: int, value: int)',                 doc: 'PWM output on a PWM-capable pin. value: 0–255.' },
+    { label: 'analog_read',          detail: 'analog_read(pin: int) → int',                       doc: 'Reads analog input (A0–A5). Returns 0–1023.' },
+    { label: 'analog_reference',     detail: 'analog_reference(mode: int)',                       doc: 'Configures the reference voltage for analog input.' },
+    { label: 'delay',                detail: 'delay(ms: int)',                                    doc: 'Pauses execution for the given number of milliseconds.' },
+    { label: 'delay_microseconds',   detail: 'delay_microseconds(us: int)',                       doc: 'Pauses execution for the given number of microseconds.' },
+    { label: 'millis',               detail: 'millis() → int',                                   doc: 'Returns the number of milliseconds since the board started running.' },
+    { label: 'micros',               detail: 'micros() → int',                                   doc: 'Returns the number of microseconds since the board started running.' },
+    { label: 'pulse_in',             detail: 'pulse_in(pin: int, value: bool, timeout: int) → int', doc: 'Reads a pulse (HIGH or LOW) on a pin, returning its duration in microseconds.' },
+    { label: 'shift_in',             detail: 'shift_in(data_pin: int, clock_pin: int, bit_order: int) → int', doc: 'Shifts in a byte of data one bit at a time.' },
+    { label: 'shift_out',            detail: 'shift_out(data_pin: int, clock_pin: int, bit_order: int, val: int)', doc: 'Shifts out a byte of data one bit at a time.' },
+    { label: 'map',                  detail: 'map(x: int, in_min: int, in_max: int, out_min: int, out_max: int) → int', doc: 'Re-maps a number from one range to another.' },
+    { label: 'constrain',            detail: 'constrain(x: int, min: int, max: int) → int',       doc: 'Constrains a number to be within a range.' },
+    { label: 'random',               detail: 'random(min: int, max: int) → int',                  doc: 'Returns a pseudo-random number in [min, max).' },
+    { label: 'random_seed',          detail: 'random_seed(seed: int)',                            doc: 'Initializes the pseudo-random number generator.' },
+    { label: 'tone',                 detail: 'tone(pin: int, frequency: int, duration?: int)',     doc: 'Generates a square wave of the specified frequency on a pin.' },
+    { label: 'no_tone',              detail: 'no_tone(pin: int)',                                 doc: 'Stops the generation of a square wave triggered by tone().' },
+    { label: 'interrupts',           detail: 'interrupts()',                                      doc: 'Re-enables interrupts (after they\'ve been disabled by noInterrupts()).' },
+    { label: 'no_interrupts',        detail: 'no_interrupts()',                                   doc: 'Disables interrupts (preventing them from happening while running critical code).' },
+    { label: 'attach_interrupt',     detail: 'attach_interrupt(pin: int, isr: callable, mode: int)', doc: 'Specifies a named interrupt service routine (ISR) to call when an interrupt occurs.' },
+    { label: 'detach_interrupt',     detail: 'detach_interrupt(pin: int)',                        doc: 'Turns off the given interrupt.' },
+    // Pin mode constants
+    { label: 'INPUT',                detail: 'const INPUT = 0',   doc: 'Configures the specified pin to behave as an input.' },
+    { label: 'OUTPUT',               detail: 'const OUTPUT = 1',  doc: 'Configures the specified pin to behave as an output.' },
+    { label: 'INPUT_PULLUP',         detail: 'const INPUT_PULLUP = 2', doc: 'Configures pin as input with internal pull-up resistor enabled.' },
+    // Digital level constants
+    { label: 'HIGH',                 detail: 'const HIGH = 1',    doc: 'Represents a high state (3.3V or 5V depending on board).' },
+    { label: 'LOW',                  detail: 'const LOW = 0',     doc: 'Represents a low state (0V).' },
+    // Pin aliases
+    { label: 'LED_BUILTIN',          detail: 'const LED_BUILTIN = 13',  doc: 'The pin number of the built-in LED. Varies by board.' },
+    { label: 'A0',                   detail: 'const A0',          doc: 'Analog pin A0.' },
+    { label: 'A1',                   detail: 'const A1',          doc: 'Analog pin A1.' },
+    { label: 'A2',                   detail: 'const A2',          doc: 'Analog pin A2.' },
+    { label: 'A3',                   detail: 'const A3',          doc: 'Analog pin A3.' },
+    { label: 'A4',                   detail: 'const A4',          doc: 'Analog pin A4 (SDA on some boards).' },
+    { label: 'A5',                   detail: 'const A5',          doc: 'Analog pin A5 (SCL on some boards).' },
+    // Bit order
+    { label: 'MSBFIRST',             detail: 'const MSBFIRST = 1', doc: 'Most significant bit first.' },
+    { label: 'LSBFIRST',             detail: 'const LSBFIRST = 0', doc: 'Least significant bit first.' },
+    // Interrupt modes
+    { label: 'RISING',               detail: 'const RISING',      doc: 'Trigger interrupt on rising edge.' },
+    { label: 'FALLING',              detail: 'const FALLING',     doc: 'Trigger interrupt on falling edge.' },
+    { label: 'CHANGE',               detail: 'const CHANGE',      doc: 'Trigger interrupt on any level change.' },
+    { label: 'LOW_LEVEL',            detail: 'const LOW_LEVEL',   doc: 'Trigger interrupt when pin is low.' },
+    // Sub-objects
+    { label: 'Serial',               detail: 'Serial: SerialPort',  doc: 'The main hardware Serial port object.',        kind: 'variable' },
+    { label: 'Serial1',              detail: 'Serial1: SerialPort', doc: 'Second hardware Serial port (if available).',  kind: 'variable' },
+    { label: 'Wire',                 detail: 'Wire: I2CPort',       doc: 'The I2C (Wire) interface object.',             kind: 'variable' },
+    { label: 'SPI',                  detail: 'SPI: SPIPort',        doc: 'The SPI interface object.',                   kind: 'variable' },
+    // Camel-case aliases (for compatibility with Go-style code)
+    { label: 'pinMode',              detail: 'pinMode(pin, mode)',           doc: 'Alias for pin_mode.' },
+    { label: 'digitalWrite',         detail: 'digitalWrite(pin, value)',     doc: 'Alias for digital_write.' },
+    { label: 'digitalRead',          detail: 'digitalRead(pin) → bool',     doc: 'Alias for digital_read.' },
+    { label: 'analogRead',           detail: 'analogRead(pin) → int',       doc: 'Alias for analog_read.' },
+    { label: 'analogWrite',          detail: 'analogWrite(pin, value)',      doc: 'Alias for analog_write.' },
+  ],
+
+  // ── arduino.Serial ───────────────────────────────────────────────────────
+  'arduino.Serial': [
+    { label: 'begin',           detail: 'begin(baud: int)',                              doc: 'Sets the data rate in bits per second for serial communication.' },
+    { label: 'end',             detail: 'end()',                                         doc: 'Disables serial communication.' },
+    { label: 'available',       detail: 'available() → int',                            doc: 'Gets the number of bytes available for reading from the serial port.' },
+    { label: 'available_for_write', detail: 'available_for_write() → int',              doc: 'Gets the number of bytes available for writing in the serial buffer.' },
+    { label: 'read',            detail: 'read() → int',                                 doc: 'Reads the next byte of incoming serial data. Returns -1 if none.' },
+    { label: 'peek',            detail: 'peek() → int',                                 doc: 'Returns the next byte without removing it from the buffer. Returns -1 if none.' },
+    { label: 'print',           detail: 'print(val)',                                   doc: 'Prints data to the serial port as human-readable text.' },
+    { label: 'println',         detail: 'println(val)',                                 doc: 'Prints data followed by a carriage return and newline.' },
+    { label: 'write',           detail: 'write(val: int | bytes)',                      doc: 'Writes binary data to the serial port. Returns number of bytes written.' },
+    { label: 'flush',           detail: 'flush()',                                      doc: 'Waits for the transmission of outgoing serial data to complete.' },
+    { label: 'read_string',     detail: 'read_string() → str',                         doc: 'Reads characters from the serial buffer into a string until a timeout.' },
+    { label: 'read_string_until', detail: 'read_string_until(terminator: str) → str',  doc: 'Reads characters until the given terminator character is found.' },
+    { label: 'read_bytes',      detail: 'read_bytes(buf: list, length: int) → int',    doc: 'Reads characters from the buffer into an array.' },
+    { label: 'read_bytes_until', detail: 'read_bytes_until(char, buf, length) → int',  doc: 'Reads characters until a specific terminator.' },
+    { label: 'parse_int',       detail: 'parse_int() → int',                           doc: 'Looks for the next valid integer in the incoming serial stream.' },
+    { label: 'parse_float',     detail: 'parse_float() → float',                       doc: 'Returns the first valid floating-point number from the serial buffer.' },
+    { label: 'set_timeout',     detail: 'set_timeout(ms: int)',                         doc: 'Sets the maximum milliseconds to wait for serial data.' },
+    { label: 'find',            detail: 'find(target: str) → bool',                    doc: 'Reads data until the target string is found.' },
+  ],
+
+  // ── arduino.Wire ─────────────────────────────────────────────────────────
+  'arduino.Wire': [
+    { label: 'begin',                detail: 'begin()',                                  doc: 'Initiate the Wire library and join the I2C bus as a master.' },
+    { label: 'begin_transmission',   detail: 'begin_transmission(address: int)',         doc: 'Begin a transmission to an I2C peripheral device at the given address.' },
+    { label: 'end_transmission',     detail: 'end_transmission(stop: bool = True) → int', doc: 'Ends a transmission and optionally sends a stop message.' },
+    { label: 'write',                detail: 'write(val: int | list)',                   doc: 'Writes data from a master to a peripheral or queues bytes for sending.' },
+    { label: 'request_from',         detail: 'request_from(address: int, quantity: int) → int', doc: 'Requests bytes from a peripheral device.' },
+    { label: 'available',            detail: 'available() → int',                       doc: 'Returns the number of bytes available for retrieval with read().' },
+    { label: 'read',                 detail: 'read() → int',                            doc: 'Reads a byte transmitted from a peripheral device.' },
+    { label: 'set_clock',            detail: 'set_clock(freq: int)',                    doc: 'Modifies the clock frequency for I2C communication (default 100000).' },
+    { label: 'on_receive',           detail: 'on_receive(handler)',                     doc: 'Registers a function to be called when a peripheral receives data.' },
+    { label: 'on_request',           detail: 'on_request(handler)',                     doc: 'Registers a function to be called when the master requests data.' },
+  ],
+
+  // ── arduino.SPI ──────────────────────────────────────────────────────────
+  'arduino.SPI': [
+    { label: 'begin',                detail: 'begin()',                                  doc: 'Initialize the SPI bus.' },
+    { label: 'end',                  detail: 'end()',                                    doc: 'Disable the SPI bus.' },
+    { label: 'begin_transaction',    detail: 'begin_transaction(settings)',              doc: 'Initializes the SPI bus using the defined SPISettings.' },
+    { label: 'end_transaction',      detail: 'end_transaction()',                        doc: 'Stop using the SPI bus after a transaction.' },
+    { label: 'transfer',             detail: 'transfer(val: int) → int',                doc: 'Transfers one byte over the SPI bus (send and receive).' },
+    { label: 'set_bit_order',        detail: 'set_bit_order(order: int)',               doc: 'Sets the order of the bits shifted out. MSBFIRST or LSBFIRST.' },
+    { label: 'set_clock_divider',    detail: 'set_clock_divider(div: int)',              doc: 'Sets the SPI clock divider relative to the system clock.' },
+    { label: 'set_data_mode',        detail: 'set_data_mode(mode: int)',                doc: 'Sets the SPI data mode (clock polarity/phase).' },
+  ],
+
+  // ── time ─────────────────────────────────────────────────────────────────
+  time: [
+    { label: 'sleep',           detail: 'sleep(ms: int)',              doc: 'Pause execution for ms milliseconds. Maps to arduino.delay().' },
+    { label: 'sleep_us',        detail: 'sleep_us(us: int)',           doc: 'Pause for microseconds. Maps to arduino.delayMicroseconds().' },
+    { label: 'ticks',           detail: 'ticks() → int',              doc: 'Returns current time in milliseconds since boot. Maps to millis().' },
+    { label: 'ticks_us',        detail: 'ticks_us() → int',           doc: 'Returns current time in microseconds. Maps to micros().' },
+    { label: 'Millisecond',     detail: 'const Millisecond = 1',      doc: 'Time unit: 1 millisecond.' },
+    { label: 'Second',          detail: 'const Second = 1000',        doc: 'Time unit: 1 second = 1000 ms.' },
+    { label: 'Minute',          detail: 'const Minute = 60000',       doc: 'Time unit: 1 minute = 60 000 ms.' },
+    { label: 'Hour',            detail: 'const Hour = 3600000',       doc: 'Time unit: 1 hour = 3 600 000 ms.' },
+  ],
+
+  // ── fmt (Python print/format helpers) ────────────────────────────────────
+  fmt: [
+    { label: 'println',  detail: 'println(*args)',              doc: 'Print args separated by spaces with newline. Maps to Serial.println().' },
+    { label: 'print',    detail: 'print(*args)',                doc: 'Print args without newline. Maps to Serial.print().' },
+    { label: 'sprintf',  detail: 'sprintf(format: str, *args) → str', doc: 'Format a string like C sprintf.' },
+  ],
+
+  // ── math ──────────────────────────────────────────────────────────────────
+  math: [
+    { label: 'sqrt',     detail: 'sqrt(x: float) → float',    doc: 'Returns the square root of x.' },
+    { label: 'pow',      detail: 'pow(x: float, y: float) → float', doc: 'Returns x raised to the power y.' },
+    { label: 'abs',      detail: 'abs(x: float) → float',     doc: 'Returns the absolute value of x.' },
+    { label: 'floor',    detail: 'floor(x: float) → float',   doc: 'Returns the largest integer ≤ x.' },
+    { label: 'ceil',     detail: 'ceil(x: float) → float',    doc: 'Returns the smallest integer ≥ x.' },
+    { label: 'round',    detail: 'round(x: float) → float',   doc: 'Returns the nearest integer.' },
+    { label: 'max',      detail: 'max(a, b) → float',         doc: 'Returns the larger of a and b.' },
+    { label: 'min',      detail: 'min(a, b) → float',         doc: 'Returns the smaller of a and b.' },
+    { label: 'sin',      detail: 'sin(x: float) → float',     doc: 'Sine of x (radians).' },
+    { label: 'cos',      detail: 'cos(x: float) → float',     doc: 'Cosine of x (radians).' },
+    { label: 'tan',      detail: 'tan(x: float) → float',     doc: 'Tangent of x (radians).' },
+    { label: 'log',      detail: 'log(x: float) → float',     doc: 'Natural logarithm of x.' },
+    { label: 'log10',    detail: 'log10(x: float) → float',   doc: 'Base-10 logarithm of x.' },
+    { label: 'exp',      detail: 'exp(x: float) → float',     doc: 'Returns e raised to the power x.' },
+    { label: 'PI',       detail: 'const PI = 3.14159…',       doc: 'The mathematical constant π.' },
+    { label: 'E',        detail: 'const E = 2.71828…',        doc: 'Euler\'s number.' },
+    { label: 'INF',      detail: 'const INF',                 doc: 'Positive infinity.' },
+  ],
+
+  // ── dht ──────────────────────────────────────────────────────────────────
+  dht: [
+    { label: 'new',               detail: 'new(pin: int, sensor_type: int) → DHT', doc: 'Create a new DHT sensor instance. sensor_type is dht.DHT11 or dht.DHT22.' },
+    { label: 'DHT11',             detail: 'const DHT11 = 11',     doc: 'DHT11 sensor type constant.' },
+    { label: 'DHT22',             detail: 'const DHT22 = 22',     doc: 'DHT22 / AM2302 sensor type constant.' },
+    { label: 'begin',             detail: 'begin()',               doc: 'Initialize the DHT sensor. Call in setup().' },
+    { label: 'read_temperature',  detail: 'read_temperature(fahrenheit: bool = False) → float', doc: 'Read temperature. Returns Celsius by default, or Fahrenheit if True.' },
+    { label: 'read_humidity',     detail: 'read_humidity() → float', doc: 'Read relative humidity as a percentage (0–100%).' },
+    { label: 'compute_heat_index',detail: 'compute_heat_index(temp: float, hum: float, is_fahrenheit: bool = False) → float', doc: 'Computes the heat index given temperature and humidity.' },
+    { label: 'read',              detail: 'read(force: bool = False) → bool', doc: 'Read the sensor. Returns True on success.' },
+  ],
+
+  // ── ws2812 ───────────────────────────────────────────────────────────────
+  ws2812: [
+    { label: 'new',              detail: 'new(count: int, pin: int, type: int = 0) → Strip', doc: 'Create a WS2812 LED strip. count = number of LEDs, pin = data pin.' },
+    { label: 'begin',           detail: 'begin()',                  doc: 'Initialize the strip. Call in setup().' },
+    { label: 'show',            detail: 'show()',                   doc: 'Push the pixel buffer to the strip.' },
+    { label: 'clear',           detail: 'clear()',                  doc: 'Set all pixels to off (0,0,0).' },
+    { label: 'set_pixel_color', detail: 'set_pixel_color(n: int, color: int)', doc: 'Set pixel n to a packed 32-bit RGB color from ws2812.color().' },
+    { label: 'get_pixel_color', detail: 'get_pixel_color(n: int) → int', doc: 'Returns the packed color of pixel n.' },
+    { label: 'color',           detail: 'color(r: int, g: int, b: int, w: int = 0) → int', doc: 'Pack r, g, b (and optional white) into a 32-bit color value.' },
+    { label: 'color_hsv',       detail: 'color_hsv(hue: int, sat: int, val: int) → int', doc: 'Create a color from HSV values (hue 0–65535, sat/val 0–255).' },
+    { label: 'fill',            detail: 'fill(color: int, first: int = 0, count: int = 0)', doc: 'Set a range of pixels to color.' },
+    { label: 'num_pixels',      detail: 'num_pixels() → int',      doc: 'Returns the number of LEDs in the strip.' },
+    { label: 'set_brightness',  detail: 'set_brightness(brightness: int)', doc: 'Set overall strip brightness (0=min, 255=max).' },
+    { label: 'get_brightness',  detail: 'get_brightness() → int',  doc: 'Returns the current brightness level.' },
+    { label: 'rainbow',         detail: 'rainbow(first_hue: int = 0, reps: int = 1)', doc: 'Fill the strip with a rainbow pattern.' },
+  ],
+
+  // ── mpu6050 ───────────────────────────────────────────────────────────────
+  mpu6050: [
+    { label: 'new',          detail: 'new(address: int = 0x68) → MPU6050', doc: 'Create MPU-6050 IMU instance. Default I2C address is 0x68.' },
+    { label: 'begin',        detail: 'begin() → bool',                     doc: 'Initialize the MPU-6050. Returns True if found on I2C bus.' },
+    { label: 'get_accel_x',  detail: 'get_accel_x() → float',             doc: 'X-axis acceleration in m/s².' },
+    { label: 'get_accel_y',  detail: 'get_accel_y() → float',             doc: 'Y-axis acceleration in m/s².' },
+    { label: 'get_accel_z',  detail: 'get_accel_z() → float',             doc: 'Z-axis acceleration in m/s².' },
+    { label: 'get_gyro_x',   detail: 'get_gyro_x() → float',             doc: 'X-axis rotation rate in degrees/s.' },
+    { label: 'get_gyro_y',   detail: 'get_gyro_y() → float',             doc: 'Y-axis rotation rate in degrees/s.' },
+    { label: 'get_gyro_z',   detail: 'get_gyro_z() → float',             doc: 'Z-axis rotation rate in degrees/s.' },
+    { label: 'get_temp',     detail: 'get_temp() → float',               doc: 'Chip temperature in Celsius.' },
+    { label: 'set_accel_range', detail: 'set_accel_range(range: int)',    doc: 'Set accelerometer range (MPU6050_RANGE_2_G, 4_G, 8_G, 16_G).' },
+    { label: 'set_gyro_range',  detail: 'set_gyro_range(range: int)',     doc: 'Set gyroscope range (MPU6050_RANGE_250_DEG, 500, 1000, 2000).' },
+    { label: 'set_filter_bandwidth', detail: 'set_filter_bandwidth(bandwidth: int)', doc: 'Set the digital low-pass filter bandwidth.' },
+  ],
+
+  // ── servo ────────────────────────────────────────────────────────────────
+  servo: [
+    { label: 'new',          detail: 'new() → Servo',                  doc: 'Create a new Servo instance.' },
+    { label: 'attach',       detail: 'attach(pin: int, min: int = 544, max: int = 2400) → int', doc: 'Attaches the servo motor to a pin.' },
+    { label: 'detach',       detail: 'detach()',                        doc: 'Detaches the servo motor from its pin.' },
+    { label: 'write',        detail: 'write(angle: int)',               doc: 'Sets the servo angle in degrees (0–180).' },
+    { label: 'write_microseconds', detail: 'write_microseconds(us: int)', doc: 'Writes a value in microseconds as the pulse width.' },
+    { label: 'read',         detail: 'read() → int',                   doc: 'Returns the current angle written to the servo (0–180°).' },
+    { label: 'read_microseconds', detail: 'read_microseconds() → int', doc: 'Returns the current pulse width in microseconds.' },
+    { label: 'attached',     detail: 'attached() → bool',              doc: 'Returns True if the servo is currently attached to a pin.' },
+  ],
+
+  // ── irremote ──────────────────────────────────────────────────────────────
+  irremote: [
+    { label: 'new_receiver', detail: 'new_receiver(pin: int) → IRReceiver', doc: 'Create an IR receiver on the specified pin.' },
+    { label: 'new_sender',   detail: 'new_sender(pin: int) → IRSender',    doc: 'Create an IR transmitter on the specified pin.' },
+    { label: 'begin',        detail: 'begin()',                             doc: 'Initialize the IR receiver/sender.' },
+    { label: 'decode',       detail: 'decode() → IRData',                  doc: 'Decodes the received IR signal. Returns IRData or None.' },
+    { label: 'resume',       detail: 'resume()',                            doc: 'Enables receiver for the next value. Must call after decode().' },
+    { label: 'send_nec',     detail: 'send_nec(address: int, command: int, repeats: int = 0)', doc: 'Send a NEC IR command.' },
+    { label: 'send_sony',    detail: 'send_sony(data: int, bits: int = 12)', doc: 'Send a Sony IR command.' },
+  ],
+
+  // ── u8g2 ──────────────────────────────────────────────────────────────────
+  u8g2: [
+    { label: 'new',           detail: 'new(rotation: int, cs: int, dc: int, reset: int = -1) → U8G2', doc: 'Create a U8G2 display driver instance.' },
+    { label: 'begin',         detail: 'begin()',                             doc: 'Initialize the display.' },
+    { label: 'clear_buffer',  detail: 'clear_buffer()',                     doc: 'Clear the internal memory.' },
+    { label: 'send_buffer',   detail: 'send_buffer()',                      doc: 'Transfer the memory content to the display.' },
+    { label: 'clear_display', detail: 'clear_display()',                    doc: 'Clear the display and the memory.' },
+    { label: 'set_font',      detail: 'set_font(font)',                     doc: 'Set a font for the following string drawings.' },
+    { label: 'draw_str',      detail: 'draw_str(x: int, y: int, s: str)',   doc: 'Draw a string at the given position.' },
+    { label: 'draw_int',      detail: 'draw_int(x: int, y: int, n: int)',   doc: 'Draw an integer value as a string.' },
+    { label: 'draw_line',     detail: 'draw_line(x1: int, y1: int, x2: int, y2: int)', doc: 'Draw a line between two points.' },
+    { label: 'draw_box',      detail: 'draw_box(x: int, y: int, w: int, h: int)', doc: 'Draw a filled box.' },
+    { label: 'draw_frame',    detail: 'draw_frame(x: int, y: int, w: int, h: int)', doc: 'Draw a frame (unfilled box).' },
+    { label: 'draw_circle',   detail: 'draw_circle(x0: int, y0: int, rad: int)', doc: 'Draw a circle.' },
+    { label: 'draw_pixel',    detail: 'draw_pixel(x: int, y: int)',         doc: 'Draw a single pixel.' },
+    { label: 'get_display_width',  detail: 'get_display_width() → int',    doc: 'Returns the display width in pixels.' },
+    { label: 'get_display_height', detail: 'get_display_height() → int',   doc: 'Returns the display height in pixels.' },
+    { label: 'set_draw_color',     detail: 'set_draw_color(color: int)',    doc: 'Set draw color (0=clear, 1=set, 2=XOR).' },
+    { label: 'R0',            detail: 'const R0',   doc: 'No rotation (landscape).' },
+    { label: 'R1',            detail: 'const R1',   doc: '90° clockwise rotation.' },
+    { label: 'R2',            detail: 'const R2',   doc: '180° rotation.' },
+    { label: 'R3',            detail: 'const R3',   doc: '270° clockwise rotation.' },
+  ],
+
+  // ── bmp280 ────────────────────────────────────────────────────────────────
+  bmp280: [
+    { label: 'new',              detail: 'new() → BMP280',                     doc: 'Create a BMP280 pressure/temperature sensor instance.' },
+    { label: 'begin',            detail: 'begin(address: int = 0x76) → bool',  doc: 'Initialize. Returns True if sensor found on I2C bus.' },
+    { label: 'read_temperature', detail: 'read_temperature() → float',         doc: 'Read temperature in Celsius.' },
+    { label: 'read_pressure',    detail: 'read_pressure() → float',            doc: 'Read atmospheric pressure in Pascals.' },
+    { label: 'read_altitude',    detail: 'read_altitude(sea_level_pa: float = 101325.0) → float', doc: 'Calculates altitude in meters from current pressure.' },
+    { label: 'set_sampling',     detail: 'set_sampling(mode, temp_sampling, pressure_sampling, filter, standby_duration)', doc: 'Set sensor sampling/filter settings.' },
+    { label: 'take_forced_measurement', detail: 'take_forced_measurement()', doc: 'Take a forced measurement when in FORCED mode.' },
+  ],
+
+  // ── stepper ───────────────────────────────────────────────────────────────
+  stepper: [
+    { label: 'new',           detail: 'new(steps: int, pin1: int, pin2: int, pin3: int = -1, pin4: int = -1) → Stepper', doc: 'Create a stepper motor instance.' },
+    { label: 'set_speed',     detail: 'set_speed(rpm: float)',           doc: 'Set the motor speed in rotations per minute.' },
+    { label: 'step',          detail: 'step(steps: int)',                doc: 'Move the motor steps steps. Positive = CW, negative = CCW.' },
+    { label: 'version',       detail: 'version() → int',                doc: 'Returns the version of the stepper library.' },
+  ],
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Python helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function inferPyType(expr: string): string | null {
+  const e = expr.trim()
+  if (!e) return null
+  if (/^-?\d+$/.test(e))                    return 'int'
+  if (/^-?\d+\.\d*$/.test(e))              return 'float'
+  if (/^[\"']/.test(e))                     return 'str'
+  if (e === 'True' || e === 'False')         return 'bool'
+  if (e === 'None')                         return 'None'
+  if (/^\[/.test(e))                        return 'list'
+  if (/^\{/.test(e))                        return 'dict'
+  if (e.startsWith('arduino.analog_read(')) return 'int'
+  if (e.startsWith('arduino.digital_read('))return 'bool'
+  if (e.startsWith('arduino.millis('))      return 'int'
+  if (e.startsWith('arduino.micros('))      return 'int'
+  if (e.includes('read_temperature('))      return 'float'
+  if (e.includes('read_humidity('))         return 'float'
+  if (e.startsWith('int('))                 return 'int'
+  if (e.startsWith('float('))               return 'float'
+  if (e.startsWith('str('))                 return 'str'
+  if (e.startsWith('len('))                 return 'int'
+  if (e.startsWith('range('))               return 'range'
+  if (e.startsWith('list('))                return 'list'
+  if (e.startsWith('dict('))                return 'dict'
+  return null
+}
+
+const PY_RESERVED = new Set([
+  'if','elif','else','for','while','return','import','from','class','def',
+  'with','as','try','except','finally','lambda','pass','break','continue',
+  'raise','del','global','nonlocal','yield','assert','and','or','not','in',
+  'is','True','False','None','print','len','range','type','int','float','str',
+])
+
+/** Collect user-defined symbols from Python source */
+function collectUserSymbolsPy(code: string): CompletionItem[] {
+  const items: CompletionItem[] = []
+  const seen  = new Set<string>()
+
+  code.split('\n').forEach((raw, i) => {
+    const stripped = raw.trimStart()
+    const indent   = raw.length - stripped.length
+
+    // def name(params) -> ret:
+    const funcM = stripped.match(/^def\s+(\w+)\s*\(([^)]*)\)(?:\s*->\s*(\w[\w\[\], ]*))?/)
+    if (funcM && !seen.has(funcM[1])) {
+      seen.add(funcM[1])
+      const ret = funcM[3] ? ` -> ${funcM[3].trim()}` : ''
+      items.push({ label: funcM[1], kind: 'function' as CompletionKind, insertText: funcM[1],
+        detail: `def ${funcM[1]}(${funcM[2]})${ret}`,
+        documentation: `Defined at line ${i+1}`, sortOrder: 2 })
+    }
+
+    // class name(base?):
+    const clsM = stripped.match(/^class\s+(\w+)(?:\(([^)]*)\))?/)
+    if (clsM && !seen.has(clsM[1])) {
+      seen.add(clsM[1])
+      items.push({ label: clsM[1], kind: 'type' as CompletionKind, insertText: clsM[1],
+        detail: `class ${clsM[1]}${clsM[2] ? `(${clsM[2]})` : ''}`,
+        documentation: `Line ${i+1}`, sortOrder: 2 })
+    }
+
+    // name: Type = value
+    const annM = indent === 0 ? stripped.match(/^(\w+)\s*:\s*(\w+)\s*=/) : null
+    if (annM && !PY_RESERVED.has(annM[1]) && !seen.has(annM[1])) {
+      seen.add(annM[1])
+      items.push({ label: annM[1], kind: 'variable' as CompletionKind, insertText: annM[1],
+        detail: `${annM[1]}: ${annM[2]}`, documentation: `Line ${i+1}`, sortOrder: 2 })
+      return
+    }
+
+    // name = value  (any indent)
+    const varM = stripped.match(/^(\w+)\s*=(?!=)\s*(.+)/)
+    if (varM && !PY_RESERVED.has(varM[1]) && !seen.has(varM[1]) && !varM[1].startsWith('_')) {
+      seen.add(varM[1])
+      const inferredType = inferPyType(varM[2])
+      items.push({ label: varM[1], kind: 'variable' as CompletionKind, insertText: varM[1],
+        detail: inferredType ? `${varM[1]}: ${inferredType}` : varM[1],
+        documentation: `Line ${i+1}`, sortOrder: indent === 0 ? 2 : 3 })
+    }
+
+    // for x in ... or for x, y in ...
+    const forM = stripped.match(/^for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+/)
+    if (forM) {
+      [forM[1], forM[2]].filter(Boolean).forEach(v => {
+        if (!seen.has(v) && !PY_RESERVED.has(v)) {
+          seen.add(v)
+          items.push({ label: v, kind: 'variable' as CompletionKind, insertText: v,
+            documentation: `Loop variable, line ${i+1}`, sortOrder: 3 })
+        }
+      })
+    }
+  })
+  return items
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Python instance variable resolution
+//  e.g.  sensor = dht.new(...)  →  sensor.read_temperature() shows dht methods
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Given a variable name, scan the code for its assignment and find
+ * what package/type created it, then return the relevant PYTHON_PKG_MEMBERS.
+ *
+ * Handles patterns like:
+ *   sensor = dht.new(...)       → dht instance methods
+ *   strip  = ws2812.new(...)    → ws2812 instance methods
+ *   imu    = mpu6050.new(...)   → mpu6050 instance methods
+ *   servo  = servo.new()        → servo instance methods
+ */
+function resolveInstanceMembersPy(
+  code: string,
+  varName: string,
+): Array<{ label: string; detail: string; doc: string }> {
+  // Find: varName = pkg.new(...)  or  varName = pkg.SomeConstructor(...)
+  const lines = code.split('\n')
+  for (const line of lines) {
+    const m = line.match(new RegExp(`^\\s*${varName}\\s*=\\s*(\\w+)\\.(\\w+)\\s*\\(`))
+    if (m) {
+      const pkg = m[1]
+      const members = PYTHON_PKG_MEMBERS[pkg]
+      if (members) {
+        // Return instance methods (non-constructor, non-constant)
+        return members.filter(x =>
+          x.label !== 'new' &&
+          x.label !== x.label.toUpperCase() &&   // skip ALL_CAPS constants
+          /^[a-z]/.test(x.label)                 // skip PascalCase type exports
+        )
+      }
+    }
+  }
+  return []
+}
+
+
 export function getCompletions(
   code: string,
   offset: number,
   ext: string,
 ): CompletionItem[] {
+  const isPy = ext === 'py'
   const { word: prefix, start } = wordAtOffset(code, offset)
-  const before = code.slice(0, start)
-  const memberCtx = getMemberContext(code, start)
+  const before      = code.slice(0, start)
+  const memberCtx   = getMemberContext(code, start)
+  const allPkgs     = getAllPkgMembers()
 
-  // ── Member access completions (e.g. fmt.P...) ─────────────────────────────
+  // ── 1. Member-access completions:  pkg.Prefix  or  pkg.prefix  ────────────
   if (memberCtx) {
-    const pkg = GO_PKG_MEMBERS[memberCtx] ?? {}
-    if (memberCtx === 'arduino') {
-      // tsuki Go-style arduino package
-      return Object.entries(ARDUINO_GO_FUNCS)
-        .filter(([name]) => !prefix || name.toLowerCase().startsWith(prefix.toLowerCase()))
-        .map(([name, def]) => ({
-          label: name,
-          kind: 'method' as CompletionKind,
-          insertText: name,
-          detail: def.sig.replace('func arduino.', ''),
-          documentation: def.doc,
-          sortOrder: 1,
-        }))
+    // Python: arduino.Serial.method  — detect two-level chain
+    if (isPy) {
+      // Check for chained: arduino.Serial.
+      const chainM = code.slice(0, start).match(/(\w+)\.(\w+)\.$/)
+      if (chainM) {
+        const chainKey = `${chainM[1]}.${chainM[2]}`
+        const members = PYTHON_PKG_MEMBERS[chainKey]
+        if (members) {
+          return members
+            .filter(m => !prefix || m.label.toLowerCase().startsWith(prefix.toLowerCase()))
+            .map(m => ({ label: m.label, kind: 'method' as CompletionKind, insertText: m.label, detail: m.detail, documentation: m.doc, sortOrder: 1 }))
+        }
+      }
+      // Single-level — direct package member
+      const pyMembers = PYTHON_PKG_MEMBERS[memberCtx]
+      if (pyMembers) {
+        return pyMembers
+          .filter(m => !prefix || m.label.toLowerCase().startsWith(prefix.toLowerCase()))
+          .map(m => ({
+            label: m.label,
+            kind: (m.kind ?? 'method') as CompletionKind,
+            insertText: m.label,
+            detail: m.detail,
+            documentation: m.doc,
+            sortOrder: 1,
+          }))
+      }
+
+      // Instance variable — look up what type it was assigned from
+      // e.g.  sensor = dht.new(...)  →  sensor.read_X should show dht instance methods
+      const instanceMembers = resolveInstanceMembersPy(code, memberCtx)
+      if (instanceMembers.length > 0) {
+        return instanceMembers
+          .filter(m => !prefix || m.label.toLowerCase().startsWith(prefix.toLowerCase()))
+          .map(m => ({ label: m.label, kind: 'method' as CompletionKind, insertText: m.label, detail: m.detail, documentation: m.doc, sortOrder: 1 }))
+      }
     }
-    if (memberCtx === 'Serial') {
-      return ([
-        { label: 'begin',   kind: 'method' as CompletionKind, insertText: 'begin', detail: 'void begin(long baud)', documentation: 'Initializes serial communication at baud rate.', sortOrder: 1 },
-        { label: 'print',   kind: 'method' as CompletionKind, insertText: 'print', detail: 'size_t print(T val)', documentation: 'Prints data to the serial port.', sortOrder: 1 },
-        { label: 'println', kind: 'method' as CompletionKind, insertText: 'println', detail: 'size_t println(T val)', documentation: 'Prints data followed by newline.', sortOrder: 1 },
-        { label: 'write',   kind: 'method' as CompletionKind, insertText: 'write', detail: 'size_t write(uint8_t val)', documentation: 'Writes binary data to the serial port.', sortOrder: 2 },
-        { label: 'available', kind: 'method' as CompletionKind, insertText: 'available', detail: 'int available()', documentation: 'Gets the number of bytes available for reading.', sortOrder: 2 },
-        { label: 'read',    kind: 'method' as CompletionKind, insertText: 'read', detail: 'int read()', documentation: 'Reads the next incoming byte. Returns -1 if none.', sortOrder: 2 },
-        { label: 'flush',   kind: 'method' as CompletionKind, insertText: 'flush', detail: 'void flush()', documentation: 'Waits for transmission of outgoing data to complete.', sortOrder: 3 },
-        { label: 'end',     kind: 'method' as CompletionKind, insertText: 'end', detail: 'void end()', documentation: 'Disables serial communication.', sortOrder: 3 },
-        { label: 'parseInt',  kind: 'method' as CompletionKind, insertText: 'parseInt', detail: 'long parseInt()', sortOrder: 3 },
-        { label: 'parseFloat',kind: 'method' as CompletionKind, insertText: 'parseFloat', detail: 'float parseFloat()', sortOrder: 3 },
-        { label: 'readString',kind: 'method' as CompletionKind, insertText: 'readString', detail: 'String readString()', documentation: 'Reads characters until timeout.', sortOrder: 3 },
-      ] as CompletionItem[]).filter(c => !prefix || c.label.toLowerCase().startsWith(prefix.toLowerCase()))
-    }
-    if (memberCtx === 'Wire') {
-      return ([
-        { label: 'begin',        kind: 'method' as CompletionKind, insertText: 'begin', detail: 'void begin()', documentation: 'Initializes I2C as master.', sortOrder: 1 },
-        { label: 'beginTransmission', kind: 'method' as CompletionKind, insertText: 'beginTransmission', detail: 'void beginTransmission(uint8_t address)', sortOrder: 1 },
-        { label: 'write',        kind: 'method' as CompletionKind, insertText: 'write', detail: 'size_t write(uint8_t data)', sortOrder: 1 },
-        { label: 'endTransmission', kind: 'method' as CompletionKind, insertText: 'endTransmission', detail: 'uint8_t endTransmission(bool stop)', sortOrder: 1 },
-        { label: 'requestFrom',  kind: 'method' as CompletionKind, insertText: 'requestFrom', detail: 'uint8_t requestFrom(uint8_t addr, uint8_t count)', sortOrder: 2 },
-        { label: 'read',         kind: 'method' as CompletionKind, insertText: 'read', detail: 'int read()', sortOrder: 2 },
-        { label: 'available',    kind: 'method' as CompletionKind, insertText: 'available', detail: 'int available()', sortOrder: 2 },
-        { label: 'setClock',     kind: 'method' as CompletionKind, insertText: 'setClock', detail: 'void setClock(uint32_t freq)', documentation: 'Sets I2C clock frequency.', sortOrder: 3 },
-      ] as CompletionItem[]).filter(c => !prefix || c.label.toLowerCase().startsWith(prefix.toLowerCase()))
-    }
-    if (Object.keys(pkg).length > 0) {
+
+    // Go/C++: unified pkg lookup
+    const pkg = allPkgs[memberCtx]
+    if (pkg) {
       return Object.entries(pkg)
         .filter(([name]) => !prefix || name.toLowerCase().startsWith(prefix.toLowerCase()))
         .map(([name, def]) => ({
           label: name,
-          kind: ('tags' in def && (def as FuncDef).tags?.includes('type') ? 'type' : 'function') as CompletionKind,
+          kind: (def.tags?.includes('type') ? 'type' : 'method') as CompletionKind,
           insertText: name,
-          detail: def.sig,
+          detail: def.sig.replace(`func ${memberCtx}.`, '').replace(`func (`, '('),
           documentation: def.doc,
           sortOrder: 1,
         }))
     }
+
+    // Serial / Wire (C++) — inline short definitions
+    if (memberCtx === 'Serial' || memberCtx === 'Wire') {
+      const SERIAL_MEMBERS: CompletionItem[] = [
+        { label: 'begin',     kind: 'method', insertText: 'begin',     detail: 'void begin(long baud)',    documentation: 'Initialize serial at baud rate.', sortOrder: 1 },
+        { label: 'print',     kind: 'method', insertText: 'print',     detail: 'size_t print(T val)',      documentation: 'Print without newline.', sortOrder: 1 },
+        { label: 'println',   kind: 'method', insertText: 'println',   detail: 'size_t println(T val)',    documentation: 'Print with newline.', sortOrder: 1 },
+        { label: 'available', kind: 'method', insertText: 'available', detail: 'int available()',          documentation: 'Bytes in receive buffer.', sortOrder: 2 },
+        { label: 'read',      kind: 'method', insertText: 'read',      detail: 'int read()',               documentation: 'Read next byte (-1 if none).', sortOrder: 2 },
+        { label: 'write',     kind: 'method', insertText: 'write',     detail: 'size_t write(uint8_t)',    documentation: 'Write raw byte.', sortOrder: 2 },
+        { label: 'flush',     kind: 'method', insertText: 'flush',     detail: 'void flush()',             documentation: 'Wait for TX to complete.', sortOrder: 3 },
+        { label: 'end',       kind: 'method', insertText: 'end',       detail: 'void end()',               sortOrder: 3 },
+        { label: 'parseInt',  kind: 'method', insertText: 'parseInt',  detail: 'long parseInt()',          sortOrder: 3 },
+        { label: 'parseFloat',kind: 'method', insertText: 'parseFloat',detail: 'float parseFloat()',       sortOrder: 3 },
+        { label: 'readString',kind: 'method', insertText: 'readString',detail: 'String readString()',      sortOrder: 3 },
+        { label: 'readStringUntil', kind: 'method', insertText: 'readStringUntil', detail: 'String readStringUntil(char terminator)', sortOrder: 3 },
+        { label: 'readBytes', kind: 'method', insertText: 'readBytes', detail: 'size_t readBytes(char* buf, size_t len)', sortOrder: 3 },
+        { label: 'setTimeout',kind: 'method', insertText: 'setTimeout',detail: 'void setTimeout(long ms)', sortOrder: 4 },
+        { label: 'peek',      kind: 'method', insertText: 'peek',      detail: 'int peek()',               documentation: 'Peek at next byte without removing it.', sortOrder: 3 },
+      ]
+      const WIRE_MEMBERS: CompletionItem[] = [
+        { label: 'begin',             kind: 'method', insertText: 'begin',             detail: 'void begin()',                      documentation: 'Init I2C as master.', sortOrder: 1 },
+        { label: 'beginTransmission', kind: 'method', insertText: 'beginTransmission', detail: 'void beginTransmission(uint8_t addr)', sortOrder: 1 },
+        { label: 'write',             kind: 'method', insertText: 'write',             detail: 'size_t write(uint8_t data)',          sortOrder: 1 },
+        { label: 'endTransmission',   kind: 'method', insertText: 'endTransmission',   detail: 'uint8_t endTransmission(bool stop)',  sortOrder: 1 },
+        { label: 'requestFrom',       kind: 'method', insertText: 'requestFrom',       detail: 'uint8_t requestFrom(addr, count)',    sortOrder: 2 },
+        { label: 'read',              kind: 'method', insertText: 'read',              detail: 'int read()',                          sortOrder: 2 },
+        { label: 'available',         kind: 'method', insertText: 'available',         detail: 'int available()',                     sortOrder: 2 },
+        { label: 'setClock',          kind: 'method', insertText: 'setClock',          detail: 'void setClock(uint32_t freq)',         documentation: 'Set I2C clock frequency.', sortOrder: 3 },
+        { label: 'onReceive',         kind: 'method', insertText: 'onReceive',         detail: 'void onReceive(void(*)(int))',         sortOrder: 4 },
+        { label: 'onRequest',         kind: 'method', insertText: 'onRequest',         detail: 'void onRequest(void(*)())',            sortOrder: 4 },
+      ]
+      const members = memberCtx === 'Wire' ? WIRE_MEMBERS : SERIAL_MEMBERS
+      return members.filter(m => !prefix || m.label.toLowerCase().startsWith(prefix.toLowerCase()))
+    }
+
     return []
   }
 
@@ -495,80 +1081,122 @@ export function getCompletions(
   const lower = prefix.toLowerCase()
   let items: CompletionItem[] = []
 
-  if (ext === 'go') {
-    // Builtins
-    items.push(...Object.entries(GO_BUILTIN_DOCS).map(([name, def]) => ({
-      label: name,
-      kind: 'function' as CompletionKind,
-      insertText: name,
-      detail: def.sig,
-      documentation: def.doc,
-      sortOrder: 3,
-    })))
-    // Keywords + types
-    items.push(...GO_KEYWORD_COMPLETIONS)
-    // Package names that are imported
-    ;['fmt', 'strings', 'strconv', 'math', 'time', 'sort', 'sync', 'arduino'].forEach(pkg => {
-      if (code.includes(`"${pkg}"`)) {
-        items.push({ label: pkg, kind: 'package' as CompletionKind, insertText: pkg, detail: `package ${pkg}`, sortOrder: 2 })
+  // ── 2. Python ─────────────────────────────────────────────────────────────
+  if (isPy) {
+    items.push(...PYTHON_KEYWORD_COMPLETIONS)
+    // Imported package names
+    const importedPkgs = new Set<string>()
+    Array.from(code.matchAll(/^import\s+(\w+)/gm)).forEach(m => importedPkgs.add(m[1]))
+    Array.from(code.matchAll(/^from\s+(\w+)\s+import/gm)).forEach(m => importedPkgs.add(m[1]))
+    importedPkgs.forEach(pkg => {
+      if (PYTHON_PKG_MEMBERS[pkg]) {
+        items.push({ label: pkg, kind: 'package', insertText: pkg, detail: `package ${pkg}`, sortOrder: 2 })
       }
     })
-    // User symbols
+    items.push(...collectUserSymbolsPy(code))
+  }
+
+  // ── 3. Go ─────────────────────────────────────────────────────────────────
+  else if (ext === 'go') {
+    // Builtins
+    items.push(...Object.entries(GO_BUILTIN_DOCS).map(([name, def]) => ({
+      label: name, kind: 'function' as CompletionKind,
+      insertText: name, detail: def.sig, documentation: def.doc, sortOrder: 3,
+    })))
+    items.push(...GO_KEYWORD_COMPLETIONS)
+    // Imported packages (standard + tsuki)
+    const allKnownPkgs = [...Object.keys(GO_PKG_MEMBERS), 'arduino', 'dht', 'ws2812', 'mpu6050', 'Servo', 'time']
+    allKnownPkgs.forEach(pkg => {
+      if (code.includes(`"${pkg}"`) || code.includes(`\'${pkg}\'`)) {
+        items.push({ label: pkg, kind: 'package', insertText: pkg, detail: `package ${pkg}`, sortOrder: 2 })
+      }
+    })
     items.push(...collectUserSymbolsGo(code))
-  } else {
-    // C++ / ino
+  }
+
+  // ── 4. C++ / .ino ─────────────────────────────────────────────────────────
+  else {
     items.push(...CPP_KEYWORD_COMPLETIONS)
     items.push(...Object.entries(ARDUINO_FUNCS).map(([name, def]) => ({
-      label: name,
-      kind: 'function' as CompletionKind,
-      insertText: name,
-      detail: def.sig,
-      documentation: def.doc,
-      sortOrder: 3,
+      label: name, kind: 'function' as CompletionKind,
+      insertText: name, detail: def.sig, documentation: def.doc, sortOrder: 3,
     })))
     items.push(...collectUserSymbolsCpp(code))
   }
 
-  // Filter by prefix and deduplicate
+  // ── Deduplicate + filter by prefix ────────────────────────────────────────
   const seen = new Set<string>()
   return items
-    .filter(c => {
-      if (seen.has(c.label)) return false
-      if (!c.label.toLowerCase().startsWith(lower)) return false
-      seen.add(c.label)
+    .filter(item => {
+      if (seen.has(item.label)) return false
+      if (!item.label.toLowerCase().startsWith(lower)) return false
+      seen.add(item.label)
       return true
     })
     .sort((a, b) => ((a.sortOrder ?? 5) - (b.sortOrder ?? 5)) || a.label.localeCompare(b.label))
-    .slice(0, 50)
+    .slice(0, 60)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  PUBLIC API — HOVER DOC
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function getHoverDoc(
   code: string,
   offset: number,
   ext: string,
 ): HoverDoc | null {
+  const isPy   = ext === 'py'
   const { word } = wordAtOffset(code, offset)
   if (!word) return null
 
-  // Check for pkg.Member context
-  const before = code.slice(0, offset - word.length)
-  const memberCtxM = before.match(/(\w+)\.$/)
+  // Detect pkg.Member context
+  const before     = code.slice(0, offset - word.length)
+  const memberCtxM = before.match(/(\w+)\.(?:(\w+)\.)?$/)
   if (memberCtxM) {
-    const pkg  = memberCtxM[1]
-    const pkgFuncs = GO_PKG_MEMBERS[pkg] ?? {}
-    const def  = pkgFuncs[word]
-    if (def) return { title: `${pkg}.${word}`, signature: def.sig, doc: def.doc, returns: def.returns, tags: def.tags ?? ['stdlib', pkg] }
-    if (pkg === 'arduino' && ARDUINO_GO_FUNCS[word]) {
-      const d = ARDUINO_GO_FUNCS[word]
-      return { title: `arduino.${word}`, signature: d.sig, doc: d.doc, returns: d.returns, tags: ['arduino', 'tsuki'] }
+    const root = memberCtxM[1]
+    const sub  = memberCtxM[2]  // e.g. arduino.Serial.begin → sub='Serial'
+
+    // Python chained: arduino.Serial.X
+    if (isPy && root && sub) {
+      const chainKey = `${root}.${sub}`
+      const members  = PYTHON_PKG_MEMBERS[chainKey] ?? []
+      const m = members.find(x => x.label === word)
+      if (m) return { title: `${root}.${sub}.${word}`, signature: m.detail, doc: m.doc, tags: ['tsuki', 'python', root] }
     }
-    if (pkg === 'Serial') {
-      return { title: `Serial.${word}`, doc: `Arduino Serial method. ${word}() — see Arduino reference.`, tags: ['arduino', 'Serial'] }
+
+    // Python single-level pkg
+    if (isPy) {
+      const members = PYTHON_PKG_MEMBERS[root] ?? []
+      const m = members.find(x => x.label === word)
+      if (m) return { title: `${root}.${word}`, signature: m.detail, doc: m.doc, tags: ['tsuki', 'python', root] }
+      // Instance variable — look up assigned type
+      const instMembers = resolveInstanceMembersPy(code, root)
+      const im = instMembers.find(x => x.label === word)
+      if (im) return { title: `${root}.${word}`, signature: im.detail, doc: im.doc, tags: ['tsuki', 'python'] }
     }
+
+    // Go/C++ unified lookup
+    const allPkgs = getAllPkgMembers()
+    const pkg     = allPkgs[root] ?? {}
+    const def     = pkg[word]
+    if (def) return { title: `${root}.${word}`, signature: def.sig, doc: def.doc, returns: def.returns, tags: def.tags ?? ['stdlib', root] }
+
+    // Serial/Wire fallback docs
+    if (root === 'Serial') {
+      const serialDocs: Record<string, string> = {
+        begin: 'void begin(long baud) — initialize serial at the given baud rate.',
+        print: 'size_t print(T val) — print value without newline.',
+        println: 'size_t println(T val) — print value followed by \\n.',
+        available: 'int available() — bytes waiting in the receive buffer.',
+        read: 'int read() — read and remove the next byte (-1 if empty).',
+        write: 'size_t write(uint8_t val) — write raw byte.',
+        flush: 'void flush() — wait for TX buffer to drain.',
+        peek: 'int peek() — look at the next byte without removing it.',
+        readString: 'String readString() — read until timeout.',
+        parseInt: 'long parseInt() — parse an integer from the stream.',
+      }
+      const doc = serialDocs[word]
+      return doc ? { title: `Serial.${word}`, doc, tags: ['arduino', 'Serial'] } : null
+    }
+
     return null
   }
 
@@ -584,18 +1212,35 @@ export function getHoverDoc(
     return { title: word, signature: d.sig, doc: d.doc, returns: d.returns, tags: ['arduino'] }
   }
 
-  // Packages
-  if (ext === 'go' && GO_PKG_MEMBERS[word]) {
-    const members = Object.keys(GO_PKG_MEMBERS[word])
+  // Package hover: show available members
+  const allPkgs = getAllPkgMembers()
+  if ((ext === 'go' || isPy) && allPkgs[word]) {
+    const members = Object.keys(allPkgs[word])
     return {
       title: `package ${word}`,
-      doc: `Standard library package **${word}**. Available functions: ${members.slice(0, 8).join(', ')}${members.length > 8 ? '…' : ''}.`,
-      tags: ['stdlib', 'package'],
+      doc: `Package **${word}**. Members: ${members.slice(0, 10).join(', ')}${members.length > 10 ? '…' : ''}.`,
+      tags: [ext === 'py' ? 'python' : 'stdlib', 'package'],
+    }
+  }
+  if (isPy && PYTHON_PKG_MEMBERS[word]) {
+    const members = PYTHON_PKG_MEMBERS[word]
+    const fns  = members.filter(m => !/^[A-Z_]/.test(m.label)).slice(0, 8).map(m => m.label)
+    const cons = members.filter(m => /^[A-Z_]/.test(m.label)).slice(0, 4).map(m => m.label)
+    const parts = [
+      fns.length  ? `Functions: ${fns.join(', ')}` : '',
+      cons.length ? `Constants: ${cons.join(', ')}` : '',
+    ].filter(Boolean).join(' · ')
+    return {
+      title: `package ${word}`,
+      doc: `**tsuki ${word}** package for Python.${parts ? ' ' + parts : ''}`,
+      tags: ['python', 'package', 'tsuki'],
     }
   }
 
   // User-defined symbols
-  const userSymbols = ext === 'go' ? collectUserSymbolsGo(code) : collectUserSymbolsCpp(code)
+  const userSymbols = isPy
+    ? collectUserSymbolsPy(code)
+    : ext === 'go' ? collectUserSymbolsGo(code) : collectUserSymbolsCpp(code)
   const userSym = userSymbols.find(s => s.label === word)
   if (userSym) {
     return {
@@ -609,15 +1254,14 @@ export function getHoverDoc(
   return null
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  PUBLIC API — SIGNATURE HELP
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function getSignatureHelp(
   code: string,
   offset: number,
   ext: string,
 ): SignatureHelp | null {
+  const isPy = ext === 'py'
+
   // Walk backwards to find the open paren of the active call
   let depth = 0
   let i = offset - 1
@@ -632,57 +1276,82 @@ export function getSignatureHelp(
   }
   if (i < 0) return null
 
-  // Count commas at depth 0 to determine active param
+  // Count commas at this paren depth to determine active param
   let activeParam = 0
+  let d2 = 0
   for (let j = i + 1; j < offset; j++) {
-    if (code[j] === ',' && depth === 0) activeParam++
-    if (code[j] === '(') depth++
-    if (code[j] === ')') depth--
+    if (code[j] === ',' && d2 === 0) activeParam++
+    if (code[j] === '(') d2++
+    if (code[j] === ')') d2--
   }
 
-  // Get the function name before '('
   const beforeParen = code.slice(0, i)
-  const memberM = beforeParen.match(/(\w+)\.(\w+)\s*$/)
-  const simpleM = beforeParen.match(/(\w+)\s*$/)
 
-  let def: FuncDef | undefined
+  // ── Python: pkg.method( or method(  ────────────────────────────────────
+  if (isPy) {
+    const chainM  = beforeParen.match(/(\w+)\.(\w+)\.(\w+)\s*$/)  // pkg.sub.fn
+    const memberM = beforeParen.match(/(\w+)\.(\w+)\s*$/)           // pkg.fn
+    const simpleM = beforeParen.match(/(\w+)\s*$/)
 
-  if (memberM) {
-    const [, pkg, fn] = memberM
-    const pkgFuncs = GO_PKG_MEMBERS[pkg] ?? {}
-    def = pkgFuncs[fn] ?? (pkg === 'arduino' ? ARDUINO_GO_FUNCS[fn] : undefined)
+    if (chainM) {
+      const key = `${chainM[1]}.${chainM[2]}`
+      const member = (PYTHON_PKG_MEMBERS[key] ?? []).find(m => m.label === chainM[3])
+      if (member) {
+        const paramStr = member.detail.match(/\(([^)]*)\)/)?.[1] ?? ''
+        const params = paramStr ? paramStr.split(',').map(p => ({ name: p.trim().split(':')[0].trim(), type: p.includes(':') ? p.split(':')[1].trim() : '' })) : []
+        return { label: member.detail, params, activeParam: Math.min(activeParam, Math.max(0, params.length - 1)), doc: member.doc }
+      }
+    }
+    if (memberM) {
+      const member = (PYTHON_PKG_MEMBERS[memberM[1]] ?? []).find(m => m.label === memberM[2])
+      if (member) {
+        const paramStr = member.detail.match(/\(([^)]*)\)/)?.[1] ?? ''
+        const params = paramStr ? paramStr.split(',').map(p => ({ name: p.trim().split(':')[0].trim(), type: p.includes(':') ? p.split(':')[1].trim() : '' })) : []
+        return { label: member.detail, params, activeParam: Math.min(activeParam, Math.max(0, params.length - 1)), doc: member.doc }
+      }
+    }
+    if (simpleM) {
+      const userSym = collectUserSymbolsPy(code).find(s => s.label === simpleM[1] && s.kind === 'function')
+      if (userSym?.detail) {
+        return { label: userSym.detail, params: [], activeParam: 0, doc: userSym.documentation }
+      }
+    }
+    return null
+  }
+
+  // ── Go / C++ ─────────────────────────────────────────────────────────────
+  const allPkgs  = getAllPkgMembers()
+  const memberM2 = beforeParen.match(/(\w+)\.(\w+)\s*$/)
+  const simpleM2 = beforeParen.match(/(\w+)\s*$/)
+
+  if (memberM2) {
+    const [, pkg, fn] = memberM2
+    const def = (allPkgs[pkg] ?? {})[fn]
     if (def) {
       return {
         label: def.sig,
         params: def.params,
-        activeParam: Math.min(activeParam, def.params.length - 1),
+        activeParam: Math.min(activeParam, Math.max(0, def.params.length - 1)),
         doc: def.doc,
       }
     }
   }
 
-  if (simpleM) {
-    const fn = simpleM[1]
-    if (ext === 'go') def = GO_BUILTIN_DOCS[fn]
+  if (simpleM2) {
+    const fn = simpleM2[1]
+    let def: FuncDef | undefined
+    if (ext === 'go')                    def = GO_BUILTIN_DOCS[fn]
     if (!def && (ext === 'cpp' || ext === 'ino')) def = ARDUINO_FUNCS[fn]
-    // User symbols
     if (!def) {
-      const userSym = (ext === 'go' ? collectUserSymbolsGo(code) : collectUserSymbolsCpp(code))
-        .find(s => s.label === fn && s.kind === 'function')
-      if (userSym && userSym.detail) {
-        return {
-          label: userSym.detail,
-          params: [],
-          activeParam: 0,
-          doc: userSym.documentation,
-        }
-      }
+      const syms = ext === 'go' ? collectUserSymbolsGo(code) : collectUserSymbolsCpp(code)
+      const usr  = syms.find(s => s.label === fn && s.kind === 'function')
+      if (usr?.detail) return { label: usr.detail, params: [], activeParam: 0, doc: usr.documentation }
     }
     if (def) {
       return {
         label: def.sig,
         params: def.params,
-        activeParam: Math.min(activeParam, def.params.length - 1),
+        activeParam: Math.min(activeParam, Math.max(0, def.params.length - 1)),
         doc: def.doc,
       }
     }
@@ -690,6 +1359,7 @@ export function getSignatureHelp(
 
   return null
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PUBLIC API — INLAY HINTS
@@ -751,7 +1421,49 @@ function inferGoType(expr: string): string | null {
 
 export function getInlayHints(code: string, ext: string): InlayHint[] {
   const hints: InlayHint[] = []
-  if (ext !== 'go' && ext !== 'cpp' && ext !== 'ino') return hints
+  if (ext !== 'go' && ext !== 'cpp' && ext !== 'ino' && ext !== 'py') return hints
+
+  // ── Python inlay hints ───────────────────────────────────────────────────
+  if (ext === 'py') {
+    code.split('\n').forEach((raw, i) => {
+      const ln = i + 1
+      // time.sleep(N) — only when arg is a plain number, not when it contains time.X constant
+      const sleepM = raw.match(/\.sleep\s*\(\s*(\d+)\s*\)/)
+      if (sleepM) {
+        // Don't hint if the arg already references a time constant — unit is self-evident
+        const close = raw.indexOf(')', raw.indexOf('.sleep('))
+        if (close !== -1) hints.push({ line: ln, col: close + 1, label: '  # ms', kind: 'param' })
+      }
+      // time.sleep(expr * time.X) — argument contains time constant, skip
+      const sleepComplex = raw.match(/\.sleep\s*\([^)]*time\.\w+[^)]*\)/)
+      if (sleepComplex) {
+        // Remove the last hint we just pushed (it fired on a complex arg)
+        if (hints.length && hints[hints.length - 1].label === '  # ms') hints.pop()
+      }
+      // arduino.delay(N)
+      const delayM = raw.match(/arduino\.delay\s*\(\s*(\d+)/)
+      if (delayM) {
+        const close = raw.indexOf(')', raw.indexOf('arduino.delay('))
+        if (close !== -1) hints.push({ line: ln, col: close + 1, label: '  # ms', kind: 'param' })
+      }
+      // analog_write(pin, N)
+      const awM = raw.match(/analog_write\s*\(\s*\w+\s*,\s*(\d+)/)
+      if (awM) {
+        const close = raw.indexOf(')', raw.indexOf('analog_write('))
+        if (close !== -1) hints.push({ line: ln, col: close + 1, label: '  # 0-255', kind: 'param' })
+      }
+      // Serial.begin(N): baud hint removed — it's self-evident, Serial.begin() always takes baud rate
+      // Type inference: `name = literal` with no annotation on the line
+      // Only fire when the whole RHS is a plain number (no expressions like 2000 * time.X)
+      const varM = raw.match(/^(\s*)(\w+)\s*=\s*(\d+(?:\.\d+)?)$/)
+      if (varM && !raw.includes(':')) {
+        const typ = varM[3].includes('.') ? 'float' : 'int'
+        const col = varM[1].length + varM[2].length
+        hints.push({ line: ln, col, label: `: ${typ}`, kind: 'type' })
+      }
+    })
+    return hints
+  }
 
   const lines = code.split('\n')
 
@@ -815,12 +1527,7 @@ export function getInlayHints(code: string, ext: string): InlayHint[] {
         const parenClose = raw.indexOf(')', raw.indexOf('analogWrite('))
         hints.push({ line: ln, col: parenClose, label: ' /*0-255*/', kind: 'param' })
       }
-      // Serial.begin(N) → show "baud"
-      const baudM = raw.match(/Serial\.begin\s*\(\s*(\d+)\s*\)/)
-      if (baudM) {
-        const parenClose = raw.indexOf(')', raw.indexOf('Serial.begin'))
-        hints.push({ line: ln, col: parenClose, label: ' /*baud*/', kind: 'param' })
-      }
+      // Serial.begin(N): baud hint removed — self-evident
     })
     return hints
   }

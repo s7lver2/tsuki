@@ -39,9 +39,10 @@ function ResizeHandle() {
       if (!dragging.current) return
       setBottomHeight(startH.current + (startY.current - e.clientY))
     }
-    function onUp() {
+    function onUp(e: MouseEvent) {
       if (dragging.current) {
-        const h = startH.current + (startY.current - ((window as any).__lastMouseY ?? 0))
+        // Use e.clientY directly — more accurate than the stale __lastMouseY global
+        const h = startH.current + (startY.current - e.clientY)
         updateSetting('bottomPanelHeight', Math.max(80, Math.min(600, h)))
         updateSetting('ideLayout', 'custom')
       }
@@ -49,15 +50,10 @@ function ResizeHandle() {
       document.body.style.cursor     = ''
       document.body.style.userSelect = ''
     }
-    function onMouseMove(e: MouseEvent) {
-      (window as any).__lastMouseY = e.clientY
-    }
     window.addEventListener('mousemove', onMove)
-    window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup',   onUp)
     return () => {
       window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onUp)
     }
   }, [setBottomHeight, updateSetting]) // eslint-disable-line
@@ -337,24 +333,24 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
         }
 
         // After the shell starts, cd into the project directory.
-        // We wait a short tick so the shell prompt is ready before we write.
+        // Wait a tick so the shell prompt is ready, then verify the path
+        // actually exists before sending cd — avoids "El nombre de archivo…"
+        // errors when the directory was never created on disk.
         if (rawCwd) {
-          // rawCwd already has native OS separators (backslashes on Windows).
-          const cdCmd = (() => {
-            switch (shell.id) {
-              case 'cmd':        return `cd /d "${rawCwd}"
-`
-              case 'powershell':
-              case 'pwsh':       return `Set-Location -LiteralPath '${rawCwd}'
-`
-              default:           return `cd ${JSON.stringify(rawCwd)}
-`
-            }
-          })()
-          // 300 ms gives the shell time to print its initial prompt before we
-          // inject the cd — avoids the command appearing mid-prompt line.
           setTimeout(() => {
-            if (!cancelled) ptyWrite(ptyId, cdCmd).catch(() => {})
+            if (cancelled) return
+            pathExists(rawCwd).then(exists => {
+              if (!exists || cancelled) return
+              const cdCmd = (() => {
+                switch (shell.id) {
+                  case 'cmd':        return `cd /d "${rawCwd}"\r\n`
+                  case 'powershell':
+                  case 'pwsh':       return `Set-Location -LiteralPath '${rawCwd}'\r\n`
+                  default:           return `cd ${JSON.stringify(rawCwd)}\n`
+                }
+              })()
+              ptyWrite(ptyId, cdCmd).catch(() => {})
+            }).catch(() => {})
           }, 300)
         }
 
@@ -555,6 +551,44 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
 
 function Terminal() {
   const { projectPath, pendingCommand, clearPendingCommand } = useStore()
+  const pendingBuild     = useStore(s => s.pendingBuild)
+  const clearPendingBuild = useStore(s => s.clearPendingBuild)
+
+  // ── pendingBuild: streams output to Output (addLog) tab, not the terminal ─
+  useEffect(() => {
+    if (!pendingBuild) return
+    const { cmd, args, cwd, chainArgs } = pendingBuild
+    clearPendingBuild()
+
+    const { addLog, setBottomTab } = useStore.getState()
+    setBottomTab('output')
+
+    const run = (cmdStr: string, argsArr: string[]): Promise<number> => {
+      addLog('info', `> ${[cmdStr, ...argsArr].join(' ')}`)
+      return new Promise<number>(resolve => {
+        spawnProcess(cmdStr, argsArr, cwd ?? projectPathRef.current ?? undefined, (line, isErr) => {
+          if (line.trim()) addLog(isErr ? 'err' : 'info', line)
+        }).then(handle => {
+          handle.done.then(code => {
+            handle.dispose()
+            if (code !== 0) addLog('err', `[exit ${code}]`)
+            else addLog('ok', '[done]')
+            useStore.getState().refreshTree().catch(() => {})
+            resolve(code)
+          })
+        }).catch(e => {
+          addLog('err', `[error: ${e}]`)
+          resolve(1)
+        })
+      })
+    }
+
+    if (chainArgs) {
+      run(cmd, args).then(code => { if (code === 0) run(cmd, chainArgs) })
+    } else {
+      run(cmd, args)
+    }
+  }, [pendingBuild, clearPendingBuild]) // eslint-disable-line
   const t = useT()
   const [shells,        setShells       ] = useState<ShellInfo[]>([])
   const [sessions,      setSessions     ] = useState<PtySession[]>([])

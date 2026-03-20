@@ -58,13 +58,14 @@ function AvatarPicker({
 // ── Single profile card ───────────────────────────────────────────────────────
 
 function ProfileCard({
-  profile, isActive, onSwitch, onDelete, onEdit,
+  profile, isActive, onSwitch, onDelete, onEdit, onSave,
 }: {
   profile: UserProfile
   isActive: boolean
   onSwitch: () => void
   onDelete: () => void
   onEdit: () => void
+  onSave: () => void
 }) {
   return (
     <div
@@ -86,13 +87,31 @@ function ProfileCard({
             </span>
           )}
         </div>
-        <p className="text-[10px] text-[var(--fg-faint)] font-mono mt-0.5">
-          {profile.settings.defaultBoard ?? 'uno'} · {new Date(profile.createdAt).toLocaleDateString()}
-        </p>
+        <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+          <span className="text-[10px] text-[var(--fg-faint)] font-mono">
+            {profile.settings.defaultBoard ?? 'uno'}
+          </span>
+          <span className="text-[10px] text-[var(--fg-faint)]">·</span>
+          <span className="text-[10px] text-[var(--fg-faint)] font-mono">
+            {profile.settings.ideTheme ?? 'dark'}
+          </span>
+          <span className="text-[10px] text-[var(--fg-faint)]">·</span>
+          <span className="text-[10px] text-[var(--fg-faint)]">
+            {new Date(profile.createdAt).toLocaleDateString()}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-1 flex-shrink-0">
-        {!isActive && (
+        {isActive ? (
+          <button
+            onClick={onSave}
+            title="Save current settings into this profile"
+            className="px-2.5 py-1 rounded text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors"
+          >
+            Save
+          </button>
+        ) : (
           <button
             onClick={onSwitch}
             className="px-2.5 py-1 rounded text-xs text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors"
@@ -262,17 +281,26 @@ export default function ProfilesPanel() {
             <p className="text-xs text-[var(--fg-faint)] mt-1">Create one to get started</p>
           </div>
         )}
-        {profiles.map(profile => (
+        {profiles.map((profile: UserProfile) => (
           <ProfileCard
             key={profile.id}
             profile={profile}
             isActive={profile.id === activeProfileId}
-            onSwitch={() => switchProfile(profile.id)}
+            onSwitch={() => { switchProfile(profile.id) }}
             onDelete={() => {
               if (profiles.length <= 1) return
               if (confirm(`Delete profile "${profile.name}"?`)) deleteProfile(profile.id)
             }}
-            onEdit={() => setEditingId(profile.id)}
+            onEdit={() => { setEditingId(profile.id) }}
+            onSave={() => {
+              // Persist the current live settings into this profile snapshot
+              const live = useStore.getState().settings
+              const updated = useStore.getState().profiles.map(p =>
+                p.id === profile.id ? { ...p, settings: { ...live } } : p
+              )
+              useStore.setState({ profiles: updated })
+              try { localStorage.setItem('tsuki_profiles', JSON.stringify(updated)) } catch {}
+            }}
           />
         ))}
       </div>

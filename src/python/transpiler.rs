@@ -48,7 +48,7 @@ impl PyTranspiler {
     pub fn generate(&mut self, prog: &PyProgram) -> Result<String> {
         // Register imports
         for imp in &prog.imports {
-            let canon = imp.alias.as_deref().map(|_| imp.module.as_str()).unwrap_or(&imp.module);
+            let _canon = imp.alias.as_deref().map(|_| imp.module.as_str()).unwrap_or(&imp.module);
             let name = imp.module.split('.').next().unwrap_or(&imp.module).to_owned();
             self.imports.insert(name.clone());
             if let Some(alias) = &imp.alias {
@@ -514,6 +514,41 @@ impl PyTranspiler {
         }
 
         // ── Fallback: emit as-is ──────────────────────────────────────────────
+        // Before giving up entirely, check if mod_name is a typed local variable
+        // whose type maps to a known package (instance method call).
+        // Example: sensor.read_temperature() where sensor : DHT*
+        //   → var_types["sensor"] = "DHT*"  (set by constructor call inference)
+        //   → find package with cpp_class == "DHT"
+        //   → look up fn_name = "read_temperature" in that package
+        //   → apply template with receiver = "sensor" as {0}
+        if let Some(dot) = fname.find('.') {
+            let mod_name = &fname[..dot];
+            let fn_name  = &fname[dot+1..];
+
+            if let Some(cpp_type) = self.var_types.get(mod_name).cloned() {
+                let base_type = cpp_type.trim_end_matches('*').to_owned();
+
+                // Phase 1: immutable snapshot — find the matching package
+                let snapshot: Option<(crate::runtime::FnMap, Option<String>)> =
+                    self.rt.packages.values()
+                        .find(|p| p.cpp_class.as_deref() == Some(&base_type))
+                        .and_then(|p| p.functions.get(fn_name).map(|fm| (fm.clone(), p.header.clone())));
+
+                // Phase 2: use &mut self freely
+                if let Some((fn_map, header)) = snapshot {
+                    // Receiver is {0}; user-visible args start at {1}
+                    let mut cpp_args = vec![mod_name.to_owned()];
+                    cpp_args.extend(
+                        args.iter()
+                            .map(|a| self.emit_expr(a))
+                            .collect::<Result<Vec<_>>>()?
+                    );
+                    if let Some(h) = header { self.includes.insert(h); }
+                    return Ok(fn_map.apply(&cpp_args));
+                }
+            }
+        }
+
         let parts: Result<Vec<_>> = args.iter().map(|a| self.emit_expr(a)).collect();
         let func_s = self.emit_expr(func)?;
         Ok(format!("{}({})", func_s, parts?.join(", ")))
@@ -583,7 +618,26 @@ impl PyTranspiler {
             PyExpr::Bool(_)  => "bool".into(),
             PyExpr::Str(_)   => if self.cfg.arduino_string { "String".into() } else { "const char*".into() },
             PyExpr::Ident(n) => self.var_types.get(n).cloned().unwrap_or_else(|| "auto".into()),
-            _                => "auto".into(),
+            // Constructor call: pkg.new(…) / pkg.New(…)
+            // If the package has a cpp_class, the variable type is `ClassName*`
+            // (heap pointer, because the DHT/Servo/etc. templates use `{0}->method()`).
+            PyExpr::Call { func, .. } => {
+                let fname = self.flatten_expr_name(func);
+                if let Some(dot) = fname.find('.') {
+                    let mod_name = &fname[..dot];
+                    let fn_name  = &fname[dot+1..];
+                    if fn_name == "new" || fn_name == "New" {
+                        let resolved = self.resolve_module(mod_name);
+                        if let Some(pkg) = self.rt.packages.get(&resolved) {
+                            if let Some(class) = &pkg.cpp_class {
+                                return format!("{}*", class);
+                            }
+                        }
+                    }
+                }
+                "auto".into()
+            }
+            _ => "auto".into(),
         }
     }
 

@@ -138,6 +138,7 @@ pub fn modules_root() -> Result<PathBuf> {
 }
 
 /// True if the core for `arch` is already installed.
+#[allow(dead_code)]
 pub fn is_installed(arch: &str) -> bool {
     modules_root()
         .map(|r| r.join("installed").join(format!("{}.json", arch)).exists())
@@ -182,11 +183,13 @@ pub fn ensure_arch(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths>
     match install(arch, verbose) {
         Ok(()) => {},
         Err(e) => {
-            // Don't propagate immediately — fall through to arduino15 fallback
-            // in sdk::resolve(). We print the warning here so the user knows
-            // the auto-download failed even if arduino15 ends up working.
-            eprintln!("  {} tsuki-modules install failed for {}: {}", "⚠".yellow(), arch, e);
-            return Err(e);
+            // Print the warning but DO NOT return — let sdk::resolve() fall
+            // through to the arduino-cli package cache. If the user has the
+            // core installed via arduino-cli the build will succeed even when
+            // the tsuki-modules auto-download fails (offline, firewall, etc.).
+            eprintln!("  {} tsuki-modules install failed for '{}': {}", "⚠".yellow(), arch, e);
+            eprintln!("  Trying arduino-cli package cache as fallback…");
+            return Err(e);   // sdk::resolve() catches this and continues
         }
     }
 

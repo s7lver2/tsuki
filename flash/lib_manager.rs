@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -60,6 +60,7 @@ pub struct LibraryEntry {
     pub url:      String,       // direct ZIP download URL
     pub checksum: Option<String>, // SHA-256 prefixed with "SHA-256:"
     #[serde(rename = "archiveFileName")]
+    #[allow(dead_code)]
     pub archive_filename: Option<String>,
     pub sentence:  Option<String>, // short description
     pub paragraph: Option<String>, // long description

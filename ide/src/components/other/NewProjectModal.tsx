@@ -59,32 +59,38 @@ const BACKENDS = [
   { id: 'arduino-cli',       label: 'arduino-cli',         note: 'classic \u00b7 requires arduino-cli install',  badge: null },
 ]
 
-type TemplateItem = { id: string; label: string; desc: string; icon: string }
+type TemplateGroup = 'basic' | 'packages'
+type TemplateItem = { id: string; label: string; desc: string; icon: string; group?: TemplateGroup; requires?: string[] }
 
 const TEMPLATES_GO: TemplateItem[] = [
-  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Toggle LED_BUILTIN every 500 ms using arduino.DigitalWrite.', icon: '\ud83d\udca1' },
-  { id: 'serial', label: 'Serial Hello',  desc: 'Print "Hello from tsuki!" over serial every second.',         icon: '\ud83d\udce1' },
-  { id: 'empty',  label: 'Empty project', desc: 'Blank setup() + loop() \u2014 start from scratch.',                icon: '\ud83d\udcc4' },
+  { id: 'blink',   label: 'Blink (LED)',    desc: 'Toggle LED_BUILTIN every 500 ms using arduino.DigitalWrite.',       icon: '💡', group: 'basic'    },
+  { id: 'serial',  label: 'Serial Hello',   desc: 'Print "Hello from tsuki!" over serial every second.',               icon: '📡', group: 'basic'    },
+  { id: 'empty',   label: 'Empty project',  desc: 'Blank setup() + loop() — start from scratch.',                     icon: '📄', group: 'basic'    },
+  { id: 'dht',     label: 'DHT22 sensor',   desc: 'Read temperature & humidity. Requires dht package.',                icon: '🌡️', group: 'packages', requires: ['dht']     },
+  { id: 'ws2812',  label: 'WS2812 LEDs',    desc: 'NeoPixel / WS2812 LED strip control. Requires ws2812 package.',    icon: '🌈', group: 'packages', requires: ['ws2812']  },
+  { id: 'mpu6050', label: 'MPU-6050 IMU',   desc: 'Accelerometer + gyroscope over I2C. Requires mpu6050 package.',    icon: '🎯', group: 'packages', requires: ['mpu6050'] },
+  { id: 'servo',   label: 'Servo sweep',    desc: 'Sweep a servo 0→180°. Requires Servo package.',                    icon: '⚙️', group: 'packages', requires: ['Servo']   },
 ]
 
 const TEMPLATES_CPP: TemplateItem[] = [
-  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Native C++ blink with digitalWrite() and delay().',           icon: '\ud83d\udca1' },
-  { id: 'serial', label: 'Serial Hello',  desc: 'Native C++ Serial.println() hello world.',                    icon: '\ud83d\udce1' },
-  { id: 'empty',  label: 'Empty project', desc: '#include <Arduino.h> with empty setup/loop.',                 icon: '\ud83d\udcc4' },
+  { id: 'blink',  label: 'Blink (LED)',   desc: 'Native C++ blink with digitalWrite() and delay().',        icon: '💡', group: 'basic' },
+  { id: 'serial', label: 'Serial Hello',  desc: 'Native C++ Serial.println() hello world.',                  icon: '📡', group: 'basic' },
+  { id: 'empty',  label: 'Empty project', desc: '#include <Arduino.h> with empty setup/loop.',               icon: '📄', group: 'basic' },
 ]
 
 const TEMPLATES_INO: TemplateItem[] = [
-  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Classic Arduino blink .ino sketch.',                          icon: '\ud83d\udca1' },
-  { id: 'serial', label: 'Serial Hello',  desc: 'Hello world over Serial \u2014 classic Arduino style.',            icon: '\ud83d\udce1' },
-  { id: 'empty',  label: 'Empty project', desc: 'Blank .ino sketch, ready to fill in.',                        icon: '\ud83d\udcc4' },
+  { id: 'blink',  label: 'Blink (LED)',   desc: 'Classic Arduino blink .ino sketch.',                        icon: '💡', group: 'basic' },
+  { id: 'serial', label: 'Serial Hello',  desc: 'Hello world over Serial — classic Arduino style.',          icon: '📡', group: 'basic' },
+  { id: 'empty',  label: 'Empty project', desc: 'Blank .ino sketch, ready to fill in.',                      icon: '📄', group: 'basic' },
 ]
 
 const TEMPLATES_PYTHON: TemplateItem[] = [
-  { id: 'blink',  label: 'Blink  (LED)',  desc: 'Toggle LED_BUILTIN using arduino.digitalWrite — Python style.', icon: '\ud83d\udca1' },
-  { id: 'serial', label: 'Serial Hello',  desc: 'print() over Serial — maps to Serial.println() in C++.',        icon: '\ud83d\udce1' },
-  { id: 'empty',  label: 'Empty project', desc: 'Blank setup() + loop() \u2014 start from scratch.',                icon: '\ud83d\udcc4' },
+  { id: 'blink',  label: 'Blink (LED)',   desc: 'Toggle LED_BUILTIN using arduino.digitalWrite — Python style.', icon: '💡', group: 'basic'    },
+  { id: 'serial', label: 'Serial Hello',  desc: 'print() over Serial — maps to Serial.println() in C++.',       icon: '📡', group: 'basic'    },
+  { id: 'empty',  label: 'Empty project', desc: 'Blank setup() + loop() — start from scratch.',                 icon: '📄', group: 'basic'    },
+  { id: 'dht',    label: 'DHT22 sensor',  desc: 'Read temperature & humidity. Requires dht package.',            icon: '🌡️', group: 'packages', requires: ['dht']    },
+  { id: 'ws2812', label: 'WS2812 LEDs',   desc: 'NeoPixel / WS2812 LED strip control. Requires ws2812.',        icon: '🌈', group: 'packages', requires: ['ws2812'] },
 ]
-
 const TEMPLATES_BY_LANG: Record<string, TemplateItem[]> = {
   go: TEMPLATES_GO, python: TEMPLATES_PYTHON, cpp: TEMPLATES_CPP, ino: TEMPLATES_INO,
 }
@@ -289,25 +295,53 @@ function StepTemplate({
   setTemplate: (v: string) => void
   templates: TemplateItem[]
 }) {
+  const basic    = templates.filter(t => !t.group || t.group === 'basic')
+  const pkgTmpls = templates.filter(t => t.group === 'packages')
+
+  const renderCard = (t: TemplateItem) => (
+    <RadioCard key={t.id} selected={template === t.id} onClick={() => setTemplate(t.id)}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span className="text-lg leading-none">{t.icon}</span>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-medium text-[var(--fg)]">{t.label}</p>
+              {t.requires && t.requires.length > 0 && (
+                <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-400/10 text-amber-400 border border-amber-400/20 leading-none flex-shrink-0">
+                  pkg
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[var(--fg-faint)] mt-0.5">{t.desc}</p>
+            {t.requires && t.requires.length > 0 && (
+              <p className="text-[10px] text-amber-400/70 mt-0.5 font-mono">
+                requires: {t.requires.join(', ')}
+              </p>
+            )}
+          </div>
+        </div>
+        {template === t.id && <Check size={12} className="text-green-400 flex-shrink-0" />}
+      </div>
+    </RadioCard>
+  )
+
   return (
     <div className="flex flex-col gap-2">
       <label className="text-xs font-semibold text-[var(--fg-muted)] uppercase tracking-widest block mb-1">
         Starter template
       </label>
-      {templates.map(t => (
-        <RadioCard key={t.id} selected={template === t.id} onClick={() => setTemplate(t.id)}>
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <span className="text-lg leading-none">{t.icon}</span>
-              <div>
-                <p className="text-sm font-medium text-[var(--fg)]">{t.label}</p>
-                <p className="text-xs text-[var(--fg-faint)] mt-0.5">{t.desc}</p>
-              </div>
-            </div>
-            {template === t.id && <Check size={12} className="text-green-400 flex-shrink-0" />}
+      {basic.map(renderCard)}
+
+      {pkgTmpls.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 mt-1 mb-0.5">
+            <span className="text-[10px] font-semibold text-[var(--fg-faint)] uppercase tracking-widest">Package templates</span>
+            <div className="flex-1 h-px bg-[var(--border)]" />
+            <span className="text-[9px] text-[var(--fg-faint)] font-mono">auto-adds deps</span>
           </div>
-        </RadioCard>
-      ))}
+          {pkgTmpls.map(renderCard)}
+        </>
+      )}
     </div>
   )
 }
@@ -462,6 +496,13 @@ export default function NewProjectModal({ onClose }: NewProjectModalProps) {
       const fullPath = location ? `${location}${sep}${projName}` : ''
       await loadProject(projName, board, template, backend, gitInit, fullPath, language)
 
+      // If the template requires packages, open the terminal so the user sees the install progress
+      const requires = currentTemplates.find(t => t.id === template)?.requires ?? []
+      if (requires.length > 0) {
+        const { setBottomTab } = useStore.getState()
+        setBottomTab('terminal')
+      }
+
       // Scaffold tsuki-webkit files if requested
       if (useWebkit && fullPath) {
         try {
@@ -566,6 +607,9 @@ export default function App() {
               <SummaryRow label="Board"    value={BOARDS.find(b => b.id === board)?.id ?? board} />
               <SummaryRow label="Backend"  value={backend} />
               <SummaryRow label="Template" value={template} />
+              {currentTemplates.find(t => t.id === template)?.requires?.length ? (
+                <SummaryRow label="Deps" value={currentTemplates.find(t => t.id === template)!.requires!.join(', ')} />
+              ) : null}
               <SummaryRow label="Git"      value={gitInit ? 'yes' : 'no'} />
             </div>
           </div>

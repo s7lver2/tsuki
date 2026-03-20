@@ -30,7 +30,7 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     // RP2040 toolchain: pqt-gcc-arm-none-eabi (earlephilhower) or system arm-none-eabi-gcc
     let cc  = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-gcc");
     let cxx = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-g++");
-    let ar  = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-gcc-ar");
+    let _ar = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-gcc-ar");
     let objcopy = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-objcopy");
     let size    = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-size");
 

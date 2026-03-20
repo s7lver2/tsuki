@@ -759,6 +759,166 @@ function diagnoseCpp(code: string, filename: string, isIno: boolean): Diagnostic
 
 // ─── Public API ────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Python diagnostics
+// ─────────────────────────────────────────────────────────────────────────────
+
+const KNOWN_PYTHON_PACKAGES = new Set([
+  'arduino', 'time', 'fmt', 'math',
+  'dht', 'ws2812', 'mpu6050', 'servo', 'irremote', 'u8g2', 'bmp280', 'stepper',
+])
+
+function diagnosePy(code: string, filename: string): Diagnostic[] {
+  const diags: Diagnostic[] = []
+  const lines  = code.split('\n')
+  let uid = 0
+  const id = () => `lsp-py-${uid++}`
+
+  // ── Indent / syntax ───────────────────────────────────────────────────────
+  let indentStack: number[] = [0]
+  lines.forEach((raw, i) => {
+    if (!raw.trim() || raw.trimStart().startsWith('#')) return
+    const indent = raw.length - raw.trimStart().length
+    if (indent % 2 !== 0 && indent % 4 !== 0) {
+      // Unusual indent (not 2 or 4 spaces) — may be a tab/space mix
+      if (raw.startsWith('\t')) {
+        diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: i + 1, col: 1,
+          message: 'Tabs detected — tsuki Python uses spaces for indentation.' })
+      }
+    }
+  })
+
+  // ── Paren/bracket balance ─────────────────────────────────────────────────
+  let parens = 0, brackets = 0, braces = 0
+  lines.forEach((raw, i) => {
+    const s = raw.replace(/#.*$/, '').replace(/"[^"]*"|'[^']*'/g, '""')
+    for (const ch of s) {
+      if (ch === '(') parens++
+      if (ch === ')') parens--
+      if (ch === '[') brackets++
+      if (ch === ']') brackets--
+      if (ch === '{') braces++
+      if (ch === '}') braces--
+    }
+    if (parens < 0) {
+      diags.push({ id: id(), severity: 'error', source: 'lint', file: filename, line: i + 1, col: 1, message: "Extra closing parenthesis ')'" })
+      parens = 0
+    }
+    if (brackets < 0) {
+      diags.push({ id: id(), severity: 'error', source: 'lint', file: filename, line: i + 1, col: 1, message: "Extra closing bracket ']'" })
+      brackets = 0
+    }
+  })
+  if (parens > 0)   diags.push({ id: id(), severity: 'error', source: 'lint', file: filename, line: lines.length, col: 1, message: `Unclosed parenthesis — ${parens} '(' without matching ')'` })
+  if (brackets > 0) diags.push({ id: id(), severity: 'error', source: 'lint', file: filename, line: lines.length, col: 1, message: `Unclosed bracket — ${brackets} '[' without matching ']'` })
+
+  // ── Import analysis ───────────────────────────────────────────────────────
+  const imported = new Map<string, number>()   // name → line
+  lines.forEach((raw, i) => {
+    const single = raw.match(/^import\s+(\w+)/)
+    if (single) {
+      if (imported.has(single[1])) {
+        diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: i + 1, col: 1,
+          message: `Duplicate import '${single[1]}'` })
+      } else {
+        imported.set(single[1], i + 1)
+      }
+    }
+    const aliased = raw.match(/^from\s+(\w+)\s+import\s+(\w+)/)
+    if (aliased) imported.set(aliased[2], i + 1)
+  })
+
+  // Unused imports (only warn for known tsuki packages — avoids false positives)
+  imported.forEach((lineNum, name) => {
+    if (!KNOWN_PYTHON_PACKAGES.has(name)) return
+    // Check if used anywhere after the import line
+    const usageRe = new RegExp(`\\b${name}\\b`)
+    const usedAfter = lines.slice(lineNum).some(l => usageRe.test(l))
+    if (!usedAfter) {
+      diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: lineNum, col: 1,
+        message: `Import '${name}' is never used`,
+        quickFix: { label: `Remove import ${name}`, newText: '' } })
+    }
+  })
+
+  // ── setup() / loop() presence ─────────────────────────────────────────────
+  const hasSetup = lines.some(l => /^def\s+setup\s*\(\s*\)/.test(l))
+  const hasLoop  = lines.some(l => /^def\s+loop\s*\(\s*\)/.test(l))
+  if (!hasSetup) {
+    diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: 1, col: 1,
+      message: 'Missing def setup(): — Arduino tsuki sketches require a setup() function' })
+  }
+  if (!hasLoop) {
+    diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: 1, col: 1,
+      message: 'Missing def loop(): — Arduino tsuki sketches require a loop() function' })
+  }
+
+  // ── Per-line checks ────────────────────────────────────────────────────────
+  lines.forEach((raw, i) => {
+    const ln     = i + 1
+    const s      = raw.trimStart()
+    const indent = raw.length - s.length
+
+    // Colon at end of control-flow statements
+    const needsColon = s.match(/^(?:if|elif|else|for|while|def|class|try|except|finally|with)/)
+    if (needsColon && !s.trimEnd().endsWith(':') && !s.includes('#') && s.trimEnd() !== '') {
+      // Skip multi-line expressions (ends with comma, open paren etc.)
+      if (!s.trimEnd().match(/[,(\[{\\]$/)) {
+        diags.push({ id: id(), severity: 'error', source: 'lint', file: filename, line: ln, col: raw.length,
+          message: `Missing ':' at end of ${needsColon[0]} statement` })
+      }
+    }
+
+    // print without parentheses — Python 2 style
+    if (/^print\s+[^(]/.test(s)) {
+      diags.push({ id: id(), severity: 'error', source: 'lint', file: filename, line: ln, col: indent + 1,
+        message: 'Use print() with parentheses — print without () is Python 2 syntax',
+        quickFix: {
+          label: 'Add parentheses',
+          newText: raw.replace(/^(\s*)print\s+(.*)$/, (_m, sp, arg) => `${sp}print(${arg.trim()})`),
+        } })
+    }
+
+    // C-style assignment in condition: if (x = y)
+    if (/if\s*\(.*[^=!<>]=(?!=).*\)/.test(s)) {
+      diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: ln, col: indent + 1,
+        message: 'Possible assignment inside condition — use == for comparison' })
+    }
+
+    // Semicolons at end of line (Python doesn't need them)
+    if (s.trimEnd().endsWith(';') && !s.startsWith('#')) {
+      diags.push({ id: id(), severity: 'info', source: 'lint', file: filename, line: ln, col: raw.trimEnd().length,
+        message: 'Trailing semicolons are not needed in Python' })
+    }
+
+    // Using C-style != vs Python not
+    if (/NULL/.test(s)) {
+      diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: ln, col: indent + 1,
+        message: 'Use None instead of NULL in Python' })
+    }
+    if (/true|false/.test(s) && !/^#/.test(s)) {
+      diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: ln, col: indent + 1,
+        message: "Use True/False (capitalised) in Python, not true/false" })
+    }
+
+    // dht.read_temperature() called without .begin() earlier — only warn once
+    if (s.includes('.read_temperature()') || s.includes('.read_humidity()')) {
+      const varM = s.match(/^(\w+)\.(read_temperature|read_humidity)/)
+      if (varM) {
+        const sensorVar = varM[1]
+        const hasBegin = lines.slice(0, i).some(l => l.includes(`${sensorVar}.begin()`))
+        if (!hasBegin) {
+          diags.push({ id: id(), severity: 'warning', source: 'lint', file: filename, line: ln, col: indent + 1,
+            message: `${sensorVar}.begin() not found before first read — call begin() in setup()` })
+        }
+      }
+    }
+  })
+
+  return diags
+}
+
+
 export function runDiagnostics(
   code: string, filename: string, ext: string, opts: LspEngineOptions,
 ): Diagnostic[] {
@@ -767,6 +927,7 @@ export function runDiagnostics(
     if (ext === 'go'  && opts.lspGoEnabled)  return diagnoseGo(code, filename)
     if (ext === 'cpp' && opts.lspCppEnabled) return diagnoseCpp(code, filename, false)
     if (ext === 'ino' && opts.lspInoEnabled) return diagnoseCpp(code, filename, true)
+    if (ext === 'py')                        return diagnosePy(code, filename)
   } catch { /* never crash the editor */ }
   return []
 }

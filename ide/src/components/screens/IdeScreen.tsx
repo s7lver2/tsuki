@@ -14,7 +14,7 @@ import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
   Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, BookOpen,
-  Code2, Share2, Layers,
+  Code2, Share2, Layers, AlertTriangle,
 } from 'lucide-react'
 import type { ElementType } from 'react'
 import { clsx } from 'clsx'
@@ -26,6 +26,11 @@ const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
   'esp32','esp32s2','esp32c3','esp8266','d1_mini','nodemcu','pico','xiao_rp2040',
 ]
+
+const EXPERIMENTAL_BOARDS: Record<string, string> = {
+  xiao_rp2040: 'El soporte para Seeed XIAO RP2040 es experimental. La compilación puede fallar si el SDK de RP2040 no está instalado en arduino-cli. Instálalo con: arduino-cli core install rp2040:rp2040 --additional-urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json',
+  pico:        'El soporte para Raspberry Pi Pico (RP2040) es experimental. Requiere el core earlephilhower instalado en arduino-cli.',
+}
 
 // ── Workstation pages ─────────────────────────────────────────────────────────
 
@@ -43,7 +48,7 @@ export default function IdeScreen() {
     sidebarOpen, sidebarTab, toggleSidebar,
     openTabs, activeTabIdx, closeTab, openFile,
     tree, toggleTheme, theme,
-    settings, updateSetting, setBottomTab, saveActiveFile, dispatchCommand,
+    settings, updateSetting, setBottomTab, saveActiveFile, dispatchCommand, dispatchBuild,
   } = useStore()
 
   const t = useT()
@@ -61,9 +66,10 @@ export default function IdeScreen() {
   const workstationsEnabled = settings.experimentsEnabled && settings.expWorkstationsEnabled
   const sandboxEnabled      = settings.experimentsEnabled && settings.expSandboxEnabled
   // Auto-open sandbox when a circuit is dispatched from Examples
-  const pendingCircuit = useStore(s => s.pendingCircuit)
+  const { pendingCircuit, clearPendingCircuit } = useStore(s => ({ pendingCircuit: s.pendingCircuit, clearPendingCircuit: s.clearPendingCircuit }))
   useEffect(() => {
     if (!pendingCircuit) return
+    clearPendingCircuit()
     if (workstationsEnabled) {
       setWorkstation('sandbox')
     } else if (sandboxEnabled) {
@@ -89,8 +95,8 @@ export default function IdeScreen() {
   }
 
   function dispatch(args: string[]) {
-    setBottomTab('terminal')
-    dispatchCommand(tsuki, args, cwd)
+    // Build/check/compile → Output tab so it doesn't pollute the terminal
+    dispatchBuild(tsuki, args, cwd)
   }
 
   function handleCheck()   { dispatch(makeArgs('check')) }
@@ -124,7 +130,7 @@ export default function IdeScreen() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  })
+  }, [tsuki, board, cwd, settings.verbose, settings.defaultBaud, workstationsEnabled]) // eslint-disable-line
 
   useEffect(() => {
     const { addLog } = useStore.getState()
@@ -144,7 +150,6 @@ export default function IdeScreen() {
           .catch(() => {
             useStore.getState().addLog('warn', 'tsuki not found in PATH. Go to Settings → CLI Tools → set full path.')
           })
-        }
       })
     } else {
       addLog('ok', `tsuki path configured: ${currentPath}`)
@@ -353,6 +358,17 @@ export default function IdeScreen() {
 
         {/* ── Main content area ── */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
+          {/* Experimental board warning banner */}
+          {board && EXPERIMENTAL_BOARDS[board] && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/30 flex-shrink-0">
+              <AlertTriangle size={13} className="text-amber-400 mt-0.5 flex-shrink-0" />
+              <p className="text-[11px] text-amber-300/90 leading-snug flex-1">
+                <span className="font-semibold text-amber-300">Soporte experimental:</span>{' '}
+                {EXPERIMENTAL_BOARDS[board]}
+              </p>
+            </div>
+          )}
 
           {/* When workstations are enabled, show the active workstation page */}
           {workstationsEnabled ? (
@@ -788,7 +804,7 @@ function StatusBar({ tsuki }: { tsuki: string }) {
         <span>{tsuki}</span>
         <span>{backend}</span>
         <span>board: {board}</span>
-        {activeTab && <span>go</span>}
+        {activeTab && <span>{activeTab.ext || 'go'}</span>}
         <span>{cursor}</span>
       </div>
     </div>

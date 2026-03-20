@@ -5,7 +5,7 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/bmp280/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/bmp280/v1.0.0/godotinolib.toml"
       }
     },
     "dht": {
@@ -13,7 +13,7 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/dht/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/dht/v1.0.0/godotinolib.toml"
       }
     },
     "irremote": {
@@ -21,7 +21,7 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/irremote/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/irremote/v1.0.0/godotinolib.toml"
       }
     },
     "mpu6050": {
@@ -29,7 +29,7 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/mpu6050/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/mpu6050/v1.0.0/godotinolib.toml"
       }
     },
     "stepper": {
@@ -37,7 +37,7 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/stepper/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/stepper/v1.0.0/godotinolib.toml"
       }
     },
     "u8g2": {
@@ -45,7 +45,7 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/u8g2/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/u8g2/v1.0.0/godotinolib.toml"
       }
     },
     "ws2812": {
@@ -53,8 +53,9 @@
       "author": "tsuki-team",
       "latest": "1.0.0",
       "versions": {
-        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/ws2812/v1.0.0/godotinolib.toml"
+        "1.0.0": "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/v6.0-WEBPAGE-AND-FIXES/pkg/ws2812/v1.0.0/godotinolib.toml"
       }
     }
-  }
+  },
+  "branch": "v6.0-WEBPAGE-AND-FIXES"
 }

@@ -370,6 +370,22 @@ impl Runtime {
             .fun("SerialRead",        FnMap::Direct("Serial.read()".into()))
             .fun("SerialReadString",  FnMap::Direct("Serial.readString()".into()))
             .fun("SerialFlush",       FnMap::Direct("Serial.flush()".into()))
+            // ── Python OOP-style: arduino.Serial.xxx() ─────────────────────────
+            // Python source uses `arduino.Serial.begin(9600)`.
+            // emit_call splits at the FIRST dot → mod_name="arduino", fn_name="Serial.begin"
+            // so we register these compound names in the arduino PkgMap.
+            .fun("Serial.begin",      FnMap::Template("Serial.begin({0})".into()))
+            .fun("Serial.end",        FnMap::Direct(  "Serial.end()".into()))
+            .fun("Serial.print",      FnMap::Template("Serial.print({0})".into()))
+            .fun("Serial.println",    FnMap::Template("Serial.println({0})".into()))
+            .fun("Serial.write",      FnMap::Template("Serial.write({0})".into()))
+            .fun("Serial.available",  FnMap::Direct(  "Serial.available()".into()))
+            .fun("Serial.read",       FnMap::Direct(  "Serial.read()".into()))
+            .fun("Serial.readString", FnMap::Direct(  "Serial.readString()".into()))
+            .fun("Serial.flush",      FnMap::Direct(  "Serial.flush()".into()))
+            .fun("Serial.parseInt",   FnMap::Direct(  "Serial.parseInt()".into()))
+            .fun("Serial.parseFloat", FnMap::Direct(  "Serial.parseFloat()".into()))
+            .fun("Serial.peek",       FnMap::Direct(  "Serial.peek()".into()))
             // ── Constants ─────────────────────────────────────────────────────
             .cst("HIGH",         "HIGH")
             .cst("LOW",          "LOW")

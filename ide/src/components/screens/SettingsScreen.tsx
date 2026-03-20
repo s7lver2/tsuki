@@ -5,6 +5,7 @@ import ProfilesPanel from '@/components/other/ProfilesPanel'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
 import { ICON_PACKS } from '@/lib/iconPacks'
 import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/shared/primitives'
+import WebkitPanel from '@/components/experiments/WebKitPanel/WebKitPanel'
 import {
   ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
@@ -64,6 +65,186 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
     <div className="mb-7">
       <h2 className="text-lg font-semibold tracking-tight mb-1">{title}</h2>
       <p className="text-sm text-[var(--fg-muted)]">{desc}</p>
+    </div>
+  )
+}
+
+// ── RegistrySourcesEditor ─────────────────────────────────────────────────────
+// Manages an ordered list of package registry URLs — mirrors the CLI's
+// `tsuki config registry` subcommands (add / remove / up / down / clear).
+//
+// Priority model: first entry = highest priority (wins on name collision).
+// The built-in default is always shown at the bottom as a non-removable
+// fallback, exactly like the CLI.
+//
+// Data lives in settings.registryUrls (string[]). The legacy settings.registryUrl
+// field is still preserved for backward compat but not shown in this UI.
+
+const BUILTIN_REGISTRY = 'https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg/packages.json'
+
+function RegistrySourcesEditor() {
+  const { settings, updateSetting } = useStore()
+  const [newUrl, setNewUrl] = React.useState('')
+  const [clearConfirm, setClearConfirm] = React.useState(false)
+
+  const urls: string[] = settings.registryUrls ?? []
+
+  // ── mutations ────────────────────────────────────────────────────────────
+
+  function add() {
+    const url = newUrl.trim()
+    if (!url || urls.includes(url)) return
+    updateSetting('registryUrls' as any, [url, ...urls])  // prepend = highest priority
+    setNewUrl('')
+  }
+
+  function remove(i: number) {
+    updateSetting('registryUrls' as any, urls.filter((_, idx) => idx !== i))
+  }
+
+  function move(i: number, dir: -1 | 1) {
+    const j = i + dir
+    if (j < 0 || j >= urls.length) return
+    const next = [...urls]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    updateSetting('registryUrls' as any, next)
+  }
+
+  function clearAll() {
+    updateSetting('registryUrls' as any, [])
+    setClearConfirm(false)
+  }
+
+  // ── render ───────────────────────────────────────────────────────────────
+
+  // The effective list shown: user entries + built-in fallback
+  const builtinIsCustom = urls.includes(BUILTIN_REGISTRY)
+  const showBuiltinFallback = !builtinIsCustom
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[10px] text-[var(--fg-faint)] leading-relaxed">
+        Registries are consulted in priority order — the first one wins when two registries declare the same package name. Mirrors{' '}
+        <code className="font-mono bg-[var(--surface-3)] px-1 py-0.5 rounded">tsuki config registry</code>.
+      </p>
+
+      {/* ── Add new registry ── */}
+      <div className="flex items-center gap-2">
+        <input
+          value={newUrl}
+          onChange={e => setNewUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') add() }}
+          placeholder="https://my-registry.example.com/packages.json"
+          className="flex-1 font-mono text-xs bg-[var(--surface)] border border-[var(--border)] rounded px-2.5 py-1.5 outline-none text-[var(--fg)] placeholder-[var(--fg-faint)] focus:border-[var(--fg-faint)]"
+        />
+        <button
+          onClick={add}
+          disabled={!newUrl.trim() || urls.includes(newUrl.trim())}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium bg-[var(--surface-3)] hover:bg-[var(--hover)] text-[var(--fg)] disabled:opacity-40 border border-[var(--border)] cursor-pointer transition-colors disabled:cursor-default"
+          title="Add as highest priority (prepend)"
+        >
+          <Plus size={11} /> Add
+        </button>
+      </div>
+
+      {/* ── Priority list ── */}
+      <div className="flex flex-col gap-1">
+        {urls.length === 0 && (
+          <p className="text-[10px] text-[var(--fg-faint)] italic py-1">
+            No custom registries — built-in default is used.
+          </p>
+        )}
+
+        {urls.map((url, i) => (
+          <div
+            key={url}
+            className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] group"
+          >
+            {/* Priority badge */}
+            <span className={clsx(
+              'text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold shrink-0 tabular-nums',
+              i === 0
+                ? 'bg-sky-500/15 text-sky-400'
+                : 'bg-[var(--surface-3)] text-[var(--fg-faint)]',
+            )}>
+              {i === 0 ? '↑1' : `#${i + 1}`}
+            </span>
+
+            {/* URL */}
+            <span className="flex-1 font-mono text-xs text-[var(--fg)] truncate min-w-0" title={url}>{url}</span>
+
+            {/* Actions (revealed on hover) */}
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <button
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                title="Raise priority"
+                className="w-6 h-6 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-25 border-0 bg-transparent cursor-pointer transition-colors disabled:cursor-default"
+              >
+                <ChevronRight size={10} className="-rotate-90" />
+              </button>
+              <button
+                onClick={() => move(i, 1)}
+                disabled={i === urls.length - 1}
+                title="Lower priority"
+                className="w-6 h-6 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-25 border-0 bg-transparent cursor-pointer transition-colors disabled:cursor-default"
+              >
+                <ChevronRight size={10} className="rotate-90" />
+              </button>
+              <button
+                onClick={() => remove(i)}
+                title="Remove registry"
+                className="w-6 h-6 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {/* Built-in fallback (always last, non-removable) */}
+        {showBuiltinFallback && (
+          <div className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-1)] opacity-60">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-mono font-semibold shrink-0">
+              default
+            </span>
+            <span className="flex-1 font-mono text-xs text-[var(--fg-faint)] truncate min-w-0" title={BUILTIN_REGISTRY}>
+              {BUILTIN_REGISTRY}
+            </span>
+            <span className="text-[10px] text-[var(--fg-faint)] italic shrink-0">built-in</span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Clear all ── */}
+      {urls.length > 0 && (
+        <div className="flex items-center gap-2 pt-1">
+          {clearConfirm ? (
+            <>
+              <span className="text-[10px] text-[var(--fg-muted)]">Remove all custom registries?</span>
+              <button
+                onClick={clearAll}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors"
+              >
+                <Trash2 size={10} /> Yes, clear
+              </button>
+              <button
+                onClick={() => setClearConfirm(false)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-0 bg-transparent cursor-pointer transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setClearConfirm(true)}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--fg-faint)] hover:text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors"
+            >
+              <Trash2 size={10} /> Clear all custom registries
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -208,22 +389,27 @@ export default function SettingsScreen() {
         </div>
 
         {/* ── Content ── */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="w-full" style={{ maxWidth: "min(760px, 100%)", padding: "clamp(12px,4vw,40px) var(--settings-content-px)" }}>
-            {settingsTab === 'appearance'   && <AppearanceTab />}
-            {settingsTab === 'cli'          && <CliTab />}
-            {settingsTab === 'defaults'     && <DefaultsTab />}
-            {settingsTab === 'editor'       && <EditorTab />}
-            {settingsTab === 'language'     && <LanguageTab />}
-            {settingsTab === 'profile'      && <ProfilesPanel />}
-            {settingsTab === 'experiments'  && <ExperimentsTab />}
-            {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
-            {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
-            {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
-            {settingsTab === 'exp-webkit'   && expEnabled && <WebkitExpTab />}
-            {settingsTab === 'updates'      && <UpdatesTab />}
-            {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
-          </div>
+        <div className={clsx('flex-1', settingsTab === 'exp-webkit' && expEnabled ? 'overflow-hidden flex flex-col' : 'overflow-y-auto')}>
+          {/* webkit tab gets the full area — no padding wrapper */}
+          {settingsTab === 'exp-webkit' && expEnabled ? (
+            <WebkitExpTab />
+          ) : (
+            <div className="w-full" style={{ maxWidth: "min(760px, 100%)", padding: "clamp(12px,4vw,40px) var(--settings-content-px)" }}>
+              {settingsTab === 'appearance'   && <AppearanceTab />}
+              {settingsTab === 'cli'          && <CliTab />}
+              {settingsTab === 'defaults'     && <DefaultsTab />}
+              {settingsTab === 'editor'       && <EditorTab />}
+              {settingsTab === 'language'     && <LanguageTab />}
+              {settingsTab === 'profile'      && <ProfilesPanel />}
+              {settingsTab === 'experiments'  && <ExperimentsTab />}
+              {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
+              {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
+              {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
+              {settingsTab === 'exp-workstations' && expEnabled && settings.expWorkstationsEnabled && <WorkstationsTab />}
+              {settingsTab === 'updates'      && <UpdatesTab />}
+              {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -307,7 +493,7 @@ const EXPERIMENTS: ExpDef[] = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ExperimentsTab() {
-  const { settings, updateSetting, setSettingsTab } = useStore()
+  const { settings, updateSetting, setSettingsTab, addLog } = useStore()
   const enabled = settings.experimentsEnabled
 
   if (!enabled) {
@@ -343,7 +529,11 @@ function ExperimentsTab() {
           ))}
         </div>
 
-        <Btn variant="outline" size="sm" onClick={() => updateSetting('experimentsEnabled', true)} className="mt-2 gap-2">
+        <Btn variant="outline" size="sm" onClick={() => {
+          addLog('info', '[experiments] Experiments enabled for the first time — welcome to the lab!')
+          addLog('info', `[experiments] ${EXPERIMENTS.length} experiments available: ${EXPERIMENTS.map(e => `${e.name} (${e.tag})`).join(', ')}`)
+          updateSetting('experimentsEnabled', true)
+        }} className="mt-2 gap-2">
           <FlaskConical size={13} /> Enable Experiments
         </Btn>
         <p className="text-[10px] text-[var(--fg-faint)] max-w-xs leading-relaxed">
@@ -376,9 +566,18 @@ function ExperimentsTab() {
       <GroupHeader title="Master switch" />
       <SettingsField name="Experiments enabled" desc="Turn off to disable all experimental tabs and features globally.">
         <Toggle on={settings.experimentsEnabled} onToggle={() => {
-          // disabling the master also disables all individual experiments
           if (settings.experimentsEnabled) {
+            // Disabling master — log which experiments were active before wiping them
+            const active = EXPERIMENTS.filter(e => settings[e.settingKey])
+            if (active.length > 0) {
+              addLog('warn', `[experiments] Master switch OFF — deactivating ${active.length} experiment(s): ${active.map(e => e.name).join(', ')}`)
+            } else {
+              addLog('info', '[experiments] Master switch OFF — no experiments were active')
+            }
             EXPERIMENTS.forEach(e => updateSetting(e.settingKey, false))
+          } else {
+            addLog('info', '[experiments] Master switch ON — experiments unlocked, none active yet')
+            addLog('info', '[experiments] Tip: toggle individual experiments below to activate them')
           }
           updateSetting('experimentsEnabled', !settings.experimentsEnabled)
         }} />
@@ -425,6 +624,22 @@ function ExperimentCard({
   exp: ExpDef; active: boolean; onToggle: () => void; onOpen: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const { addLog } = useStore()
+
+  const handleToggle = () => {
+    // Log before calling onToggle so the message reflects the *new* intended state
+    const nextState = !active
+    addLog('info', `[experiments] User ${nextState ? 'enabled' : 'disabled'} "${exp.name}" from the experiments panel`)
+    if (nextState) {
+      addLog('info', `[experiments]   tag: ${exp.tag} · resources: ${exp.resources}`)
+    }
+    onToggle()
+  }
+
+  const handleOpenSettings = () => {
+    addLog('info', `[experiments] Opened settings tab for "${exp.name}"`)
+    onOpen()
+  }
 
   return (
     <div className={clsx(
@@ -446,11 +661,11 @@ function ExperimentCard({
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {active && (
-            <Btn variant="ghost" size="xs" onClick={onOpen}>
+            <Btn variant="ghost" size="xs" onClick={handleOpenSettings}>
               Settings <ChevronRight size={11} />
             </Btn>
           )}
-          <Toggle on={active} onToggle={onToggle} />
+          <Toggle on={active} onToggle={handleToggle} />
         </div>
       </div>
 
@@ -1424,12 +1639,12 @@ function DefaultsTab() {
         )}
       </div>
 
-      <SettingsField name="registry_url" desc="Package registry endpoint">
-        <Input value={settings.registryUrl} onChange={e => updateSetting('registryUrl', e.target.value)} />
-      </SettingsField>
       <SettingsField name="verify_signatures" desc="Verify Ed25519 signatures when installing packages">
         <Toggle on={settings.verifySignatures} onToggle={() => updateSetting('verifySignatures', !settings.verifySignatures)} />
       </SettingsField>
+
+      <GroupHeader title="Package registries" />
+      <RegistrySourcesEditor />
 
       <GroupHeader title="Behaviour" />
       <SettingsField name="verbose" desc="Show detailed CLI output by default">
@@ -1983,7 +2198,9 @@ function UpdatesTab() {
   useEffect(() => {
     let unlisten: (() => void) | null = null
     import('@tauri-apps/api/event').then(({ listen }) => {
-      listen<{ stage: string; pct?: number; downloaded?: number; total?: number }>(
+      type ProgressPayload = { stage: string; pct?: number; downloaded?: number; total?: number }
+      const typedListen = listen as (event: string, cb: (e: { payload: ProgressPayload }) => void) => Promise<() => void>
+      typedListen(
         'update_progress',
         ({ payload }) => {
           setProgress({
@@ -2276,7 +2493,245 @@ function UpdatesTab() {
           </div>
         ))}
       </div>
+
+      {/* ── Version history / downgrade ── */}
+      <VersionHistoryPanel
+        channel={channel}
+        currentVersion={currentVersion}
+        installing={installing}
+        onInstall={installUpdate}
+        setManifest={setManifest}
+        setProgress={setProgress}
+        setInstallErr={setInstallErr}
+      />
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VersionHistoryPanel — browse + downgrade to older releases
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface GHRelease {
+  tag_name: string
+  name: string
+  published_at: string
+  body: string
+  assets: { name: string; browser_download_url: string; size: number }[]
+  prerelease: boolean
+}
+
+function VersionHistoryPanel({
+  channel,
+  currentVersion,
+  installing,
+  onInstall,
+  setManifest,
+  setProgress,
+  setInstallErr,
+}: {
+  channel: 'stable' | 'testing'
+  currentVersion: string | null
+  installing: boolean
+  onInstall: () => void
+  setManifest: (m: UpdateInfo | null) => void
+  setProgress: (p: any) => void
+  setInstallErr: (e: string | null) => void
+}) {
+  const [releases,  setReleases ] = useState<GHRelease[] | null>(null)
+  const [loading,   setLoading  ] = useState(false)
+  const [loadErr,   setLoadErr  ] = useState<string | null>(null)
+  const [expanded,  setExpanded ] = useState(false)
+  const [installing2, setInstalling2] = useState<string | null>(null)
+
+  // Derive platform key from navigator
+  function getPlatformKey(): string | null {
+    const ua = navigator.userAgent.toLowerCase()
+    if (ua.includes('win')) return 'windows-amd64'
+    if (ua.includes('mac')) return 'darwin-arm64'   // sensible default; user can pick
+    return 'linux-amd64'
+  }
+
+  async function fetchReleases() {
+    setLoading(true)
+    setLoadErr(null)
+    try {
+      const owner = 's7lver2'
+      const repo  = 'tsuki'
+      const resp  = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`,
+        { headers: { Accept: 'application/vnd.github+json' } },
+      )
+      if (!resp.ok) throw new Error(`GitHub API ${resp.status}`)
+      const data: GHRelease[] = await resp.json()
+      // Filter by channel
+      const filtered = channel === 'testing'
+        ? data
+        : data.filter(r => !r.prerelease && !r.tag_name.includes('-testing'))
+      setReleases(filtered)
+      setExpanded(true)
+    } catch (e: unknown) {
+      setLoadErr(e instanceof Error ? e.message : String(e))
+    }
+    setLoading(false)
+  }
+
+  async function installRelease(rel: GHRelease) {
+    const pk = getPlatformKey()
+    // Find asset for current platform
+    const asset = rel.assets.find(a =>
+      pk ? a.name.toLowerCase().includes(pk.replace('-', '_')) || a.name.toLowerCase().includes(pk) : false
+    ) ?? rel.assets.find(a => a.name.endsWith('.exe') || a.name.endsWith('.tar.gz'))
+
+    if (!asset) {
+      setInstallErr(`No asset found for ${pk ?? 'your platform'} in ${rel.tag_name}`)
+      return
+    }
+
+    // Build a minimal UpdateInfo-compatible object
+    const syntheticManifest: UpdateInfo = {
+      version:   rel.tag_name.replace(/^v/, ''),
+      channel,
+      pub_date:  rel.published_at,
+      notes:     rel.body?.slice(0, 400) ?? '',
+      platforms: {
+        [pk ?? 'unknown']: {
+          url:       asset.browser_download_url,
+          signature: '',   // no sig verification for manual downgrades
+          size:      asset.size,
+        },
+      },
+    }
+
+    setInstalling2(rel.tag_name)
+    setManifest(syntheticManifest)
+    setProgress({ stage: 'downloading', pct: 0, downloaded: 0, total: 0 })
+    try {
+      const { applyUpdate } = await import('@/lib/tauri')
+      await applyUpdate(syntheticManifest)
+    } catch (e: unknown) {
+      setInstallErr(e instanceof Error ? e.message : String(e))
+      setProgress(null)
+    }
+    setInstalling2(null)
+  }
+
+  return (
+    <>
+      <GroupHeader title="Version history" />
+      <div className="mt-3 mb-6 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] overflow-hidden">
+        {/* Header */}
+        <div className="px-4 py-3 flex items-center gap-3 border-b border-[var(--border)]">
+          <div className="flex-1">
+            <div className="text-sm font-medium">Older releases</div>
+            <div className="text-xs text-[var(--fg-muted)] mt-0.5">
+              Browse and install a previous version. Useful if the latest release introduced a regression.
+            </div>
+          </div>
+          <Btn
+            variant="outline"
+            size="sm"
+            onClick={expanded && releases ? () => setExpanded(false) : fetchReleases}
+            disabled={loading || installing}
+            className="gap-1.5 flex-shrink-0"
+          >
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            {loading ? 'Loading…' : expanded && releases ? 'Hide' : 'Show releases'}
+          </Btn>
+        </div>
+
+        {loadErr && (
+          <div className="px-4 py-3 flex items-start gap-2 text-xs text-[var(--err)]">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>{loadErr}</span>
+          </div>
+        )}
+
+        {expanded && releases && (
+          <div className="divide-y divide-[var(--border-subtle)] max-h-[360px] overflow-y-auto">
+            {releases.length === 0 && (
+              <div className="px-4 py-6 text-center text-xs text-[var(--fg-faint)]">
+                No releases found for the <span className="font-mono">{channel}</span> channel.
+              </div>
+            )}
+            {releases.map(rel => {
+              const ver = rel.tag_name.replace(/^v/, '')
+              const isCurrent = currentVersion ? compareSemver(ver, currentVersion) === 0 : false
+              const isNewer   = currentVersion ? compareSemver(ver, currentVersion) > 0  : false
+              const isInst    = installing2 === rel.tag_name
+
+              return (
+                <div key={rel.tag_name} className={clsx(
+                  'px-4 py-3 flex items-start gap-3 transition-colors',
+                  isCurrent ? 'bg-green-400/5' : 'hover:bg-[var(--hover)]',
+                )}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                      <span className="text-sm font-semibold font-mono">{rel.tag_name}</span>
+                      {isCurrent && (
+                        <span className="text-[9px] font-mono text-green-400 bg-green-400/10 px-1.5 rounded">installed</span>
+                      )}
+                      {rel.prerelease && (
+                        <span className="text-[9px] font-mono text-yellow-400 bg-yellow-400/10 px-1.5 rounded">pre-release</span>
+                      )}
+                      <span className="text-[10px] text-[var(--fg-faint)]">
+                        {new Date(rel.published_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    {rel.body && (
+                      <p className="text-[10px] text-[var(--fg-faint)] leading-relaxed line-clamp-2 max-w-sm">
+                        {rel.body.replace(/#+\s*/g, '').slice(0, 120)}{rel.body.length > 120 ? '…' : ''}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {rel.assets.slice(0, 4).map(a => (
+                        <span key={a.name} className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1.5 py-0.5 rounded">
+                          {a.name.split('-').slice(-1)[0]}  {/* platform suffix */}
+                        </span>
+                      ))}
+                      {rel.assets.length > 4 && (
+                        <span className="text-[9px] text-[var(--fg-faint)]">+{rel.assets.length - 4} more</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {!isCurrent && (
+                    <Btn
+                      variant={isNewer ? 'outline' : 'ghost'}
+                      size="xs"
+                      disabled={installing || isInst}
+                      onClick={() => installRelease(rel)}
+                      className="flex-shrink-0 gap-1"
+                    >
+                      {isInst
+                        ? <><RefreshCw size={10} className="animate-spin" /> Installing…</>
+                        : isNewer
+                          ? <><Download size={10} /> Update</>
+                          : <><RotateCcw size={10} /> Downgrade</>
+                      }
+                    </Btn>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {!expanded && !loading && !loadErr && (
+          <div className="px-4 py-4 text-center text-xs text-[var(--fg-faint)]">
+            Click "Show releases" to fetch the version list from GitHub.
+          </div>
+        )}
+      </div>
+
+      {/* Downgrade warning */}
+      <div className="mb-6 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
+        <AlertTriangle size={12} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          <strong className="text-[var(--fg)]">Downgrading</strong> replaces the IDE binary but does not roll back project files or config. Back up your work before downgrading. Signature verification is skipped for manual installs.
+        </p>
+      </div>
+    </>
   )
 }
 
@@ -2859,130 +3314,275 @@ function DeveloperTab() {
     </div>
   )
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Workstations experiment tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function WorkstationsTab() {
+  const { settings, updateSetting } = useStore()
+
+  const PAGE_ITEMS = [
+    { id: 'code',    icon: <Code2 size={14} />,       label: 'Code',       desc: 'Editor + sidebar + terminal. The classic coding view.' },
+    { id: 'sandbox', icon: <Cpu  size={14} />,        label: 'Sandbox',    desc: 'Full-screen circuit simulator. Uses the existing Sandbox experiment.' },
+    { id: 'export',  icon: <Download size={14} />,    label: 'Export',     desc: 'Build, flash, and package. One place for release actions.' },
+  ]
+
+  const enabledPages: string[] = (settings as any).workstationPages ?? ['code', 'sandbox', 'export']
+
+  function togglePage(id: string) {
+    // Always keep at least one page enabled
+    const next = enabledPages.includes(id)
+      ? enabledPages.filter(p => p !== id)
+      : [...enabledPages, id]
+    if (next.length === 0) return
+    updateSetting('workstationPages' as any, next)
+  }
+
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-7">
+        <div className="w-10 h-10 rounded-lg border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+          <Layers size={18} className="text-[var(--fg-muted)]" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold tracking-tight">Workstations</h2>
+            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">active</span>
+            <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">α</span>
+          </div>
+          <p className="text-sm text-[var(--fg-muted)]">
+            DaVinci Resolve-style page bar at the bottom of the IDE. Switch between dedicated full-screen workspaces — each tailored to a specific task.
+          </p>
+        </div>
+      </div>
+
+      {/* Visual mockup of the page bar */}
+      <div className="mb-7 rounded-xl border border-[var(--border)] bg-[#0d0d0d] overflow-hidden">
+        {/* fake editor area */}
+        <div className="h-28 flex items-center justify-center">
+          <span className="text-[11px] text-[var(--fg-faint)] font-mono opacity-50">— workstation content —</span>
+        </div>
+        {/* page bar */}
+        <div className="h-10 border-t border-[var(--border)] bg-[var(--surface-1)] flex items-center justify-center gap-1 px-4">
+          {PAGE_ITEMS.map(p => {
+            const on = enabledPages.includes(p.id)
+            return (
+              <div
+                key={p.id}
+                className={clsx(
+                  'flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium transition-colors',
+                  on
+                    ? 'bg-[var(--active)] text-[var(--fg)] border border-[var(--fg-faint)]/20'
+                    : 'text-[var(--fg-faint)] opacity-30',
+                )}
+              >
+                {p.icon}
+                {p.label}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <GroupHeader title="Page bar" />
+      <SettingsField
+        name="Position"
+        desc="Where the workstation switcher bar appears."
+      >
+        <Select
+          value={(settings as any).workstationBarPosition ?? 'bottom'}
+          onChange={e => updateSetting('workstationBarPosition' as any, e.target.value)}
+        >
+          <option value="bottom">Bottom</option>
+          <option value="top">Top (below toolbar)</option>
+        </Select>
+      </SettingsField>
+
+      <SettingsField
+        name="Show labels"
+        desc="Show text labels next to workstation icons. Disable for a compact icon-only bar."
+      >
+        <Toggle
+          on={(settings as any).workstationShowLabels ?? true}
+          onToggle={() => updateSetting('workstationShowLabels' as any, !((settings as any).workstationShowLabels ?? true))}
+        />
+      </SettingsField>
+
+      <GroupHeader title="Active workstations" />
+      <p className="text-xs text-[var(--fg-muted)] mb-4 leading-relaxed">
+        Choose which pages appear in the bar. At least one must remain enabled.
+      </p>
+      <div className="flex flex-col gap-2 mb-6">
+        {PAGE_ITEMS.map(p => {
+          const on = enabledPages.includes(p.id)
+          return (
+            <div
+              key={p.id}
+              className={clsx(
+                'flex items-center gap-3 px-4 py-3 rounded-lg border transition-colors',
+                on ? 'border-[var(--fg-faint)] bg-[var(--surface-1)]' : 'border-[var(--border)] bg-[var(--surface-1)] opacity-50',
+              )}
+            >
+              <div className={clsx('flex-shrink-0 transition-colors', on ? 'text-[var(--fg-muted)]' : 'text-[var(--fg-faint)]')}>
+                {p.icon}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium mb-0.5">{p.label}</div>
+                <p className="text-xs text-[var(--fg-muted)] leading-relaxed">{p.desc}</p>
+              </div>
+              <Toggle
+                on={on}
+                onToggle={() => togglePage(p.id)}
+              />
+            </div>
+          )
+        })}
+      </div>
+
+      <GroupHeader title="Behaviour" />
+      <SettingsField
+        name="Remember last workstation"
+        desc="Re-open the last active workstation when the IDE starts."
+      >
+        <Toggle
+          on={(settings as any).workstationRememberLast ?? true}
+          onToggle={() => updateSetting('workstationRememberLast' as any, !((settings as any).workstationRememberLast ?? true))}
+        />
+      </SettingsField>
+
+      <SettingsField
+        name="Animate transitions"
+        desc="Slide animation when switching between workstations."
+      >
+        <Toggle
+          on={(settings as any).workstationAnimations ?? true}
+          onToggle={() => updateSetting('workstationAnimations' as any, !((settings as any).workstationAnimations ?? true))}
+        />
+      </SettingsField>
+
+      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
+        <span className="text-yellow-400 text-xs mt-0.5">⚠</span>
+        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
+          Alpha feature. The Sandbox workstation requires the Sandbox experiment to also be enabled. Export workstation is a placeholder — full functionality coming soon.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  tsuki-webkit experiment settings tab
 // ─────────────────────────────────────────────────────────────────────────────
 
+
 function WebkitExpTab() {
-  const { settings, updateSetting } = useStore()
-  const [detecting, setDetecting] = React.useState(false)
-  const [detected,  setDetected]  = React.useState<string | null>(null)
-
-  async function autoDetect() {
-    setDetecting(true); setDetected(null)
-    try {
-      const { detectTool } = await import('@/lib/tauri')
-      const p = await detectTool('tsuki-webkit')
-      updateSetting('tsukiWebkitPath' as any, p)
-      setDetected(p)
-    } catch {
-      setDetected('not found')
-    } finally {
-      setDetecting(false)
-    }
-  }
-
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <Globe size={16} className="text-emerald-400" />
-        <h2 className="text-sm font-semibold">tsuki-webkit</h2>
-        <Badge variant="default">experimental</Badge>
-      </div>
+    <div className="flex flex-col items-center justify-center gap-8 px-6 py-10 min-h-full select-none text-center">
 
-      <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
-        A lightweight JSX → HTML/CSS/JS compiler that targets ESP8266 and ESP32 boards.
-        Write React-style components; tsuki-webkit bundles them into a self-contained
-        HTML page served directly from your board over WiFi.
-      </p>
-
-      {/* Binary + detection */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
-        <GroupHeader title="Binary" />
-
-        <SettingsField
-          name="tsuki-webkit path"
-          desc="Path to the tsuki-webkit binary. Leave blank to auto-detect from PATH."
-        >
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
-            <input
-              value={(settings as any).tsukiWebkitPath ?? ''}
-              onChange={e => updateSetting('tsukiWebkitPath' as any, e.target.value)}
-              placeholder="auto (tsuki-webkit)"
-              className="flex-1 font-mono text-xs bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 outline-none text-[var(--fg)] placeholder-[var(--fg-faint)] min-w-0"
-            />
-            <Btn variant="ghost" size="xs" onClick={autoDetect} disabled={detecting}>
-              {detecting ? '…' : 'Detect'}
-            </Btn>
-          </div>
-        </SettingsField>
-
-        {detected && (
-          <p className={clsx('text-xs font-mono', detected === 'not found' ? 'text-red-400' : 'text-green-400')}>
-            {detected === 'not found' ? '✗ not found in PATH' : `✓ ${detected}`}
-          </p>
-        )}
-
-        <p className="text-xs text-[var(--fg-faint)] leading-relaxed">
-          Build the binary from source:{' '}
-          <code className="bg-[var(--surface-3)] px-1.5 py-0.5 rounded text-[10px]">
-            cd libs/tsuki-webkit && cargo build --release
-          </code>
-        </p>
-      </div>
-
-      {/* Preview settings */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-4">
-        <GroupHeader title="Preview" />
-
-        <SettingsField
-          name="Webkit panel"
-          desc="Show the webkit preview panel in the editor when app.jsx is open."
-        >
-          <Toggle
-            on={settings.expWebkitEnabled}
-            onToggle={() => updateSetting('expWebkitEnabled', !settings.expWebkitEnabled)}
-          />
-        </SettingsField>
-
-        <SettingsField
-          name="LSP recommendations"
-          desc="Suggest switching to tsuki-webkit when ESP web-server libraries are detected."
-        >
-          <Toggle
-            on={settings.lspShowLibPrompt}
-            onToggle={() => updateSetting('lspShowLibPrompt', !settings.lspShowLibPrompt)}
-          />
-        </SettingsField>
-      </div>
-
-      {/* How to use */}
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 flex flex-col gap-3">
-        <GroupHeader title="Quick reference" />
-        <div className="flex flex-col gap-2 text-xs font-mono">
-          {[
-            ['# Scaffold a webkit project', null],
-            ['tsuki webkit init', 'text-amber-400'],
-            ['# Build for ESP8266', null],
-            ['tsuki webkit build --board esp8266', 'text-amber-400'],
-            ['# Open preview in browser', null],
-            ['tsuki webkit preview', 'text-amber-400'],
-          ].map(([text, color], i) => (
-            <div key={i} className={clsx('leading-tight', color ?? 'text-[var(--fg-faint)]')}>
-              {text}
-            </div>
-          ))}
+      {/* Icon */}
+      <div className="relative">
+        <div className="w-20 h-20 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 flex items-center justify-center">
+          <Globe size={36} className="text-emerald-400" />
+        </div>
+        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[var(--surface-3)] border border-[var(--border)] flex items-center justify-center">
+          <span className="text-[9px] font-mono text-emerald-400">α</span>
         </div>
       </div>
 
-      {/* Built-in classes */}
-      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-        <p className="text-xs text-emerald-300 leading-relaxed">
-          <strong>Built-in CSS classes: </strong>
-          {['wk-card','wk-btn','wk-input','wk-label','wk-badge','wk-row','wk-col','wk-serial','wk-value','wk-grid'].map((c, i) => (
-            <span key={c}>{i > 0 && ' · '}<code className="text-emerald-400">{c}</code></span>
-          ))}
+      <div className="max-w-sm">
+        <h2 className="text-lg font-bold mb-2 tracking-tight">tsuki-webkit</h2>
+        <p className="text-sm text-[var(--fg-muted)] leading-relaxed">
+          Escribe tu panel de control web para ESP8266 / ESP32 en{" "}
+          <span className="text-emerald-400 font-mono">JSX</span> — tsuki-webkit
+          lo compila en una página HTML servida directamente desde tu placa vía WiFi.
         </p>
+      </div>
+
+      <div className="flex flex-col gap-2 w-full max-w-sm">
+        {[
+          { icon: <Code2 size={13} />, label: "JSX → HTML/CSS/JS",   desc: "Compilado en el IDE, sin Node.js" },
+          { icon: <Zap   size={13} />, label: "Servidor web embebido", desc: "Para ESP8266 y ESP32" },
+          { icon: <Cpu   size={13} />, label: "Simulación de API",     desc: "Sin necesidad de hardware físico" },
+          { icon: <Globe size={13} />, label: "Consola Serial",        desc: "Salida Serial en tiempo real" },
+        ].map(f => (
+          <div key={f.label} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] text-left">
+            <span className="text-emerald-400 flex-shrink-0">{f.icon}</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold text-[var(--fg)]">{f.label}</div>
+              <div className="text-[10px] text-[var(--fg-faint)]">{f.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <WebkitMiniDemo />
+
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-emerald-500/30 bg-emerald-500/5">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-xs text-emerald-300 font-medium">Próximamente — en desarrollo activo</span>
+        </div>
+        <p className="text-[10px] text-[var(--fg-faint)] max-w-xs leading-relaxed">
+          tsuki-webkit llegará en una próxima actualización. Sin configuración extra — todo compila en el IDE.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ── Minimal inline animated code demo ────────────────────────────────────────
+
+function WebkitMiniDemo() {
+  const [step, setStep] = React.useState(0)
+  const [cycle, setCycle] = React.useState(0)
+
+  const STEPS = [
+    { code: "import { Api } from 'tsuki-webkit'",   color: '#7dd3fc',  label: 'import',   labelColor: '#60a5fa' },
+    { code: 'export default function App() {',       color: '#c4b5fd',  label: 'define',   labelColor: '#a78bfa' },
+    { code: '  <button onClick={Api.toggle}>',       color: '#86efac',  label: 'JSX',      labelColor: '#4ade80' },
+    { code: '    Toggle LED',                        color: '#e2e8f0',  label: '',         labelColor: '' },
+    { code: '  </button>',                           color: '#86efac',  label: 'compile ✓',labelColor: '#4ade80' },
+  ]
+
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      if (step < STEPS.length - 1) {
+        setStep(s => s + 1)
+      } else {
+        setTimeout(() => { setStep(0); setCycle(c => c + 1) }, 1800)
+      }
+    }, step === 0 ? 400 : 600)
+    return () => clearTimeout(t)
+  }, [step, cycle])  // eslint-disable-line
+
+  return (
+    <div className="w-full max-w-xs rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+      {/* Fake titlebar */}
+      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--border)] bg-[var(--surface-1)]">
+        <span className="w-2.5 h-2.5 rounded-full bg-red-500/60" />
+        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/60" />
+        <span className="w-2.5 h-2.5 rounded-full bg-green-500/60" />
+        <span className="ml-2 text-[10px] font-mono text-[var(--fg-faint)]">app.jsx</span>
+      </div>
+      {/* Code lines */}
+      <div className="px-3 py-2 font-mono text-[11px] flex flex-col gap-1" style={{ minHeight: 110 }}>
+        {STEPS.slice(0, step + 1).map((s, i) => (
+          <div key={i} className="flex items-center gap-2 transition-opacity" style={{ color: s.color, opacity: i === step ? 1 : 0.45 }}>
+            <span className="flex-1">{s.code}</span>
+            {i === step && s.label && (
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ color: s.labelColor, background: `${s.labelColor}18`, border: `1px solid ${s.labelColor}30` }}>
+                {s.label}
+              </span>
+            )}
+          </div>
+        ))}
+        {step === STEPS.length - 1 && (
+          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            192.168.x.x / ESP8266 · ready
+          </div>
+        )}
       </div>
     </div>
   )

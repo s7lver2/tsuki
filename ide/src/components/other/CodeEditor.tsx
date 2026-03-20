@@ -13,7 +13,6 @@ import {
   type CompletionItem, type HoverDoc, type SignatureHelp, type InlayHint,
 } from '@/components/experiments/Lsp/LspFeatures'
 import LibraryInstallModal from '@/components/experiments/Lsp/LibraryInstallModal'
-import ExeWarningModal from '@/components/other/ExeWarningModal'
 import { Search, X, ChevronUp, ChevronDown } from 'lucide-react'
 
 // ── Session guard ─────────────────────────────────────────────────────────────
@@ -281,17 +280,41 @@ function SignatureHelpWidget({ help, x, y }: { help: SignatureHelp; x: number; y
 
 // ── Inlay hints overlay ───────────────────────────────────────────────────────
 
-function InlayHintsLayer({ hints, fontSize, scrollTop, scrollLeft, charWidth }: {
-  hints: InlayHint[]; fontSize: number; scrollTop: number; scrollLeft: number; charWidth: number
+// ── Measure actual text width for a given font ───────────────────────────────
+let _measureCtx: CanvasRenderingContext2D | null = null
+function measureTextWidth(text: string, fontSize: number): number {
+  if (typeof document === 'undefined') return text.length * fontSize * 0.601
+  if (!_measureCtx) {
+    const canvas = document.createElement('canvas')
+    _measureCtx = canvas.getContext('2d')
+  }
+  if (_measureCtx) {
+    _measureCtx.font = `${fontSize}px "JetBrains Mono", Consolas, "Courier New", monospace`
+    return _measureCtx.measureText(text).width
+  }
+  return text.length * fontSize * 0.601
+}
+
+function InlayHintsLayer({ hints, fontSize, scrollTop, scrollLeft, code }: {
+  hints: InlayHint[]; fontSize: number; scrollTop: number; scrollLeft: number; code: string
 }) {
   const lineH = Math.round(fontSize * 1.62)
   if (!hints.length) return null
+
+  const lines = code.split('\n')
+
   return (
     <>
       {hints.map((h, i) => {
-        const top  = (h.line - 1) * lineH + 12 - scrollTop
-        const left = h.col * charWidth + 16 - scrollLeft
+        // Measure actual pixel width of the text up to h.col on that line
+        const lineText  = lines[h.line - 1] ?? ''
+        const textBefore = lineText.slice(0, h.col)
+        const measured  = measureTextWidth(textBefore, fontSize)
+        // 16 = textarea left padding, 6 = visual gap between code and hint
+        const left  = measured + 16 + 6 - scrollLeft
+        const top   = (h.line - 1) * lineH + 12 - scrollTop
         const color = h.kind === 'type' ? '#56b6c2' : h.kind === 'return' ? '#98c379' : '#abb2bf'
+        const label = h.label.trimStart()
         return (
           <div
             key={i}
@@ -301,16 +324,16 @@ function InlayHintsLayer({ hints, fontSize, scrollTop, scrollLeft, charWidth }: 
               fontSize: Math.max(fontSize - 3, 9),
               lineHeight: `${lineH}px`,
               color,
-              opacity: 0.6,
+              opacity: 0.55,
               background: `${color}10`,
               borderRadius: 2,
-              paddingLeft: 2,
-              paddingRight: 2,
-              whiteSpace: 'nowrap',
+              paddingLeft: 3,
+              paddingRight: 3,
+              whiteSpace: 'pre',
               zIndex: 3,
             }}
           >
-            {h.label}
+            {label}
           </div>
         )
       })}
@@ -534,7 +557,6 @@ export default function CodeEditor() {
   const [tipPos, setTipPos]             = useState({ x: 0, y: 0 })
   const [showLibModal, setShowLibModal] = useState(false)
   const [pendingLibs, setPendingLibs]   = useState<Array<LibraryInfo & { importName: string }>>([])
-  const [exeWarning, setExeWarning]     = useState<{ command: string; action: () => void } | null>(null)
   const [ghostEnabled, setGhostEnabled] = useState(true)
   const [curLine, setCurLine]           = useState(1)
 
@@ -621,11 +643,7 @@ export default function CodeEditor() {
         const tsuki = (settings.tsukiPath || 'tsuki').replace(/^"|"$/g, '')
         const args  = ['pkg', 'add', lib.packageId]
         const cmd   = `${tsuki} ${args.join(' ')}`
-        if (tsuki.toLowerCase().endsWith('.exe')) {
-          setExeWarning({ command: cmd, action: () => dispatchCommand(tsuki, args, undefined) })
-        } else {
-          dispatchCommand(tsuki, args, undefined)
-        }
+        dispatchCommand(tsuki, args, undefined)
       })
     } else { setPendingLibs(missing); setShowLibModal(true) }
   }
@@ -896,12 +914,8 @@ export default function CodeEditor() {
       useStore.getState().setBottomTab('terminal')
       togglePackage(lib.packageId)
     }
-    if (tsuki.toLowerCase().endsWith('.exe')) {
-      setExeWarning({ command: cmd, action: () => { dispatchCommand(tsuki, args, undefined); afterDispatch() } })
-    } else {
-      dispatchCommand(tsuki, args, undefined)
-      afterDispatch()
-    }
+    dispatchCommand(tsuki, args, undefined)
+    afterDispatch()
   }
 
   function handleNeverAsk(importName: string) {
@@ -1007,7 +1021,7 @@ export default function CodeEditor() {
 
           {/* Inlay hints */}
           {featuresActive && settings.lspInlayHints && (
-            <InlayHintsLayer hints={inlayHints} fontSize={fontSize} scrollTop={scrollTop} scrollLeft={scrollLeft} charWidth={charWidth} />
+            <InlayHintsLayer hints={inlayHints} fontSize={fontSize} scrollTop={scrollTop} scrollLeft={scrollLeft} code={content} />
           )}
 
           {/* Textarea */}
@@ -1076,13 +1090,7 @@ export default function CodeEditor() {
           tsukiPath={settings.tsukiPath} />
       )}
 
-      {exeWarning && (
-        <ExeWarningModal
-          command={exeWarning.command}
-          onCancel={() => setExeWarning(null)}
-          onTryAnyway={() => { const a = exeWarning.action; setExeWarning(null); a() }}
-        />
-      )}
+
     </>
   )
 }

@@ -121,7 +121,7 @@ impl Parser {
 
     fn parse_import_spec(&mut self) -> Result<Import> {
         let alias = match self.peek_kind().clone() {
-            TokenKind::Ident(s) if !matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind),
+            TokenKind::Ident(_s) if !matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind),
                 Some(TokenKind::LitString(_)) | None) => None,
             TokenKind::Ident(s) => { self.advance(); Some(s) }
             TokenKind::Dot      => { self.advance(); Some(".".into()) }

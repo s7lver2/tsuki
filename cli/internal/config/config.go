@@ -304,6 +304,59 @@ func (c *Config) Set(key, value string) error {
 	return fmt.Errorf("unknown config key %q", key)
 }
 
+// ── Registry list helpers ─────────────────────────────────────────────────────
+
+// AddRegistry prepends url to RegistryURLs so it has the highest priority.
+// Returns false (no-op) if the URL is already in the list.
+func (c *Config) AddRegistry(url string) bool {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return false
+	}
+	for _, u := range c.RegistryURLs {
+		if u == url {
+			return false // already present
+		}
+	}
+	c.RegistryURLs = append([]string{url}, c.RegistryURLs...)
+	return true
+}
+
+// RemoveRegistry removes url from RegistryURLs.
+// Returns false (no-op) if the URL was not in the list.
+func (c *Config) RemoveRegistry(url string) bool {
+	url = strings.TrimSpace(url)
+	filtered := c.RegistryURLs[:0]
+	found := false
+	for _, u := range c.RegistryURLs {
+		if u == url {
+			found = true
+			continue
+		}
+		filtered = append(filtered, u)
+	}
+	c.RegistryURLs = filtered
+	return found
+}
+
+// MoveRegistry changes the priority of an already-added registry.
+// direction: -1 = higher priority (towards index 0), +1 = lower priority.
+// Returns false if the URL was not found or is already at the boundary.
+func (c *Config) MoveRegistry(url string, direction int) bool {
+	for i, u := range c.RegistryURLs {
+		if u != url {
+			continue
+		}
+		j := i + direction
+		if j < 0 || j >= len(c.RegistryURLs) {
+			return false
+		}
+		c.RegistryURLs[i], c.RegistryURLs[j] = c.RegistryURLs[j], c.RegistryURLs[i]
+		return true
+	}
+	return false
+}
+
 type Entry struct {
 	Key     string
 	Value   interface{}

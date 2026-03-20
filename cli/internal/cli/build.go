@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -127,8 +128,8 @@ func runPython(projectDir string, m *manifest.Manifest, opts Options, board, bas
 		base    := strings.TrimSuffix(filepath.Base(pyFile), ".py")
 		cppFile := filepath.Join(sketchDir, base+".cpp")
 
-		sp := ui.NewSpinner(fmt.Sprintf("%s → %s", filepath.Base(pyFile), filepath.Base(cppFile)))
-		sp.Start()
+		blk := ui.NewLiveBlock(fmt.Sprintf("%s → %s", filepath.Base(pyFile), filepath.Base(cppFile)))
+		blk.Start()
 
 		tr, err := transpiler.Transpile(core.TranspileRequest{
 			InputFile:  pyFile,
@@ -140,11 +141,14 @@ func runPython(projectDir string, m *manifest.Manifest, opts Options, board, bas
 			PkgNames:   pkgNames,
 		})
 		if err != nil {
-			sp.Stop(false, fmt.Sprintf("failed: %s", filepath.Base(pyFile)))
+			blk.Line(err.Error())
+			blk.Finish(false, fmt.Sprintf("failed: %s", filepath.Base(pyFile)))
 			return nil, err
 		}
-
-		sp.Stop(true, fmt.Sprintf("%s  →  %s", filepath.Base(pyFile), filepath.Base(cppFile)))
+		for _, w := range tr.Warnings {
+			blk.Line("⚠ " + w)
+		}
+		blk.Finish(true, "")
 		result.CppFiles = append(result.CppFiles, tr.OutputFile)
 		result.Warnings  = append(result.Warnings, tr.Warnings...)
 	}
@@ -214,8 +218,8 @@ func runGo(projectDir string, m *manifest.Manifest, opts Options, board, baseOut
 		base    := strings.TrimSuffix(filepath.Base(goFile), ".go")
 		cppFile := filepath.Join(sketchDir, base+".cpp")
 
-		sp := ui.NewSpinner(fmt.Sprintf("%s → %s", filepath.Base(goFile), filepath.Base(cppFile)))
-		sp.Start()
+		blk := ui.NewLiveBlock(fmt.Sprintf("%s → %s", filepath.Base(goFile), filepath.Base(cppFile)))
+		blk.Start()
 
 		tr, err := transpiler.Transpile(core.TranspileRequest{
 			InputFile:  goFile,
@@ -226,11 +230,14 @@ func runGo(projectDir string, m *manifest.Manifest, opts Options, board, baseOut
 			PkgNames:   pkgNames,
 		})
 		if err != nil {
-			sp.Stop(false, fmt.Sprintf("failed: %s", filepath.Base(goFile)))
+			blk.Line(err.Error())
+			blk.Finish(false, fmt.Sprintf("failed: %s", filepath.Base(goFile)))
 			return nil, err
 		}
-
-		sp.Stop(true, fmt.Sprintf("%s  →  %s", filepath.Base(goFile), filepath.Base(cppFile)))
+		for _, w := range tr.Warnings {
+			blk.Line("⚠ " + w)
+		}
+		blk.Finish(true, "")
 		result.CppFiles = append(result.CppFiles, tr.OutputFile)
 		result.Warnings  = append(result.Warnings, tr.Warnings...)
 	}
@@ -395,21 +402,34 @@ func compileTsukiFlash(
 	}
 
 	// Build the --include list from installed tsuki packages.
+	// Arduino libraries follow a standard layout:
+	//   libsDir/<PkgName>/<version>/         ← versioned root (added)
+	//   libsDir/<PkgName>/<version>/src/     ← headers live here (also added)
+	// We add both so that both DHT.h (root) and src/DHT.h variants work.
 	var includeArgs []string
 	for _, pkg := range pkgNames {
 		pkgDir := filepath.Join(libsDir, pkg)
-		// Walk to find the versioned subdirectory.
 		entries, err := os.ReadDir(pkgDir)
 		if err == nil {
 			for _, e := range entries {
 				if e.IsDir() {
-					includeArgs = append(includeArgs, filepath.Join(pkgDir, e.Name()))
+					versionedDir := filepath.Join(pkgDir, e.Name())
+					includeArgs = append(includeArgs, versionedDir)
+					// Standard Arduino library layout: headers in src/
+					srcDir := filepath.Join(versionedDir, "src")
+					if info, statErr := os.Stat(srcDir); statErr == nil && info.IsDir() {
+						includeArgs = append(includeArgs, srcDir)
+					}
 					break
 				}
 			}
 		} else {
-			// Fall back to the package root itself.
+			// Package not versioned or installed directly — add root + src/
 			includeArgs = append(includeArgs, pkgDir)
+			srcDir := filepath.Join(pkgDir, "src")
+			if info, statErr := os.Stat(srcDir); statErr == nil && info.IsDir() {
+				includeArgs = append(includeArgs, srcDir)
+			}
 		}
 	}
 
@@ -444,47 +464,59 @@ func compileTsukiFlash(
 
 	cmd := exec.Command(flashBin, args...)
 
-	// When using modules the first run may download the SDK (~40 MB).
-	// We let tsuki-flash own the terminal completely during this phase:
-	// no spinner (it would collide with the download progress lines),
-	// stdout streams through directly, stderr is captured for the traceback.
-	if useModules {
-		var stderrBuf strings.Builder
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = &stderrBuf
+	// Use LiveBlock for real-time streaming output with Docker-style collapse.
+	// tsuki-flash writes progress lines to stderr and the final error to stderr,
+	// so we capture stderr line-by-line and stream it live.
+	label := fmt.Sprintf("tsuki-flash compile --board %s", board)
+	block := ui.NewLiveBlock(label)
+	block.Start()
 
-		cmdErr := cmd.Run()
-		if cmdErr != nil {
-			ui.Fail("compilation failed")
-			errOut := strings.TrimSpace(stderrBuf.String())
-			if errOut != "" {
-				renderTsukiFlashError(errOut)
-			} else {
-				// stderr was empty — the error was already printed to stdout above
-				ui.Traceback("CompileError", "tsuki-flash exited with error (see output above)", []ui.Frame{
-					{File: "tsuki-flash", Func: "compile", Code: []ui.CodeLine{{Number: 0, Text: "see output above", IsPointer: true}}},
-				})
-			}
-			return fmt.Errorf("tsuki-flash compile failed")
-		}
-		ui.Success(fmt.Sprintf("firmware written to %s", buildCacheDir))
-		return nil
+	var outBuf strings.Builder
+	pipeR, pipeW, pipeErr := os.Pipe()
+	if pipeErr == nil {
+		cmd.Stdout = pipeW
+		cmd.Stderr = pipeW
+	} else {
+		// Fallback: capture combined without streaming
+		var combined []byte
+		combined, _ = cmd.CombinedOutput()
+		outBuf.Write(combined)
+		pipeR = nil
 	}
 
-	// Non-modules path: capture combined output and show on error.
-	sp := ui.NewSpinner(fmt.Sprintf("tsuki-flash compile --board %s", board))
-	sp.Start()
-
-	out, cmdErr := cmd.CombinedOutput()
-	if cmdErr != nil {
-		sp.Stop(false, "compilation failed")
-		renderTsukiFlashError(string(out))
+	if err := cmd.Start(); err != nil {
+		if pipeR != nil { pipeW.Close(); pipeR.Close() }
+		block.Finish(false, fmt.Sprintf("failed to start: %s", err))
 		return fmt.Errorf("tsuki-flash compile failed")
 	}
 
-	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
-	if opts.Verbose && len(out) > 0 {
-		fmt.Print(string(out))
+	// Stream output lines live into the block
+	if pipeR != nil {
+		pipeW.Close() // close write-end in this process
+		scanner := bufio.NewScanner(pipeR)
+		for scanner.Scan() {
+			line := scanner.Text()
+			outBuf.WriteString(line + "\n")
+			block.Line(line)
+		}
+		pipeR.Close()
+	}
+
+	cmdErr := cmd.Wait()
+	outStr := strings.TrimSpace(outBuf.String())
+
+	if cmdErr != nil {
+		block.Finish(false, "compilation failed")
+		if outStr != "" {
+			renderTsukiFlashError(outStr)
+		}
+		return fmt.Errorf("tsuki-flash compile failed")
+	}
+
+	elapsed := ""
+	block.Finish(true, elapsed)
+	if opts.Verbose && outStr != "" {
+		fmt.Print(outStr)
 	}
 	return nil
 }
@@ -521,19 +553,45 @@ func compileArduinoCLI(
 	}
 	args = append(args, sketchDir)
 
-	sp := ui.NewSpinner(fmt.Sprintf("arduino-cli compile --fqbn %s", fqbn))
-	sp.Start()
+	acliLabel := fmt.Sprintf("arduino-cli compile --fqbn %s", fqbn)
+	acliBlock := ui.NewLiveBlock(acliLabel)
+	acliBlock.Start()
 
 	cmd := exec.Command(arduinoCLI, args...)
 	cmd.Dir = sketchDir
-	out, cmdErr := cmd.CombinedOutput()
-	if cmdErr != nil {
-		sp.Stop(false, "compilation failed")
-		renderArduinoError(string(out))
+
+	var acliOut strings.Builder
+	acliPipeR, acliPipeW, acliPipeErr := os.Pipe()
+	if acliPipeErr == nil {
+		cmd.Stdout = acliPipeW
+		cmd.Stderr = acliPipeW
+	}
+
+	if startErr := cmd.Start(); startErr != nil {
+		if acliPipeR != nil { acliPipeW.Close(); acliPipeR.Close() }
+		acliBlock.Finish(false, fmt.Sprintf("failed to start: %s", startErr))
 		return fmt.Errorf("arduino-cli compile failed")
 	}
 
-	sp.Stop(true, fmt.Sprintf("firmware written to %s", buildCacheDir))
+	if acliPipeR != nil {
+		acliPipeW.Close()
+		acliScanner := bufio.NewScanner(acliPipeR)
+		for acliScanner.Scan() {
+			line := acliScanner.Text()
+			acliOut.WriteString(line + "\n")
+			acliBlock.Line(line)
+		}
+		acliPipeR.Close()
+	}
+
+	acliErr := cmd.Wait()
+	if acliErr != nil {
+		acliBlock.Finish(false, "compilation failed")
+		renderArduinoError(acliOut.String())
+		return fmt.Errorf("arduino-cli compile failed")
+	}
+
+	acliBlock.Finish(true, "")
 	return nil
 }
 // writeInoStub creates <sketchDir>/<sketchName>.ino — the required entry

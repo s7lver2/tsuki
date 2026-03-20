@@ -51,6 +51,7 @@ pub fn flash(hex: &Path, port: &str, board: &Board, verbose: bool) -> Result<()>
 }
 
 /// Verify flash by reading back and comparing (optional sanity check).
+#[allow(dead_code)]
 pub fn verify(hex: &Path, port: &str, board: &Board) -> Result<()> {
     let (programmer, baud) = board.avrdude_programmer().unwrap();
     let mcu = board.avr_mcu().unwrap();

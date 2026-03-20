@@ -225,7 +225,7 @@ impl Transpiler {
             // (webkit_setup_routes is called explicitly from setup()).
             if let Some(init_expr) = init {
                 if let Expr::Call { func, .. } = init_expr {
-                    if let Expr::Select { expr, field, .. } = func.as_ref() {
+                    if let Expr::Select { expr, field: _, .. } = func.as_ref() {
                         if let Expr::Ident { name: pkg_alias, .. } = expr.as_ref() {
                             if let Some(canon) = self.pkg_map.get(pkg_alias.as_str()).cloned() {
                                 if canon == "tsuki_webkit" {

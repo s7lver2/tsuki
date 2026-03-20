@@ -25,8 +25,6 @@
 //    sysfs path works instead.
 // ─────────────────────────────────────────────────────────────────────────────
 
-use std::path::{Path, PathBuf};
-
 #[derive(Debug, Clone)]
 pub struct DetectedPort {
     pub port:       String,

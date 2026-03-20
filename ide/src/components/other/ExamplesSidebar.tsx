@@ -622,7 +622,7 @@ function ExampleRow({ ex, onOpen }: { ex: ExampleDef; onOpen: (ex: ExampleDef) =
 // ── Collapsible section ───────────────────────────────────────────────────────
 
 function Section({
-  label, icon, examples, loading, onOpen, onRefresh, defaultOpen = true,
+  label, icon, examples, loading, onOpen, onRefresh, defaultOpen = true, notOnDisk = false,
 }: {
   label: string
   icon?: React.ReactNode
@@ -631,6 +631,7 @@ function Section({
   onOpen: (ex: ExampleDef) => void
   onRefresh?: () => void
   defaultOpen?: boolean
+  notOnDisk?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -645,9 +646,11 @@ function Section({
         <span className="ml-auto flex items-center gap-1">
           {loading
             ? <RefreshCw size={9} className="animate-spin" />
-            : <span className="text-[9px] font-normal">{examples.length}</span>
+            : notOnDisk
+              ? <span className="text-[9px] font-normal opacity-50">↓</span>
+              : <span className="text-[9px] font-normal">{examples.length}</span>
           }
-          {onRefresh && !loading && (
+          {onRefresh && !loading && !notOnDisk && (
             <span
               role="button"
               title="Refresh examples"
@@ -663,12 +666,21 @@ function Section({
         <ExampleRow key={ex.id} ex={ex} onOpen={onOpen} />
       ))}
       {open && !loading && examples.length === 0 && (
-        <div className="px-6 py-2 text-[10px] text-[var(--fg-faint)] flex items-center gap-2">
-          <span>No examples found on disk.</span>
-          {onRefresh && (
-            <button onClick={onRefresh} className="underline text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer text-[10px] p-0">
-              Retry
-            </button>
+        <div className="px-6 py-2 text-[10px] text-[var(--fg-faint)] flex items-center gap-2 flex-wrap">
+          {notOnDisk ? (
+            <span className="flex items-center gap-1">
+              Library not downloaded —
+              <span className="font-mono">↓</span> in Packages to install
+            </span>
+          ) : (
+            <>
+              <span>No examples found.</span>
+              {onRefresh && (
+                <button onClick={onRefresh} className="underline text-[var(--fg-faint)] hover:text-[var(--fg)] border-0 bg-transparent cursor-pointer text-[10px] p-0">
+                  Retry
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -800,8 +812,8 @@ export default function ExamplesSidebar() {
     loadCircuitInSandbox(data)
   }
 
-  const totalPkgExamples = Object.values(pkgExamples).reduce(
-    (n, arr) => n + (arr?.length ?? 0), 0
+  const totalPkgExamples = (Object.values(pkgExamples) as Array<ExampleDef[] | null>).reduce(
+    (n: number, arr) => n + (arr?.length ?? 0), 0
   )
 
   return (
@@ -811,7 +823,27 @@ export default function ExamplesSidebar() {
         <span className="font-semibold text-[10px] uppercase tracking-widest text-[var(--fg-faint)]">
           Examples
         </span>
-        <BookOpen size={12} className="text-[var(--fg-faint)]" />
+        <div className="flex items-center gap-0.5">
+          <button
+            title="Reload all examples from disk"
+            onClick={() => {
+              // Clear cache first, then rescan disk + reload all pkg examples
+              setPkgExamples({})
+              scanLibsDir(libsDir).then(fresh => {
+                setDiskPkgs(fresh)
+                // Immediately kick off loading for every package now on disk
+                fresh.forEach((d: { name: string; versions: string[] }) => {
+                  const version = d.versions[0] ?? ''
+                  loadForPkg(d.name, version)
+                })
+              })
+            }}
+            className="w-5 h-5 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer border-0 bg-transparent transition-colors"
+          >
+            <RefreshCw size={11} />
+          </button>
+          <BookOpen size={12} className="text-[var(--fg-faint)]" />
+        </div>
       </div>
 
       {/* Search */}
@@ -843,13 +875,17 @@ export default function ExamplesSidebar() {
           ...installedPkgs.map(p => p.name),
           ...diskPkgs.map(d => d.name),
         ])).map(pkgName => {
-          const storePkg  = installedPkgs.find(p => p.name === pkgName)
-          const diskPkg   = diskPkgs.find(d => d.name === pkgName)
-          const version   = storePkg?.version ?? diskPkg?.versions[0] ?? ''
-          const loaded    = pkgExamples[pkgName]
-          const isLoading = loaded === null || !(pkgName in pkgExamples)
-          const examples  = filterExamples(loaded ?? [])
-          if (!isLoading && q && examples.length === 0) return null
+          const storePkg   = installedPkgs.find(p => p.name === pkgName)
+          const diskPkg    = diskPkgs.find(d => d.name === pkgName)
+          const isOnDisk   = !!diskPkg               // C++ library actually downloaded
+          const version    = storePkg?.version ?? diskPkg?.versions[0] ?? ''
+          const loaded     = pkgExamples[pkgName]
+          // Only attempt to load if the library is on disk — otherwise show a hint
+          const isLoading  = isOnDisk && (loaded === null || !(pkgName in pkgExamples))
+          const examples   = filterExamples(isOnDisk ? (loaded ?? []) : [])
+          if (!isLoading && q && examples.length === 0 && isOnDisk) return null
+          // If the package is only in the manifest (not on disk) and we have a query filter active, skip it
+          if (!isOnDisk && q) return null
           return (
             <Section
               key={pkgName}
@@ -858,7 +894,8 @@ export default function ExamplesSidebar() {
               examples={examples}
               loading={isLoading}
               onOpen={handleOpen}
-              onRefresh={() => loadForPkg(pkgName, version)}
+              onRefresh={isOnDisk ? () => loadForPkg(pkgName, version) : undefined}
+              notOnDisk={!isOnDisk}
             />
           )
         })}

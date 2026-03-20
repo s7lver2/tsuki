@@ -37,9 +37,56 @@ except ImportError:
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR   = Path(__file__).parent.resolve()
-PKG_DIR      = (SCRIPT_DIR / '../pkg').resolve()
-REGISTRY_URL = "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads/main/pkg"
+# tools/pkg_manager.py lives at <repo>/tools/pkg_manager.py
+# pkg/ lives at <repo>/pkg/ — one level up from this script.
+SCRIPT_DIR = Path(__file__).parent.resolve()   # <repo>/tools
+REPO_ROOT  = SCRIPT_DIR.parent                 # <repo>
+PKG_DIR    = REPO_ROOT / 'pkg'                 # <repo>/pkg
+
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/s7lver2/tsuki/refs/heads"
+
+
+def _check_pkg_dir() -> None:
+    """Abort with a clear message if pkg/ can't be found."""
+    if not PKG_DIR.exists():
+        print(f"[error] pkg/ directory not found at: {PKG_DIR}", file=sys.stderr)
+        print(f"        Script is at: {SCRIPT_DIR}", file=sys.stderr)
+        print(f"        Expected layout: <repo>/tools/pkg_manager.py  +  <repo>/pkg/", file=sys.stderr)
+        sys.exit(1)
+
+
+def _detect_branch() -> str:
+    """Return the current git branch name.
+
+    Resolution order (highest priority first):
+      1. TSUKI_BRANCH env var — explicit override (useful in CI).
+      2. git rev-parse --abbrev-ref HEAD run from REPO_ROOT.
+      3. Falls back to 'main' if git is unavailable or returns 'HEAD'
+         (detached HEAD state, e.g. during a CI checkout without a branch).
+    """
+    if env := os.environ.get("TSUKI_BRANCH", "").strip():
+        return env
+    try:
+        import subprocess as _sp
+        result = _sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=REPO_ROOT,          # run from repo root, not tools/
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        branch = result.stdout.strip()
+        if result.returncode == 0 and branch and branch != "HEAD":
+            return branch
+    except Exception:
+        pass
+    return "main"
+
+
+def _registry_url(branch: str | None = None) -> str:
+    """Build the raw-GitHub base URL for the given branch (or auto-detect)."""
+    b = branch or _detect_branch()
+    return f"{GITHUB_RAW_BASE}/{b}/pkg"
 
 
 # ── TOML helpers (graceful without tomllib) ───────────────────────────────────
@@ -99,9 +146,14 @@ def latest_version(pkg_name: str) -> Optional[tuple]:
 
 # ── Registry builder ──────────────────────────────────────────────────────────
 
-def build_registry() -> dict:
-    """Build the full packages.json dict from the current pkg/ directory."""
-    registry: dict = {"packages": {}}
+def build_registry(branch: str | None = None) -> dict:
+    """Build the full packages.json dict from the current pkg/ directory.
+
+    Package TOML URLs are generated for *branch* (auto-detected from git when
+    None).  Pass an explicit branch name or set TSUKI_BRANCH to override.
+    """
+    registry_url = _registry_url(branch)
+    registry: dict = {"packages": {}, "branch": branch or _detect_branch()}
 
     all_versions: dict = {}  # name → {version: toml_path}
     for name, ver, toml_path in iter_packages():
@@ -118,7 +170,7 @@ def build_registry() -> dict:
         version_urls = {}
         for ver, path in versions.items():
             clean = ver.lstrip('v')
-            version_urls[clean] = f"{REGISTRY_URL}/{pkg_name}/{ver}/godotinolib.toml"
+            version_urls[clean] = f"{registry_url}/{pkg_name}/{ver}/godotinolib.toml"
 
         registry['packages'][pkg_name] = {
             'description': description,
@@ -312,6 +364,7 @@ def bump_version(pkg_name: str, new_version: str):
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def cmd_list(_args):
+    _check_pkg_dir()
     rows = []
     last_pkg = None
     for name, ver, toml_path in iter_packages():
@@ -337,6 +390,7 @@ def cmd_list(_args):
 
 
 def cmd_validate(_args):
+    _check_pkg_dir()
     found_errors = False
     for name, ver, toml_path in iter_packages():
         errors = validate_package(name, ver, toml_path)
@@ -352,12 +406,15 @@ def cmd_validate(_args):
         sys.exit(1)
 
 
-def cmd_sync(_args):
-    registry = build_registry()
+def cmd_sync(args):
+    _check_pkg_dir()
+    branch   = getattr(args, 'branch', None) or None
+    resolved = branch or _detect_branch()
+    registry = build_registry(branch=resolved)
     out_path = PKG_DIR / 'packages.json'
     out_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
     n = len(registry['packages'])
-    print(f'[ok] Wrote packages.json ({n} package{"s" if n != 1 else ""})')
+    print(f'[ok] Wrote packages.json ({n} package{"s" if n != 1 else ""}) — branch: {resolved}')
 
 
 def cmd_new(args):
@@ -394,19 +451,37 @@ def main():
             Examples:
               python pkg_manager.py list
               python pkg_manager.py validate
-              python pkg_manager.py sync
+              python pkg_manager.py sync                        # auto-detects branch from git
+              python pkg_manager.py sync --branch dev           # force a specific branch
               python pkg_manager.py new max7219 --desc "MAX7219 LED matrix" --lib "MD_MAX72XX"
               python pkg_manager.py add-example dht dual_dht22
               python pkg_manager.py bump ws2812 1.1.0
+
+            Branch resolution order:
+              1. --branch flag
+              2. TSUKI_BRANCH env var
+              3. git rev-parse --abbrev-ref HEAD  (auto-detected)
+              4. 'main' fallback
         """),
     )
     sub = parser.add_subparsers(dest='cmd', required=True)
 
+    # ── branch flag shared by commands that call build_registry ───────────────
+    branch_flag = argparse.ArgumentParser(add_help=False)
+    branch_flag.add_argument(
+        '--branch',
+        default='',
+        metavar='BRANCH',
+        help='GitHub branch to embed in package URLs (default: auto-detect from git)',
+    )
+
     sub.add_parser('list',     help='List all packages and versions')
     sub.add_parser('validate', help='Validate package structure')
-    sub.add_parser('sync',     help='Rebuild packages.json from disk')
+    sub.add_parser('sync',     help='Rebuild packages.json from disk',
+                   parents=[branch_flag])
 
-    p_new = sub.add_parser('new', help='Scaffold a new package')
+    p_new = sub.add_parser('new', help='Scaffold a new package',
+                            parents=[branch_flag])
     p_new.add_argument('name')
     p_new.add_argument('--version', default='1.0.0')
     p_new.add_argument('--desc',   default='')
@@ -418,7 +493,8 @@ def main():
     p_ex.add_argument('example_name')
     p_ex.add_argument('--version', default='1.0.0')
 
-    p_bump = sub.add_parser('bump', help='Bump package version (copies current → new version)')
+    p_bump = sub.add_parser('bump', help='Bump package version (copies current → new version)',
+                             parents=[branch_flag])
     p_bump.add_argument('pkg')
     p_bump.add_argument('new_version')
 

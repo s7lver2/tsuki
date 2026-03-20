@@ -28,6 +28,7 @@ pub enum FlashError {
     NoBoardDetected,
 
     #[error("Port '{0}' not found or not accessible")]
+    #[allow(dead_code)]
     PortNotFound(String),
 
     #[error("No .hex/.bin file found in {0}")]

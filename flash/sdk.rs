@@ -56,8 +56,30 @@ pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
     // ── 3. arduino-cli package cache (fallback) ────────────────────────────
     let arduino15_dirs = arduino15_candidates();
     if verbose {
+        eprintln!("  [sdk] arch='{}' variant='{}'", arch, variant);
         for d in &arduino15_dirs {
             eprintln!("  [sdk] checking arduino15: {}", d.display());
+        }
+    } else {
+        // Always print candidates for rp2040 so users can diagnose SDK issues
+        if arch == "rp2040" {
+            for d in &arduino15_dirs {
+                eprintln!("  [sdk/rp2040] checking: {}", d.display());
+                let packages = d.join("packages");
+                if packages.is_dir() {
+                    eprintln!("    packages/ found — looking for rp2040/hardware/rp2040/...");
+                    let hw = packages.join("rp2040").join("hardware").join("rp2040");
+                    if hw.is_dir() {
+                        if let Ok(entries) = std::fs::read_dir(&hw) {
+                            for e in entries.flatten() {
+                                eprintln!("    version: {}", e.file_name().to_string_lossy());
+                            }
+                        }
+                    } else {
+                        eprintln!("    rp2040/hardware/rp2040/ NOT found");
+                    }
+                }
+            }
         }
     }
     for base in &arduino15_dirs {
@@ -89,14 +111,17 @@ pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
 
     Err(FlashError::SdkNotFound {
         arch:  arch.to_owned(),
-        path:  arduino15_dirs.first().map(|p| p.display().to_string())
-               .unwrap_or_else(|| "~/.arduino15".into()),
+        path:  arduino15_dirs
+                   .iter()
+                   .map(|p| p.display().to_string())
+                   .collect::<Vec<_>>()
+                   .join(", "),
         pkg: match arch {
             "avr"    => "arduino:avr",
             "sam"    => "arduino:sam",
             "esp32"  => "esp32:esp32",
             "esp8266"=> "esp8266:esp8266",
-            "rp2040" => "rp2040:rp2040",
+            "rp2040" => "rp2040:rp2040  (install via: arduino-cli core install rp2040:rp2040 --additional-urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json)",
             _        => arch,
         }.into(),
     })
@@ -110,33 +135,33 @@ pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
 fn arduino15_candidates() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // ── Windows ──────────────────────────────────────────────────────────────
-    // LOCALAPPDATA\Arduino15 is the standard path for Arduino IDE 2.x on Windows
-    // and must be checked unconditionally — not gated behind HOME/USERPROFILE.
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             dirs.push(PathBuf::from(&local).join("Arduino15"));
         }
-        // arduino-cli also uses LOCALAPPDATA\Arduino15 but sometimes APPDATA
         if let Ok(roaming) = std::env::var("APPDATA") {
             dirs.push(PathBuf::from(&roaming).join("Arduino15"));
+        }
+        // arduino-cli on Windows also installs to %USERPROFILE%\.arduino15
+        // (the same path as Linux/macOS ~/.arduino15 — confirmed from user reports)
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            dirs.push(PathBuf::from(&profile).join(".arduino15"));
         }
     }
 
     if let Some(home) = dirs_home() {
-        // Standard Linux/macOS
         dirs.push(home.join(".arduino15"));
-        // Snap on Ubuntu
         dirs.push(home.join("snap/arduino/current/.arduino15"));
-        // XDG override
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             dirs.push(PathBuf::from(xdg).join("arduino15"));
         }
-        // macOS
         #[cfg(target_os = "macos")]
         dirs.push(home.join("Library/Arduino15"));
     }
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|p| seen.insert(p.clone()));
     dirs
 }
 
@@ -164,16 +189,35 @@ pub(crate) fn scan_arduino15(base: &Path, arch: &str, variant: &str) -> Option<S
     let packages = base.join("packages");
     if !packages.is_dir() { return None; }
 
-    // Map arch → package vendor/name
-    let (vendor, hw_arch) = match arch {
-        "avr"    => ("arduino", "avr"),
-        "sam"    => ("arduino", "sam"),
-        "esp32"  => ("esp32", "esp32"),
-        "esp8266"=> ("esp8266", "esp8266"),
-        "rp2040" => ("rp2040", "rp2040"),
+    // Map arch → (vendor, hw_arch) pairs to try — multiple vendors for rp2040
+    // because the earlephilhower core uses vendor "rp2040" while some setups
+    // use "arduino" as the vendor prefix. We try all known layouts.
+    let candidates: &[(&str, &str)] = match arch {
+        "avr"    => &[("arduino", "avr")],
+        "sam"    => &[("arduino", "sam")],
+        "esp32"  => &[("esp32", "esp32")],
+        "esp8266"=> &[("esp8266", "esp8266")],
+        // earlephilhower uses vendor "rp2040"; official Arduino uses "arduino"
+        "rp2040" => &[("rp2040", "rp2040"), ("arduino", "rp2040")],
         _        => return None,
     };
 
+    for &(vendor, hw_arch) in candidates {
+        if let Some(paths) = scan_arduino15_vendor(base, arch, vendor, hw_arch, variant) {
+            return Some(paths);
+        }
+    }
+    None
+}
+
+fn scan_arduino15_vendor(
+    base:    &Path,
+    arch:    &str,
+    vendor:  &str,
+    hw_arch: &str,
+    variant: &str,
+) -> Option<SdkPaths> {
+    let packages = base.join("packages");
     let hw_base = packages.join(vendor).join("hardware").join(hw_arch);
     if !hw_base.is_dir() { return None; }
 
@@ -185,11 +229,34 @@ pub(crate) fn scan_arduino15(base: &Path, arch: &str, variant: &str) -> Option<S
     let variant_dir = sdk_dir.join("variants").join(variant);
 
     if !core_dir.is_dir() { return None; }
-    // Some boards use a different variant name; fall back to "standard"
+
+    // Variant resolution with smart fallback:
+    // 1. Exact match (e.g. "seeed_xiao_rp2040")
+    // 2. For rp2040: scan variants/ for any dir whose name contains the board keyword
+    // 3. Fall back to "standard" or "rpipico" (earlephilhower default)
+    // 4. Use first available variant
     let variant_dir = if variant_dir.is_dir() {
         variant_dir
     } else {
-        sdk_dir.join("variants").join("standard")
+        let variants_root = sdk_dir.join("variants");
+        let keyword = variant.split('_').next().unwrap_or(variant); // e.g. "seeed" from "seeed_xiao_rp2040"
+        // Try partial match on board keyword
+        let partial = variants_root.read_dir().ok()
+            .and_then(|rd| rd.flatten().find(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                e.path().is_dir() && (n.contains(&variant.to_lowercase()) || n.contains(keyword))
+            }))
+            .map(|e| e.path());
+        if let Some(p) = partial.filter(|p| p.is_dir()) {
+            p
+        } else {
+            // Try well-known fallbacks
+            let fallbacks = ["standard", "rpipico", "generic"];
+            fallbacks.iter()
+                .map(|f| variants_root.join(f))
+                .find(|p| p.is_dir())
+                .unwrap_or_else(|| variants_root)  // worst case: use root of variants/
+        }
     };
 
     // Toolchain binary dir
@@ -211,24 +278,34 @@ pub(crate) fn scan_arduino15(base: &Path, arch: &str, variant: &str) -> Option<S
 
 /// Find the toolchain binary directory inside the arduino15 package cache.
 fn find_toolchain_bin(base: &Path, arch: &str, _vendor: &str) -> Option<PathBuf> {
-    let (tc_vendor, tc_name) = match arch {
-        "avr"        => ("arduino", "avr-gcc"),
-        "sam"        => ("arduino", "arm-none-eabi-gcc"),
-        "rp2040"     => ("rp2040", "pqt-gcc-arm-none-eabi"),
-        "esp32"      => ("esp32", "xtensa-esp32-elf-gcc"),
-        "esp8266"    => ("esp8266", "xtensa-lx106-elf-gcc"),
-        _            => return None,
+    // For rp2040 there are two possible toolchain package names:
+    //   earlephilhower core uses "pqt-gcc-arm-none-eabi" under vendor "rp2040"
+    //   Newer versions may use "arm-none-eabi-gcc" under vendor "arduino"
+    // We try all candidates in order; fall back to system PATH if none found.
+    let candidates: &[(&str, &str)] = match arch {
+        "avr"    => &[("arduino", "avr-gcc")],
+        "sam"    => &[("arduino", "arm-none-eabi-gcc")],
+        "rp2040" => &[
+            ("rp2040", "pqt-gcc-arm-none-eabi"),
+            ("rp2040", "pqt-arm-none-eabi-gcc"),
+            ("arduino", "arm-none-eabi-gcc"),
+        ],
+        "esp32"  => &[("esp32", "xtensa-esp32-elf-gcc")],
+        "esp8266"=> &[("esp8266", "xtensa-lx106-elf-gcc")],
+        _        => return None,
     };
 
-    let tc_base = base.join("packages").join(tc_vendor).join("tools").join(tc_name);
-    if !tc_base.is_dir() {
-        // Fall back to system PATH — caller will handle this
-        return Some(PathBuf::from(""));
+    for &(tc_vendor, tc_name) in candidates {
+        let tc_base = base.join("packages").join(tc_vendor).join("tools").join(tc_name);
+        if !tc_base.is_dir() { continue; }
+        if let Some(version) = latest_version_dir(&tc_base) {
+            let bin = tc_base.join(&version).join("bin");
+            if bin.is_dir() { return Some(bin); }
+        }
     }
 
-    let version = latest_version_dir(&tc_base)?;
-    let bin = tc_base.join(&version).join("bin");
-    if bin.is_dir() { Some(bin) } else { None }
+    // Fall back to system PATH — caller will resolve the binary by name
+    Some(PathBuf::from(""))
 }
 
 /// Arduino IDE 1.x system install (e.g. /usr/share/arduino).
@@ -256,7 +333,7 @@ fn try_arduino1_install(base: &Path, arch: &str, variant: &str) -> Option<SdkPat
 }
 
 /// Try an explicit SDK root (TSUKI_SDK_ROOT).
-fn try_sdk_root(base: &Path, arch: &str, variant: &str) -> Option<SdkPaths> {
+fn try_sdk_root(base: &Path, _arch: &str, variant: &str) -> Option<SdkPaths> {
     let core_dir    = base.join("cores").join("arduino");
     let variant_dir = base.join("variants").join(variant);
     if !core_dir.is_dir() { return None; }

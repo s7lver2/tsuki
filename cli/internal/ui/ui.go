@@ -448,6 +448,18 @@ func (s *Spinner) Stop(ok bool, finalMsg string) {
 	}
 }
 
+// StopSilent stops the spinner animation and erases its line without printing
+// a final message. Used by LiveBlock which handles its own final output.
+func (s *Spinner) StopSilent() {
+	fi, err := os.Stdout.Stat()
+	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+	if isTTY {
+		close(s.done)
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprintf(os.Stdout, "\r\033[K") // erase the spinner line
+	}
+}
+
 // ── Flash Backend Badge ───────────────────────────────────────────────────────
 // FlashBadge prints a bold orange inline tag showing the active flash backend.
 // Printed before the "Compiling" / "Uploading" section titles.
@@ -487,4 +499,119 @@ func ProgressBar(label string, done, total int) {
 	bar := ColorSuccess.Sprint(strings.Repeat("█", filled)) +
 		ColorMuted.Sprint(strings.Repeat("░", w-filled))
 	fmt.Printf("  %s  [%s]  %d%%\n", label, bar, int(pct*100))
+}
+// ── LiveBlock: Docker-style collapsible command output ────────────────────────
+//
+// Usage:
+//
+//	b := ui.NewLiveBlock("tsuki-flash compile --board nano")
+//	b.Start()
+//	// ... stream lines ...
+//	b.Line("compiling main.cpp...")
+//	b.Finish(true, "compiled in 3.2s")   // collapses on success
+//	b.Finish(false, "compile failed")     // keeps output expanded on error
+//
+// Success (collapsed):
+//
+//	✓ tsuki-flash compile --board nano  [3.2s]
+//
+// Failure (expanded):
+//
+//	✗ tsuki-flash compile --board nano
+//	│  compiling main.cpp...
+//	│  error: DHT.h not found
+//	╰─ exit 1
+
+var (
+	colorLiveLabel  = color.New(color.FgHiWhite)
+	colorLiveLine   = color.New(color.FgHiBlack)        // dimmed — secondary info
+	colorLiveBorder = color.New(color.FgHiBlack)
+	colorLiveTime   = color.New(color.FgHiBlack, color.Italic)
+)
+
+// LiveBlock manages a collapsible command-output block.
+type LiveBlock struct {
+	label    string
+	lines    []string
+	start    time.Time
+	spinner  *Spinner
+	isTTY    bool
+}
+
+// NewLiveBlock creates a new block with the given header label.
+func NewLiveBlock(label string) *LiveBlock {
+	fi, err := os.Stdout.Stat()
+	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+	return &LiveBlock{label: label, start: time.Now(), isTTY: isTTY}
+}
+
+// Start prints the spinning header line.
+func (b *LiveBlock) Start() {
+	b.spinner = NewSpinner(colorLiveLabel.Sprint(b.label))
+	b.spinner.Start()
+}
+
+// Line buffers a line of output.
+// If running in a TTY the line is printed live (dimmed) below the spinner.
+func (b *LiveBlock) Line(s string) {
+	b.lines = append(b.lines, s)
+	if b.isTTY && s != "" {
+		// Print below the spinner using a simple newline then reposition
+		fmt.Fprintf(os.Stdout, "\r  \033[2m│  %s\033[0m\033[K\n", truncate(s, termWidth()-6))
+	}
+}
+
+// Finish collapses (ok=true) or expands (ok=false) the block.
+func (b *LiveBlock) Finish(ok bool, summary string) {
+	elapsed := time.Since(b.start)
+
+	// Stop the spinner and erase its line.
+	if b.spinner != nil {
+		b.spinner.StopSilent()
+	}
+
+	// On success: single collapsed line
+	if ok {
+		timeStr := formatElapsed(elapsed)
+		if summary != "" {
+			ColorSuccess.Fprint(os.Stdout, "  ✓ ")
+			colorLiveLabel.Fprint(os.Stdout, b.label)
+			colorLiveTime.Fprintf(os.Stdout, "  [%s]\n", timeStr)
+		} else {
+			ColorSuccess.Fprint(os.Stdout, "  ✓ ")
+			colorLiveLabel.Fprintln(os.Stdout, b.label)
+		}
+		// On success, discard buffered lines (they collapse)
+		return
+	}
+
+	// On failure: print header + all buffered lines + footer
+	ColorError.Fprint(os.Stdout, "  ✗ ")
+	colorLiveLabel.Fprintln(os.Stdout, b.label)
+
+	// If lines were already printed live in TTY mode, they're already on screen
+	// and we just need the footer. In non-TTY mode, print them now.
+	if !b.isTTY {
+		for _, l := range b.lines {
+			if l != "" {
+				colorLiveBorder.Fprint(os.Stdout, "  │  ")
+				colorLiveLine.Fprintln(os.Stdout, truncate(l, termWidth()-6))
+			}
+		}
+	}
+	colorLiveBorder.Fprintf(os.Stdout, "  ╰─ %s\n", summary)
+}
+
+func truncate(s string, max int) string {
+	if max <= 3 || len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "…"
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }

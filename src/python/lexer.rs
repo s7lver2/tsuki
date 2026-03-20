@@ -105,6 +105,7 @@ impl PyToken {
 // ── Lexer ─────────────────────────────────────────────────────────────────────
 
 pub struct PyLexer<'src> {
+    #[allow(dead_code)]
     src:      &'src str,
     chars:    Vec<char>,
     pos:      usize,

@@ -25,7 +25,7 @@ if (typeof window !== 'undefined') {
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/tauri')
-  return tauriInvoke<T>(cmd, args)
+  return (tauriInvoke as (cmd: string, args?: Record<string, unknown>) => Promise<T>)(cmd, args)
 }
 
 async function listen(
@@ -471,7 +471,8 @@ export async function runSimulator(
   const unsubs: Array<() => void> = []
 
   const sub = async (suffix: string, handler: (payload: string) => void) => {
-    const u = await listen<string>(`proc://${eventId}:${suffix}`, e => handler(e.payload))
+    const typedListen = listen as (event: string, cb: (e: { payload: string }) => void) => Promise<() => void>
+    const u = await typedListen(`proc://${eventId}:${suffix}`, e => handler(e.payload))
     unsubs.push(u)
   }
 

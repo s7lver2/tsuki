@@ -12,7 +12,6 @@ Argumentos opcionales:
   --platform  linux-amd64 | linux-arm64 | darwin-amd64 | darwin-arm64 | windows-amd64
   --skip-go       Omite compilar el CLI Go
   --skip-rust     Omite compilar los binarios Rust
-  --skip-webkit   Omite compilar tsuki-webkit
   --skip-ide      Omite compilar la IDE Tauri
   --no-clean      No limpiar dist/ antes de compilar
   --version X.Y.Z Fuerza una versión específica
@@ -36,8 +35,6 @@ APP_NAME       = "tsuki"
 BINARY         = "tsuki"          # CLI principal
 CORE_BINARY    = "tsuki-core"
 FLASH_BINARY   = "tsuki-flash"
-WEBKIT_BINARY  = "tsuki-webkit"
-WEBKIT_DIR     = os.path.join(PROJECT_ROOT, "libs", "tsuki-webkit")
 GO_MODULE      = "github.com/tsuki/cli"
 BUILD_DIR      = os.path.join(PROJECT_ROOT, "dist")
 # RELEASE_DIR can be overridden via env var to avoid antivirus interference.
@@ -94,49 +91,237 @@ RELEASE_PLATFORMS = [
 # ─────────────────────────────────────────────
 #  UTILIDADES
 # ─────────────────────────────────────────────
-BOLD  = "\033[1m"
-GREEN = "\033[32m"
-CYAN  = "\033[36m"
-YELLOW= "\033[33m"
-RED   = "\033[31m"
-RESET = "\033[0m"
+import shutil, sys as _sys
 
-def info(msg):  print(f"{GREEN}✓{RESET} {msg}")
-def step(msg):  print(f"\n{BOLD}{CYAN}▶ {msg}{RESET}")
-def warn(msg):  print(f"{YELLOW}⚠  {msg}{RESET}")
-def error(msg): print(f"{RED}✗ {msg}{RESET}")
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+GREEN  = "\033[32m"
+CYAN   = "\033[36m"
+YELLOW = "\033[33m"
+RED    = "\033[31m"
+BLUE   = "\033[34m"
+RESET  = "\033[0m"
+ERASE  = "\r\033[K"
 
-def run(cmd, cwd=None, env=None, check=True, tail_lines=12):
-    """Ejecuta un comando mostrando los argumentos.
+def info(msg):  print(f"  {GREEN}✓{RESET}  {msg}")
+def step(msg):  print(f"\n{BOLD}{CYAN}▶{RESET}  {BOLD}{msg}{RESET}")
+def warn(msg):  print(f"  {YELLOW}⚠{RESET}  {msg}")
+def error(msg): print(f"  {RED}✗{RESET}  {msg}")
 
-    - En éxito: muestra las últimas `tail_lines` líneas de output.
-    - En fallo: muestra TODAS las líneas (para que el error de cargo/npm sea visible)
-      y relanza CalledProcessError.
+# ── LiveBlock: Docker-style collapsible command output ────────────────────────
+
+def _is_tty():
+    return hasattr(_sys.stdout, "fileno") and _sys.stdout.isatty()
+
+SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+
+TERM_W = lambda: shutil.get_terminal_size((100, 24)).columns
+
+import threading as _threading
+
+LIVE_LINES = 6   # content rows visible in the rolling window at any time
+
+
+class LiveBlock:
+    """Docker-style collapsible command block with rolling-window output.
+
+    Design:
+      - Spinner thread is the SOLE terminal writer in TTY mode (holds the lock
+        on every redraw), so content writes and spinner frames never interleave.
+      - `line()` buffers content only; the spinner picks it up on the next tick.
+      - Only the last LIVE_LINES content rows are shown at once — older lines
+        scroll out of view silently. The full buffer is kept for failure display.
+      - On success  → window erased; one ✓ line replaces it.
+      - On failure  → window erased, then ✗ + all buffered lines + summary.
+
+    `_painted` tracks the exact number of content rows currently on screen
+    (always ≤ LIVE_LINES), so `finish()` erases a bounded number of rows
+    regardless of how many total lines the command produced.
     """
-    display = " ".join(str(c) for c in cmd)
-    print(f"  $ {display}")
-    result = subprocess.run(cmd, cwd=cwd, env=env, check=False,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    output = result.stdout or ""
-    lines  = output.strip().splitlines()
 
-    if result.returncode != 0:
-        # Mostrar TODO el output — el mensaje de error puede estar en cualquier línea
-        print()
-        print(f"{RED}{'─'*60}")
-        print(f"  FALLO (exit={result.returncode}): {display}")
-        print(f"{'─'*60}{RESET}")
-        for line in lines:
-            print(f"    {line}")
-        print()
-        if check:
-            raise subprocess.CalledProcessError(result.returncode, cmd, output)
+    def __init__(self, label: str):
+        max_lbl = max(TERM_W() - 10, 20)
+        self.label       = label if len(label) <= max_lbl else label[:max_lbl - 1] + "…"
+        self._full_label = label
+        self._lines: list[str] = []
+        self._tty        = _is_tty()
+        self._stop       = _threading.Event()
+        self._lock       = _threading.Lock()
+        self._thread     = None
+        self._t0         = None
+        self._rc         = None
+        self._painted    = 0   # content lines currently visible on screen
+
+    # ── Internal redraw ───────────────────────────────────────────────────────
+
+    def _redraw(self, frame: str) -> None:
+        """Erase window, print last LIVE_LINES content rows + spinner.
+
+        Must be called with self._lock held.
+        Cursor starts and ends on the spinner line (no trailing newline).
+        """
+        # 1. Clear spinner line (cursor is on it via \r).
+        _sys.stdout.write("\r\033[K")
+        # 2. Move up through the content rows painted last cycle and clear each.
+        for _ in range(self._painted):
+            _sys.stdout.write("\033[A\033[K")
+        # 3. Re-render the visible content window.
+        w = TERM_W()
+        visible = self._lines[-LIVE_LINES:] if self._lines else []
+        for s in visible:
+            display = s[:w - 8] if len(s) > w - 8 else s
+            _sys.stdout.write(f"  {DIM}│{RESET}  {display}\n")
+        # 4. Re-render spinner (cursor stays on this line, no \n).
+        _sys.stdout.write(f"  {CYAN}{frame}{RESET}  {self.label}\033[K")
+        _sys.stdout.flush()
+        self._painted = len(visible)
+
+    # ── Spinner ───────────────────────────────────────────────────────────────
+
+    def _start_spinner(self) -> None:
+        import itertools as _it
+        def _spin():
+            for frame in _it.cycle(SPINNER_FRAMES):
+                if self._stop.is_set():
+                    break
+                with self._lock:
+                    self._redraw(frame)
+                self._stop.wait(0.08)
+        self._thread = _threading.Thread(target=_spin, daemon=True)
+        self._thread.start()
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        import time as _t
+        self._t0 = _t.monotonic()
+        if self._tty:
+            # Print the initial spinner line so _redraw() has a row to start from.
+            _sys.stdout.write(f"  {CYAN}{SPINNER_FRAMES[0]}{RESET}  {self.label}\033[K")
+            _sys.stdout.flush()
+            self._start_spinner()
+        else:
+            print(f"  …  {self.label}")
+
+    def line(self, s: str) -> None:
+        """Buffer a content line.  TTY redraws happen in the spinner thread."""
+        if not s:
+            return
+        self._lines.append(s)
+        # Non-TTY (CI/pipe): print immediately so logs capture output.
+        if not self._tty:
+            w = TERM_W()
+            print(f"  {DIM}│{RESET}  {s[:w - 8]}")
+
+    def finish(self, ok: bool, summary: str = "") -> None:
+        import time as _t
+        elapsed     = _t.monotonic() - self._t0 if self._t0 else 0
+        elapsed_str = f"{elapsed*1000:.0f}ms" if elapsed < 1 else f"{elapsed:.1f}s"
+
+        # Stop the spinner thread before touching the terminal.
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.4)
+
+        if self._tty:
+            with self._lock:
+                # Erase exactly the rows that are on screen: content + spinner.
+                _sys.stdout.write("\r\033[K")          # clear spinner line
+                for _ in range(self._painted):         # clear content rows
+                    _sys.stdout.write("\033[A\033[K")
+                _sys.stdout.flush()
+
+        if ok:
+            print(f"  {GREEN}✓{RESET}  {self.label}  {DIM}[{elapsed_str}]{RESET}")
+        else:
+            print(f"  {RED}✗{RESET}  {self.label}")
+            w = TERM_W()
+            for l in self._lines:
+                if l:
+                    print(f"  {DIM}│{RESET}  {l[:w - 8]}")
+            msg = summary or (f"exit {self._rc}" if self._rc is not None else "failed")
+            print(f"  {DIM}╰─ {msg}{RESET}")
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self.finish(ok=True)
+        else:
+            self.finish(ok=False, summary=str(exc_val) if exc_val else "error")
+        return False
+
+
+def run(cmd, cwd=None, env=None, check=True, label=None):
+    """Ejecuta un comando mostrando su salida en tiempo real dentro de un LiveBlock.
+
+    Éxito  → bloque colapsado:  ✓ comando  [1.3s]
+    Fallo  → bloque expandido:  ✗ comando
+                                │  línea de error…
+                                ╰─ exit 1
+
+    Notas de implementación:
+      - Usa readline() en vez de iterar el fichero para evitar el buffering
+        que provoca que las líneas de cargo/npm lleguen en ráfagas.
+      - encoding='utf-8' evita caracteres mojibake en terminales Windows CP1252.
+    """
+    if label:
+        display = label
     else:
-        if lines:
-            for line in lines[-tail_lines:]:
-                print(f"    {line}")
+        parts = [str(x) for x in cmd]
+        display = " ".join(parts)
+        if len(display) > 64:
+            display = parts[0].split("/")[-1].split("\\")[-1]
+            for p in parts[1:]:
+                candidate = display + " " + p
+                if len(candidate) > 62:
+                    display += " …"
+                    break
+                display = candidate
 
-    return result
+    blk = LiveBlock(display)
+    blk.start()
+
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        encoding="utf-8", errors="replace",
+        bufsize=1,
+    )
+
+    output_lines: list[str] = []
+    try:
+        # readline() is more reliable than `for line in proc.stdout` for real-time
+        # output from processes that buffer internally (cargo, npm, next build).
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.rstrip("\n").rstrip("\r")
+            output_lines.append(line)
+            blk.line(line)
+    except Exception:
+        pass
+    proc.wait()
+
+    output = "\n".join(output_lines)
+    blk._rc = proc.returncode
+
+    if proc.returncode != 0:
+        summary_lines = [l for l in output_lines if l.strip()]
+        summary = summary_lines[-1][:100] if summary_lines else f"exit {proc.returncode}"
+        blk.finish(ok=False, summary=f"exit {proc.returncode} — {summary}")
+        if check:
+            raise subprocess.CalledProcessError(proc.returncode, cmd, output)
+    else:
+        blk.finish(ok=True)
+
+    class _Result:
+        returncode = proc.returncode
+        stdout = output
+    return _Result()
 
 def check_tool(name, *args):
     """Devuelve True si la herramienta está disponible.
@@ -362,12 +547,6 @@ def build_go(platform_key, version, commit, date):
 
 # ─────────────────────────────────────────────
 #  BUILD: RUST (core + flash)
-#
-#  Rust cross-compilation requiere linkers externos
-#  (ej. gcc-aarch64-linux-gnu en Windows/macOS).
-#  Para evitar fallos, Rust SIEMPRE compila para el
-#  host nativo — sin --target — y solo se incluye en
-#  el instalador de la plataforma host.
 # ─────────────────────────────────────────────
 def _detect_host_platform():
     """Devuelve la platform_key que corresponde al host actual."""
@@ -380,32 +559,424 @@ def _detect_host_platform():
 
 HOST_PLATFORM = _detect_host_platform()
 
-def _has_cross():
-    """Devuelve True si `cross` (cargo-cross) esta disponible en el PATH."""
-    return shutil.which("cross") is not None
+# ─────────────────────────────────────────────────────────────────────────────
+#  CROSS-COMPILATION SIN DOCKER
+#
+#  Estrategia de prioridad (se elige la primera disponible):
+#    1. Nativo  — cargo build sin --target (solo cuando platform == host)
+#    2. zigbuild — cargo zigbuild --target <triple>  ← RECOMENDADO
+#       Instalar: cargo install cargo-zigbuild
+#                 pip install ziglang   (o zig en el PATH)
+#    3. cargo + linker del sistema — cargo build --target con linker externo
+#       Se activa si el linker conocido para el target está en el PATH.
+#       Se escribe .cargo/config.toml automáticamente.
+#    4. Skip con instrucciones detalladas
+#
+#  Linkers soportados por plataforma host:
+#    Windows  →  Linux/BSD targets : zigbuild (recomendado)
+#                Windows ARM64/x86 : MSVC (rustup target add)
+#    Linux    →  todos los targets  : zigbuild o gcc-multilib / gcc-cross
+#    macOS    →  Linux targets      : zigbuild
+#                Apple Silicon/x64  : rustup target add (nativo)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Linker de sistema conocido para cada rust_target.
+# Se busca en el PATH; si está presente se usa cargo --target + config.toml.
+_KNOWN_LINKERS = {
+    "x86_64-unknown-linux-gnu":      "x86_64-linux-gnu-gcc",
+    "aarch64-unknown-linux-gnu":     "aarch64-linux-gnu-gcc",
+    "armv7-unknown-linux-gnueabihf": "arm-linux-gnueabihf-gcc",
+    "i686-unknown-linux-gnu":        "i686-linux-gnu-gcc",
+    "x86_64-unknown-linux-musl":     "x86_64-linux-musl-gcc",
+    "aarch64-unknown-linux-musl":    "aarch64-linux-musl-gcc",
+    "x86_64-unknown-freebsd":        "x86_64-unknown-freebsd-gcc",
+    "aarch64-unknown-freebsd":       "aarch64-unknown-freebsd-gcc",
+    # Windows targets no necesitan linker externo — usan MSVC/lld del host
+    "aarch64-pc-windows-msvc":       None,
+    "i686-pc-windows-msvc":          None,
+    # macOS targets necesitan SDK nativo — no hay linker externo para Windows
+    "x86_64-apple-darwin":           None,
+    "aarch64-apple-darwin":          None,
+}
+
+# Instrucciones de instalación del linker según el SO host
+_LINKER_INSTALL = {
+    "x86_64-linux-gnu-gcc":      "sudo apt install gcc-x86-64-linux-gnu   # Debian/Ubuntu",
+    "aarch64-linux-gnu-gcc":     "sudo apt install gcc-aarch64-linux-gnu  # Debian/Ubuntu",
+    "arm-linux-gnueabihf-gcc":   "sudo apt install gcc-arm-linux-gnueabihf",
+    "i686-linux-gnu-gcc":        "sudo apt install gcc-i686-linux-gnu",
+    "x86_64-linux-musl-gcc":     "sudo apt install musl-tools",
+    "aarch64-linux-musl-gcc":    "sudo apt install musl-tools  # + cross-musl-aarch64",
+}
+
+
+# ── MSVC toolchain detection ──────────────────────────────────────────────────
+# zigbuild no puede usar link.exe (flags incompatibles), así que para targets
+# *-pc-windows-msvc necesitamos la toolchain MSVC nativa del host.
+# Visual Studio instala toolchains por arquitectura en rutas predecibles.
+
+# Arquitectura MSVC por rust_target
+_MSVC_ARCH = {
+    "aarch64-pc-windows-msvc": "arm64",
+    "i686-pc-windows-msvc":    "x86",
+    "x86_64-pc-windows-msvc":  "x64",   # host nativo — siempre disponible
+}
+
+# Rutas base donde buscar vcvarsall.bat / toolchains
+_VS_BASE_PATHS = [
+    r"C:\Program Files\Microsoft Visual Studio2\BuildTools",
+    r"C:\Program Files\Microsoft Visual Studio2\Community",
+    r"C:\Program Files\Microsoft Visual Studio2\Professional",
+    r"C:\Program Files\Microsoft Visual Studio2\Enterprise",
+    r"C:\Program Files (x86)\Microsoft Visual Studio9\BuildTools",
+    r"C:\Program Files (x86)\Microsoft Visual Studio9\Community",
+    r"C:\Program Files (x86)\Microsoft Visual Studio9\Professional",
+    r"C:\Program Files (x86)\Microsoft Visual Studio9\Enterprise",
+]
+
+
+def _find_vcvarsall() -> str | None:
+    """Devuelve la ruta completa a vcvarsall.bat, o None si no se encuentra."""
+    for base in _VS_BASE_PATHS:
+        candidate = os.path.join(base, "VC", "Auxiliary", "Build", "vcvarsall.bat")
+        if os.path.isfile(candidate):
+            return candidate
+    # Fallback: buscar con vswhere.exe
+    vswhere = os.path.join(
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        "Microsoft Visual Studio", "Installer", "vswhere.exe",
+    )
+    if os.path.isfile(vswhere):
+        try:
+            out = subprocess.check_output(
+                [vswhere, "-latest", "-property", "installationPath"],
+                text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+            candidate = os.path.join(out, "VC", "Auxiliary", "Build", "vcvarsall.bat")
+            if os.path.isfile(candidate):
+                return candidate
+        except Exception:
+            pass
+    return None
+
+
+def _msvc_arch_installed(vcvarsall: str, msvc_arch: str) -> bool:
+    """True si la toolchain para msvc_arch está realmente instalada.
+
+    vcvarsall.bat devuelve exit 1 si el componente no está instalado.
+    """
+    try:
+        r = subprocess.run(
+            ["cmd", "/c", f'call "{vcvarsall}" {msvc_arch} >nul 2>&1 && echo ok'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15,
+        )
+        return "ok" in r.stdout
+    except Exception:
+        return False
+
+
+def _msvc_env_for(rust_target: str) -> dict | None:
+    """Devuelve un dict de env vars con el entorno MSVC para rust_target, o None.
+
+    Para el host nativo (x86_64-pc-windows-msvc) siempre devuelve os.environ.
+    Para arm64 / i686 busca vcvarsall.bat y lo invoca con la arch correcta.
+    """
+    if rust_target == "x86_64-pc-windows-msvc":
+        return dict(os.environ)   # host nativo — ya está configurado
+
+    msvc_arch = _MSVC_ARCH.get(rust_target)
+    if not msvc_arch:
+        return None
+
+    vcvarsall = _find_vcvarsall()
+    if not vcvarsall:
+        return None
+
+    if not _msvc_arch_installed(vcvarsall, msvc_arch):
+        return None
+
+    # Capturar el entorno tras invocar vcvarsall
+    try:
+        out = subprocess.check_output(
+            ["cmd", "/c", f'call "{vcvarsall}" {msvc_arch} && set'],
+            text=True, stderr=subprocess.DEVNULL, timeout=30,
+        )
+        env = dict(os.environ)
+        for line in out.splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                env[k.strip()] = v.strip()
+        return env
+    except Exception:
+        return None
+
+
+def _msvc_install_hint(rust_target: str) -> None:
+    """Imprime instrucciones para instalar la toolchain MSVC necesaria."""
+    msvc_arch = _MSVC_ARCH.get(rust_target, "?")
+    arch_label = {
+        "arm64": "MSVC ARM64 build tools",
+        "x86":   "MSVC x86 build tools",
+        "x64":   "MSVC x64 build tools (deberían estar instalados)",
+    }.get(msvc_arch, msvc_arch)
+
+    warn(f"  Para compilar {rust_target} necesitas: {arch_label}")
+    warn("  Abre Visual Studio Installer → Modify → Individual components:")
+    if msvc_arch == "arm64":
+        warn("    ✓ MSVC v143 ARM64 build tools  (o v142 si usas VS 2019)")
+        warn("    ✓ C++ ARM64 Spectre-mitigated libs  (opcional pero recomendado)")
+        warn("  Alternatively: winget install Microsoft.VisualStudio.2022.BuildTools")
+        warn("    -- add: --add Microsoft.VisualStudio.Component.VC.Tools.ARM64")
+    elif msvc_arch == "x86":
+        warn("    ✓ MSVC v143 x86/x64 build tools")
+        warn("    ✓ Windows 10/11 SDK")
+
+
+def _cargo_subcommand_exists(subcmd):
+    """True si `cargo <subcmd> --help` no falla (el subcomando está instalado)."""
+    try:
+        r = subprocess.run(
+            ["cargo", subcmd, "--help"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return r.returncode == 0
+    except OSError:
+        return False
+
+
+def _has_zigbuild():
+    """True si cargo-zigbuild está instalado y accesible."""
+    # Caso 1: cargo-zigbuild en PATH (instalado como binario independiente)
+    if shutil.which("cargo-zigbuild") is not None:
+        return True
+    # Caso 2: registrado como subcomando de cargo
+    if _cargo_subcommand_exists("zigbuild"):
+        return True
+    # Caso 3: en ~/.cargo/bin que puede no estar en PATH del proceso Python
+    cargo_bin = _cargo_bin_dir()
+    if cargo_bin:
+        ext = ".exe" if platform.system().lower() == "windows" else ""
+        if os.path.isfile(os.path.join(cargo_bin, f"cargo-zigbuild{ext}")):
+            # Añadir al PATH del proceso para que shutil.which lo encuentre después
+            os.environ["PATH"] = cargo_bin + os.pathsep + os.environ.get("PATH", "")
+            return True
+    return False
+
+
+def _has_zig():
+    """True si zig está en el PATH (requerido por cargo-zigbuild)."""
+    if shutil.which("zig") is not None:
+        return True
+    # Buscar en scripts de pip / site-packages (pip install ziglang instala aquí)
+    try:
+        import ziglang  # type: ignore
+        zig_bin = os.path.join(os.path.dirname(ziglang.__file__), "zig")
+        ext = ".exe" if platform.system().lower() == "windows" else ""
+        zig_exe = zig_bin + ext
+        if os.path.isfile(zig_exe):
+            os.environ["PATH"] = os.path.dirname(zig_exe) + os.pathsep + os.environ.get("PATH", "")
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+def _cargo_bin_dir():
+    """Devuelve el directorio de binarios de cargo (~/.cargo/bin), o None."""
+    # CARGO_HOME env override
+    cargo_home = os.environ.get("CARGO_HOME")
+    if cargo_home:
+        d = os.path.join(cargo_home, "bin")
+        return d if os.path.isdir(d) else None
+    home = os.path.expanduser("~")
+    d = os.path.join(home, ".cargo", "bin")
+    return d if os.path.isdir(d) else None
+
+
+# Evita preguntar "¿instalar zigbuild?" más de una vez por sesión de build.
+_ZIGBUILD_INSTALL_ATTEMPTED = False
+
+
+def _ensure_zigbuild(auto_install=True):
+    """Instala cargo-zigbuild y ziglang si no están disponibles.
+
+    Con auto_install=True pregunta al usuario antes de instalar (solo una vez
+    por sesión aunque haya varios targets que lo necesiten).
+    Devuelve True si zigbuild+zig están listos para usar.
+    """
+    global _ZIGBUILD_INSTALL_ATTEMPTED
+
+    needs_zigbuild = not _has_zigbuild()
+    needs_zig      = not _has_zig()
+
+    if not needs_zigbuild and not needs_zig:
+        return True  # ya todo OK
+
+    if not auto_install or _ZIGBUILD_INSTALL_ATTEMPTED:
+        return False  # ya se intentó o no se quiere instalar
+
+    _ZIGBUILD_INSTALL_ATTEMPTED = True  # marcar antes de preguntar
+
+    # ── Anunciar qué falta ────────────────────────────────────────────────────
+    warn("cross-compilation requiere cargo-zigbuild y ziglang (zig).")
+    if needs_zigbuild:
+        warn("  cargo-zigbuild NO encontrado")
+    if needs_zig:
+        warn("  zig / ziglang NO encontrado")
+
+    print()
+    print(f"  {BOLD}Instalar automáticamente ahora?{RESET}")
+    if needs_zigbuild:
+        print("    cargo install cargo-zigbuild")
+    if needs_zig:
+        print("    pip install ziglang")
+    print()
+    ans = input("  [S/n] ").strip().lower()
+    if ans not in ("", "s", "si", "y", "yes"):
+        warn("Instalación cancelada — los targets remotos se omitirán.")
+        return False
+
+    ok = True
+
+    if needs_zigbuild:
+        step("Instalando cargo-zigbuild…")
+        r = subprocess.run(["cargo", "install", "cargo-zigbuild"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if r.returncode != 0:
+            error(f"cargo install cargo-zigbuild falló:\n{r.stdout[-800:]}")
+            ok = False
+        else:
+            info("cargo-zigbuild instalado correctamente")
+            # Refrescar PATH por si el binario acaba de aparecer
+            cbd = _cargo_bin_dir()
+            if cbd:
+                os.environ["PATH"] = cbd + os.pathsep + os.environ.get("PATH", "")
+
+    if needs_zig:
+        step("Instalando ziglang via pip…")
+        pip = shutil.which("pip3") or shutil.which("pip") or "pip"
+        r = subprocess.run([pip, "install", "ziglang"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if r.returncode != 0:
+            error(f"pip install ziglang falló:\n{r.stdout[-800:]}")
+            ok = False
+        else:
+            info("ziglang instalado correctamente")
+            # Forzar re-detección
+            _has_zig()
+
+    # Verificar que ahora están disponibles
+    if ok and _has_zigbuild() and _has_zig():
+        info("cargo-zigbuild + zig listos ✓")
+        return True
+    elif ok:
+        warn("Instalación completada pero no se detectan en el PATH.")
+        warn("Abre una terminal nueva y ejecuta el build de nuevo.")
+        return False
+    return False
+
+
+def _system_linker_for(rust_target):
+    """Devuelve el nombre del linker del sistema si está disponible, o None."""
+    linker = _KNOWN_LINKERS.get(rust_target)
+    if linker and shutil.which(linker):
+        return linker
+    return None
+
+
+def _rustup_has_target(rust_target):
+    """True si el target ya está instalado en rustup."""
+    try:
+        out = subprocess.check_output(
+            ["rustup", "target", "list", "--installed"],
+            stderr=subprocess.DEVNULL, text=True,
+        )
+        return rust_target in out
+    except Exception:
+        return False
+
+
+def _ensure_rustup_target(rust_target):
+    """Instala el target de rustup si no está presente. Devuelve True si OK."""
+    if _rustup_has_target(rust_target):
+        info(f"  rustup target ya instalado: {rust_target}")
+        return True
+    step(f"Instalando rustup target: {rust_target}")
+    result = subprocess.run(
+        ["rustup", "target", "add", rust_target],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    if result.returncode != 0:
+        warn(f"  rustup target add falló:\n{result.stdout}")
+        return False
+    info(f"  rustup target instalado: {rust_target}")
+    return True
+
+
+def _write_cargo_config(rust_target, linker):
+    """Escribe/actualiza .cargo/config.toml en PROJECT_ROOT con el linker indicado.
+
+    Solo añade la entrada del target si no existe ya — no sobreescribe otros targets.
+    """
+    import re
+    config_dir  = os.path.join(PROJECT_ROOT, ".cargo")
+    config_path = os.path.join(config_dir, "config.toml")
+    os.makedirs(config_dir, exist_ok=True)
+
+    existing = ""
+    if os.path.exists(config_path):
+        with open(config_path, encoding="utf-8") as f:
+            existing = f.read()
+
+    section_header = f'[target.{rust_target}]'
+    if section_header in existing:
+        info(f"  .cargo/config.toml ya tiene sección para {rust_target}")
+        return
+
+    entry = f'\n[target.{rust_target}]\nlinker = "{linker}"\n'
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write(entry)
+    info(f"  .cargo/config.toml actualizado → linker = {linker!r} para {rust_target}")
+
+
+def _collect_cross_binaries(rust_target, platform_key, ext):
+    """Copia los binarios desde target/{rust_target}/release/ a BUILD_DIR."""
+    src_base = os.path.join(FLASH_DIR, "target", rust_target, "release")
+    results = []
+    for name in [CORE_BINARY, FLASH_BINARY]:
+        src = os.path.join(src_base, f"{name}{ext}")
+        dst = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
+        if not os.path.isfile(src):
+            warn(f"  Binario no encontrado tras cross-build: {src}")
+            results.append(None)
+            continue
+        shutil.copy(src, dst)
+        info(f"Rust binary → {os.path.basename(dst)}")
+        results.append(dst)
+    core_out  = results[0] if results else None
+    flash_out = results[1] if len(results) > 1 else None
+    return core_out, flash_out
 
 
 def build_rust(platform_key, force_cross=False):
-    """Compila los binarios Rust.
+    """Compila los binarios Rust sin Docker.
 
-    Estrategia de compilacion:
-      1. Host nativo          -> cargo build --release  (sin --target, mas rapido)
-      2. Cross via `cross`    -> cross build --release --target <triple>
-         Requiere Docker + `cargo install cross`.
-         Se activa automaticamente si la plataforma tiene "cross": True
-         y `cross` esta en el PATH, o si se pasa force_cross=True.
-      3. Sin herramienta      -> avisa y devuelve None, None
-
-    La clave "cross" en PLATFORMS indica si la plataforma *necesita*
-    cross-compilacion (no es el host nativo).
+    Estrategia (primera disponible):
+      1. Nativo   — cargo build --release  (solo si platform == HOST_PLATFORM)
+      2. zigbuild — cargo zigbuild --target <triple>  (no necesita Docker)
+         Requiere: cargo install cargo-zigbuild  +  pip install ziglang
+      3. cargo   — cargo build --target <triple>  (necesita linker del sistema
+         configurado en .cargo/config.toml — se escribe automáticamente)
+      4. Skip con instrucciones de instalación
     """
-    plat = PLATFORMS[platform_key]
-    ext  = ".exe" if plat["goos"] == "windows" else ""
-    needs_cross = plat.get("cross", False) and platform_key != HOST_PLATFORM
+    plat        = PLATFORMS[platform_key]
+    ext         = ".exe" if plat["goos"] == "windows" else ""
+    rust_target = plat["rust_target"]
+    needs_cross = platform_key != HOST_PLATFORM
 
-    # -- Caso 1: compilacion nativa ----------------------------------------
-    if not needs_cross and platform_key == HOST_PLATFORM:
-        step(f"Compilando Rust (nativo) -> {platform_key}")
+    # ── 1. Compilación nativa ─────────────────────────────────────────────────
+    if not needs_cross:
+        step(f"Compilando Rust (nativo) → {platform_key}")
         run(["cargo", "build", "--release"], cwd=FLASH_DIR)
         src_base = os.path.join(FLASH_DIR, "target", "release")
         results = []
@@ -413,55 +984,532 @@ def build_rust(platform_key, force_cross=False):
             src = os.path.join(src_base, f"{name}{ext}")
             dst = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
             shutil.copy(src, dst)
-            info(f"Rust binary -> {os.path.basename(dst)}")
+            info(f"Rust binary → {os.path.basename(dst)}")
             results.append(dst)
         return results[0], results[1]
 
-    # -- Caso 2: cross-compilacion con `cross` o `cargo --target` -----------
-    rust_target = plat["rust_target"]
+    # ── 2a. MSVC targets: cargo nativo (zigbuild no soporta link.exe) ──────────
+    # zigbuild usa zig como linker, pero zig no habla el protocolo de link.exe
+    # (flags /NOLOGO, /SAFESEH, etc.) → falla siempre en *-pc-windows-msvc.
+    # Estos targets requieren la toolchain MSVC del propio host Windows.
+    is_msvc = rust_target.endswith("-pc-windows-msvc")
+    if is_msvc:
+        step(f"Compilando Rust (cargo MSVC) → {platform_key}  [{rust_target}]")
+        # Necesita ARM64/x86 build tools instalados en Visual Studio
+        msvc_env = _msvc_env_for(rust_target)
+        if msvc_env is None:
+            warn(f"  Toolchain MSVC para {rust_target} no encontrado.")
+            _msvc_install_hint(rust_target)
+            return None, None
+        if not _ensure_rustup_target(rust_target):
+            warn(f"  rustup target add {rust_target} falló — saltando {platform_key}")
+            return None, None
+        try:
+            run(["cargo", "build", "--release", "--target", rust_target],
+                cwd=FLASH_DIR, env=msvc_env)
+            return _collect_cross_binaries(rust_target, platform_key, ext)
+        except subprocess.CalledProcessError as e:
+            warn(f"  cargo build MSVC falló (exit={e.returncode})")
+            return None, None
 
-    if _has_cross() or force_cross:
-        tool = "cross" if _has_cross() else "cargo"
-        step(f"Compilando Rust (cross/{tool}) -> {platform_key}  [{rust_target}]")
-        if tool == "cross":
-            info("  Usando `cross` (Docker). Asegurate de que Docker esta corriendo.")
+    # ── 2b. cargo-zigbuild (non-MSVC: Linux, macOS, GNU, FreeBSD) ────────────
+    if not _has_zigbuild() or not _has_zig():
+        _ensure_zigbuild(auto_install=True)
+
+    if _has_zigbuild() and _has_zig():
+        step(f"Compilando Rust (zigbuild) → {platform_key}  [{rust_target}]")
+        if not _ensure_rustup_target(rust_target):
+            warn(f"  No se pudo instalar el rustup target {rust_target} — saltando zigbuild")
         else:
-            info(f"  Usando `cargo --target {rust_target}`.")
-            info("  Asegurate de tener el toolchain: rustup target add " + rust_target)
+            try:
+                run(["cargo", "zigbuild", "--release", "--target", rust_target],
+                    cwd=FLASH_DIR)
+                return _collect_cross_binaries(rust_target, platform_key, ext)
+            except subprocess.CalledProcessError as e:
+                warn(f"  cargo zigbuild falló (exit={e.returncode}) — intentando siguiente estrategia")
 
-        run([tool, "build", "--release", "--target", rust_target], cwd=FLASH_DIR)
-        src_base = os.path.join(FLASH_DIR, "target", rust_target, "release")
-        results = []
-        for name in [CORE_BINARY, FLASH_BINARY]:
-            src = os.path.join(src_base, f"{name}{ext}")
-            dst = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
-            if not os.path.isfile(src):
-                warn(f"  Binario no encontrado tras cross-build: {src}")
-                results.append(None)
-                continue
-            shutil.copy(src, dst)
-            info(f"Rust binary -> {os.path.basename(dst)}")
-            results.append(dst)
-        core_out  = results[0] if results else None
-        flash_out = results[1] if len(results) > 1 else None
-        return core_out, flash_out
+    # ── 3. cargo --target con linker del sistema ──────────────────────────────
+    linker = _system_linker_for(rust_target)
 
-    # -- Caso 3: sin herramienta de cross-compilacion ----------------------
+    if linker:
+        step(f"Compilando Rust (cargo --target) → {platform_key}  [{rust_target}]")
+        _write_cargo_config(rust_target, linker)
+        info(f"  linker del sistema: {linker}")
+        if not _ensure_rustup_target(rust_target):
+            warn(f"  rustup target add falló — saltando {platform_key}")
+            return None, None
+        try:
+            run(["cargo", "build", "--release", "--target", rust_target],
+                cwd=FLASH_DIR)
+            return _collect_cross_binaries(rust_target, platform_key, ext)
+        except subprocess.CalledProcessError as e:
+            warn(f"  cargo build --target falló (exit={e.returncode})")
+
+    # ── 4. Sin herramienta disponible — instrucciones ────────────────────────
+    known_linker  = _KNOWN_LINKERS.get(rust_target)
+    linker_install = _LINKER_INSTALL.get(known_linker or "", "")
+
+    host_os = platform.system().lower()
+    if host_os == "windows":
+        cross_hint = (
+            "  En Windows, la forma más sencilla sin Docker es cargo-zigbuild:\n"
+            "    cargo install cargo-zigbuild\n"
+            "    pip install ziglang\n"
+            f"    rustup target add {rust_target}\n"
+            f"    cargo zigbuild --release --target {rust_target}"
+        )
+    elif host_os == "linux":
+        linker_cmd = f"\n    {linker_install}" if linker_install else ""
+        cross_hint = (
+            "  Opciones en Linux:\n"
+            "  A) cargo-zigbuild (sin linker externo):\n"
+            "       cargo install cargo-zigbuild && pip install ziglang\n"
+            f"       rustup target add {rust_target}\n"
+            f"       cargo zigbuild --release --target {rust_target}\n"
+            f"  B) Linker del sistema:{linker_cmd or ' (no hay linker conocido para este target)'}\n"
+            f"       rustup target add {rust_target}\n"
+            f"       cargo build --release --target {rust_target}"
+        )
+    else:  # macOS
+        cross_hint = (
+            "  En macOS usa cargo-zigbuild para targets Linux/Windows:\n"
+            "    cargo install cargo-zigbuild\n"
+            "    pip install ziglang\n"
+            f"    rustup target add {rust_target}\n"
+            f"    cargo zigbuild --release --target {rust_target}"
+        )
+
     warn(
         f"Rust omitido para {platform_key} (host={HOST_PLATFORM}).\n"
-        f"  Opciones para compilar este target:\n"
-        f"  A) Instala `cross` (recomendado, usa Docker):\n"
-        f"       cargo install cross\n"
-        f"  B) Instala el toolchain y linker manualmente:\n"
-        f"       rustup target add {rust_target}\n"
-        f"       # + linker del sistema (ej. aarch64-linux-gnu-gcc, mingw-w64)\n"
-        f"  C) Ejecuta el build directamente en la maquina objetivo."
+        f"  No se encontró herramienta de cross-compilación para [{rust_target}].\n"
+        f"{cross_hint}"
     )
     return None, None
 
-# ─────────────────────────────────────────────
-#  BUILD: TAURI IDE  (solo host actual)
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  BUILD: TAURI IDE
+#
+#  Cross-compilation strategy:
+#    Mismo OS, distinta arch  →  zigbuild (CARGO=cargo-zigbuild)
+#    macOS universal          →  --target universal-apple-darwin  (lipo automático)
+#    Windows → Linux          →  WSL automático (si está disponible)
+#    Otros cross-OS           →  skip con instrucciones
+#
+#  WSL (Windows Subsystem for Linux):
+#    Permite compilar targets Linux desde Windows sin Docker.
+#    Las dependencias nativas (webkit2gtk, gtk3, etc.) se instalan en WSL
+#    automáticamente la primera vez. El código fuente se monta vía /mnt/c/.
+#    El binario resultante se copia de vuelta a Windows.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── WSL helpers ───────────────────────────────────────────────────────────────
+
+# Paquetes APT requeridos por Tauri en Linux (Ubuntu 22.04+)
+_TAURI_APT_DEPS = (
+    "libwebkit2gtk-4.0-dev libgtk-3-dev libsoup2.4-dev "
+    "libssl-dev libayatana-appindicator3-dev librsvg2-dev "
+    "libglib2.0-dev build-essential curl wget file pkg-config"
+)
+
+# Marcar si ya instalamos deps en esta sesión (evitar repetir por cada target)
+_WSL_DEPS_INSTALLED: dict = {}   # distro → True/False
+
+# ── Distro preferida: Ubuntu.  Se busca en este orden. ───────────────────────
+_WSL_PREFERRED_DISTROS = ["Ubuntu", "Ubuntu-22.04", "Ubuntu-20.04", "Ubuntu-24.04", "Debian"]
+
+# Shell bootstrap que siempre carga ~/.cargo/env antes de ejecutar
+# (necesario porque rustup instala en ~/.cargo/bin que no está en PATH por defecto)
+_WSL_SHELL_INIT = (
+    '[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"; '
+    'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; '
+)
+
+
+def _wsl_find_ubuntu() -> str | None:
+    """Devuelve el nombre de la distro Ubuntu preferida, o None si no hay ninguna."""
+    try:
+        out = subprocess.check_output(
+            ["wsl", "--list", "--quiet"],
+            stderr=subprocess.DEVNULL, timeout=8, text=False,
+        )
+        decoded = out.decode("utf-16-le", errors="replace").strip()
+        distros = [
+            l.strip().rstrip("\x00").replace("(Default)", "").replace("(Predeterminado)", "").strip()
+            for l in decoded.splitlines()
+            if l.strip()
+        ]
+        distros = [d for d in distros if d]
+        # Devolver el primero que coincida con la lista de preferencias
+        for preferred in _WSL_PREFERRED_DISTROS:
+            for d in distros:
+                if d.lower().startswith(preferred.lower()):
+                    return d
+        # Si no hay Ubuntu/Debian, devolver la primera disponible
+        return distros[0] if distros else None
+    except Exception:
+        return None
+
+
+def _has_wsl() -> bool:
+    """True si WSL con Ubuntu (u otra distro Debian-based) está disponible."""
+    if platform.system().lower() != "windows":
+        return False
+    distro = _wsl_find_ubuntu()
+    if not distro:
+        return False
+    # Verificar que la distro responde
+    try:
+        r = subprocess.run(
+            ["wsl", "-d", distro, "--", "echo", "ok"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _win_to_wsl_path(win_path: str) -> str:
+    """Convierte 'C:\\foo\\bar' → '/mnt/c/foo/bar'."""
+    p = win_path.replace("\\", "/").replace("\\\\", "/")
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[0].lower()
+        rest  = p[2:].lstrip("/")
+        return f"/mnt/{drive}/{rest}"
+    return p
+
+
+def _wsl_run(cmd_str: str, cwd_win: str | None = None, env_extra: dict | None = None,
+             distro: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    """Ejecuta cmd_str en Ubuntu WSL.
+
+    - Siempre usa -d <distro> para apuntar a Ubuntu (nunca la default aleatoria)
+    - Siempre inyecta _WSL_SHELL_INIT para cargar ~/.cargo/env
+    - Fuerza PATH limpio de Linux (descarta el PATH de Windows montado)
+    """
+    # Resolver distro: argumento > Ubuntu encontrado > default
+    target_distro = distro or _wsl_find_ubuntu()
+
+    cwd_wsl = _win_to_wsl_path(cwd_win) if cwd_win else None
+
+    env_lines = _WSL_SHELL_INIT
+    # Aislar PATH de Windows (los montajes /mnt/c/ traen npm.CMD, etc.)
+    env_lines += (
+        'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin'
+        ':/usr/sbin:/usr/bin:/sbin:/bin"; '
+    )
+    if env_extra:
+        for k, v in env_extra.items():
+            env_lines += f'export {k}="{v}"; '
+
+    cd_part = f'cd "{cwd_wsl}" && ' if cwd_wsl else ""
+    full    = f"{env_lines}{cd_part}{cmd_str}"
+
+    wsl_argv = ["wsl"]
+    if target_distro:
+        wsl_argv += ["-d", target_distro]
+    wsl_argv += ["--", "bash", "-lc", full]
+
+    label = f"[WSL/{target_distro or 'default'}] $ {cmd_str[:100]}{'…' if len(cmd_str) > 100 else ''}"
+    print(f"  {label}")
+    result = subprocess.run(
+        wsl_argv,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    output = result.stdout or ""
+    lines  = output.strip().splitlines()
+
+    if result.returncode != 0:
+        sep = "─" * 60
+        print(f"\n{RED}{sep}")
+        print(f"  WSL FALLO (exit={result.returncode}): {cmd_str[:80]}")
+        print(f"{sep}{RESET}")
+        for line in lines:
+            print(f"    {line}")
+        print()
+        if check:
+            raise subprocess.CalledProcessError(result.returncode, wsl_argv, output)
+    else:
+        for line in lines[-12:]:
+            print(f"    {line}")
+
+    return result
+
+
+def _wsl_tool_exists(tool: str, distro: str | None = None) -> bool:
+    """True si `tool` está en el PATH de Linux dentro de WSL (ignorando /mnt/c/)."""
+    try:
+        # which busca solo en el PATH limpio inyectado por _wsl_run
+        r = _wsl_run(f"which {tool} 2>/dev/null", distro=distro, check=False)
+        if r.returncode != 0:
+            return False
+        path = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+        # Rechazar si apunta a un montaje de Windows
+        return bool(path) and not path.startswith("/mnt/")
+    except Exception:
+        return False
+
+
+def _wsl_ensure_cc(distro: str | None = None) -> bool:
+    """Instala gcc/build-essential en WSL (requerido por rustup link step)."""
+    if _wsl_tool_exists("cc", distro) or _wsl_tool_exists("gcc", distro):
+        return True
+    step("  WSL: instalando gcc / build-essential…")
+    try:
+        _wsl_run(
+            "sudo apt-get update -qq && sudo apt-get install -y build-essential",
+            distro=distro,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        warn("  WSL: no se pudo instalar build-essential")
+        return False
+
+
+def _wsl_ensure_rust(distro: str | None = None) -> bool:
+    """Instala rustup + cargo en WSL si no están presentes."""
+    if _wsl_tool_exists("cargo", distro):
+        info("  WSL: cargo ya instalado")
+        return True
+    # gcc es necesario para el linker de rustup
+    _wsl_ensure_cc(distro)
+    step("  WSL: instalando rustup…")
+    try:
+        _wsl_run(
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
+            "| sh -s -- -y 2>&1",
+            distro=distro,
+        )
+        # Verificar que cargo ya es visible (el init script lo carga)
+        if _wsl_tool_exists("cargo", distro):
+            info("  WSL: rustup instalado correctamente")
+            return True
+        warn("  WSL: cargo instalado pero no encontrado en PATH — puede requerir reiniciar WSL")
+        return False
+    except subprocess.CalledProcessError:
+        warn("  WSL: rustup install falló")
+        return False
+
+
+def _wsl_ensure_node(distro: str | None = None) -> bool:
+    """Instala Node.js/npm en WSL vía NodeSource (ignora npm.CMD de Windows)."""
+    if _wsl_tool_exists("npm", distro):
+        info("  WSL: npm Linux ya instalado")
+        return True
+    step("  WSL: instalando Node.js LTS (NodeSource)…")
+    try:
+        _wsl_run(
+            "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - "
+            "&& sudo apt-get install -y nodejs",
+            distro=distro,
+        )
+        if _wsl_tool_exists("npm", distro):
+            info("  WSL: Node.js instalado correctamente")
+            return True
+        warn("  WSL: npm no encontrado tras instalar Node.js")
+        return False
+    except subprocess.CalledProcessError:
+        warn("  WSL: Node.js install falló")
+        return False
+
+
+def _wsl_ensure_tauri_deps(distro: str | None = None) -> bool:
+    """Instala las dependencias nativas de Tauri en Ubuntu WSL."""
+    global _WSL_DEPS_INSTALLED
+    key = distro or "__default__"
+    if _WSL_DEPS_INSTALLED.get(key):
+        return True
+
+    step("  WSL: instalando dependencias nativas de Tauri (webkit2gtk, gtk3…)…")
+    try:
+        _wsl_run(
+            f"DEBIAN_FRONTEND=noninteractive sudo -E apt-get update -qq "
+            f"&& DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "
+            f"--no-install-recommends {_TAURI_APT_DEPS}",
+            distro=distro,
+        )
+        _WSL_DEPS_INSTALLED[key] = True
+        info("  WSL: dependencias de Tauri instaladas")
+        return True
+    except subprocess.CalledProcessError:
+        warn("  WSL: apt-get install falló.")
+        warn("  Ejecuta manualmente en Ubuntu WSL:")
+        warn(f"    sudo apt-get install -y {_TAURI_APT_DEPS}")
+        return False
+
+
+def _wsl_ensure_zigbuild(distro: str | None = None) -> bool:
+    """Instala cargo-zigbuild + zig en WSL si no están (no bloqueante)."""
+    has_zb = _wsl_tool_exists("cargo-zigbuild", distro)
+    has_z  = _wsl_tool_exists("zig", distro)
+    if has_zb and has_z:
+        return True
+    try:
+        if not has_zb:
+            _wsl_run("cargo install cargo-zigbuild", distro=distro)
+        if not has_z:
+            _wsl_run("pip3 install ziglang 2>/dev/null || pip install ziglang 2>/dev/null || true",
+                     distro=distro)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _wsl_rustup_target(rust_target: str, distro: str | None = None) -> bool:
+    """Añade el rustup target dentro de WSL."""
+    try:
+        _wsl_run(f"rustup target add {rust_target}", distro=distro, check=False)
+        return True
+    except Exception:
+        return False
+
+
+def _wsl_build_tauri(platform_key: str, version: str) -> tuple[str | None, str | None]:
+    """Compila la IDE Tauri para platform_key usando WSL.
+
+    Se usa cuando:
+      - El host es Windows
+      - El target es Linux (webkit2gtk solo disponible en Linux)
+      - WSL está disponible
+
+    Devuelve (ide_bundle_dir_windows, exe_name) o (None, None) si falla.
+    """
+    plat        = PLATFORMS[platform_key]
+    rust_target = plat["rust_target"]
+
+    distro = _wsl_default_distro()
+    step(f"Compilando Tauri IDE vía WSL → {platform_key}  [{rust_target}]")
+    if distro:
+        info(f"  Distro WSL: {distro}")
+    else:
+        warn("  No se encontró distro WSL por defecto — usando WSL sin -d")
+
+    # ── Asegurar herramientas en WSL ─────────────────────────────────────────
+    if not _wsl_ensure_rust(distro):
+        warn("  WSL: cargo no disponible — abortando build WSL")
+        return None, None
+
+    if not _wsl_ensure_node(distro):
+        warn("  WSL: npm no disponible — abortando build WSL")
+        return None, None
+
+    if not _wsl_ensure_tauri_deps(distro):
+        warn("  WSL: dependencias nativas no instaladas — abortando build WSL")
+        return None, None
+
+    # cargo-zigbuild en WSL (para targets arm64/arm dentro de Linux)
+    _wsl_ensure_zigbuild(distro)
+
+    # rustup target
+    _wsl_rustup_target(rust_target, distro)
+
+    # ── Paths ───────────────────────────────────────────────────────────────
+    ide_dir_win  = IDE_DIR                         # Windows path
+    ide_dir_wsl  = _win_to_wsl_path(ide_dir_win)  # /mnt/c/...
+    proj_dir_wsl = _win_to_wsl_path(PROJECT_ROOT)
+
+    # Patch Cargo.toml version (desde Windows — el archivo es compartido)
+    ide_cargo = os.path.join(IDE_DIR, "src-tauri", "Cargo.toml")
+    if _patch_cargo_version(ide_cargo, version):
+        info(f"  ide/src-tauri/Cargo.toml → version = \"{version}\"")
+
+    # ── npm install en WSL ───────────────────────────────────────────────────
+    # node_modules de Windows no sirven para Linux; necesitamos los Linux bindings
+    # Usamos --prefix para no pisar el node_modules de Windows
+    wsl_nm = f"{ide_dir_wsl}/.node_modules_wsl"
+    step("  WSL: npm install (Linux bindings)…")
+    try:
+        _wsl_run(
+            f"npm install --prefix \"{wsl_nm}\"",
+            cwd_win=IDE_DIR, distro=distro,
+        )
+    except subprocess.CalledProcessError as e:
+        warn(f"  WSL: npm install falló (exit={e.returncode})")
+        return None, None
+
+    # ── tauri build en WSL ───────────────────────────────────────────────────
+    # CARGO_BUILD_TARGET y NODE_PATH para usar el node_modules de WSL
+    step(f"  WSL: tauri build --target {rust_target}…")
+    env_extra = {
+        "NODE_PATH": f"{wsl_nm}/node_modules",
+        "npm_config_prefix": wsl_nm,
+        "CGO_ENABLED": "0",
+    }
+    # Usar cargo-zigbuild si está disponible en WSL (para arm64 dentro de Linux)
+    if _wsl_tool_exists("cargo-zigbuild", distro):
+        env_extra["CARGO"] = "cargo-zigbuild"
+
+    try:
+        _wsl_run(
+            f"npm --prefix \"{wsl_nm}\" run tauri build -- --target {rust_target}",
+            cwd_win=IDE_DIR, distro=distro, env_extra=env_extra,
+        )
+    except subprocess.CalledProcessError as e:
+        warn(f"  WSL: tauri build falló (exit={e.returncode})")
+        return None, None
+
+    # ── Localizar el binario resultante ──────────────────────────────────────
+    # Tauri escribe el binario en src-tauri/target/<rust_target>/release/
+    # Ese path está en /mnt/c/... en WSL, pero también accesible desde Windows
+    release_dir = os.path.join(IDE_DIR, "src-tauri", "target", rust_target, "release")
+    exe_name    = "tsuki-ide"   # Linux — sin extensión
+
+    exe_src = None
+    if os.path.isfile(os.path.join(release_dir, exe_name)):
+        exe_src = os.path.join(release_dir, exe_name)
+    else:
+        # Fallback: cualquier ejecutable sin extensión
+        if os.path.isdir(release_dir):
+            for f in os.listdir(release_dir):
+                fp = os.path.join(release_dir, f)
+                if os.path.isfile(fp) and "." not in f and not f.startswith("."):
+                    exe_src  = fp
+                    exe_name = f
+                    break
+
+    if not exe_src:
+        warn(f"  WSL: ejecutable no encontrado en {release_dir}")
+        return None, None
+
+    # Copiar a BUILD_DIR (también compartido — accesible desde Windows)
+    dst = os.path.join(BUILD_DIR, f"ide-{platform_key}")
+    os.makedirs(dst, exist_ok=True)
+    shutil.copy(exe_src, os.path.join(dst, exe_name))
+    info(f"  WSL: Tauri IDE → {dst}/{exe_name}")
+    return dst, exe_name
+
+
+def _tauri_same_os_arch_pairs():
+    """Devuelve los platform_keys del mismo OS que el host pero distinta arch."""
+    host_goos = PLATFORMS[HOST_PLATFORM]["goos"]
+    viable = []
+    for pk, plat in PLATFORMS.items():
+        if pk == HOST_PLATFORM:
+            continue
+        if plat["goos"] != host_goos:
+            continue
+        viable.append(pk)
+    return viable
+
+
+def _tauri_can_cross(platform_key: str) -> bool:
+    """True si build_tauri puede intentar compilar para platform_key desde el host.
+
+    Retorna True si:
+      - Es el host nativo
+      - Mismo OS, distinta arch
+      - Windows → Linux Y WSL disponible
+    """
+    if platform_key == HOST_PLATFORM:
+        return True
+    host_goos   = PLATFORMS[HOST_PLATFORM]["goos"]
+    target_goos = PLATFORMS[platform_key]["goos"]
+    if host_goos == target_goos:
+        return True   # Mismo OS, distinta arch
+    # Windows → Linux con WSL
+    if host_goos == "windows" and target_goos == "linux" and _has_wsl():
+        return True
+    return False
 
 def _patch_cargo_version(cargo_path, version):
     """Actualiza version = \"X.Y.Z\" en un Cargo.toml.
@@ -485,93 +1533,75 @@ def _patch_cargo_version(cargo_path, version):
     return True
 
 
-# ─────────────────────────────────────────────
-#  BUILD: tsuki-webkit  (Rust, libs/tsuki-webkit/)
-#
-#  Compiles the JSX→HTML/CSS/JS compiler for ESP8266/ESP32.
-#  Same cross-compilation strategy as build_rust:
-#    - Native host → cargo build --release (fast)
-#    - Cross       → cross build (if available)
-#    - Skip        → warn and return None
-# ─────────────────────────────────────────────
-def build_webkit(platform_key, force_cross=False):
-    """Compila tsuki-webkit y copia el binario a dist/.
-
-    Devuelve la ruta al binario copiado, o None si falla / se omite.
-    """
-    if not os.path.isdir(WEBKIT_DIR):
-        warn(f"libs/tsuki-webkit/ no existe — omitiendo compilación de tsuki-webkit")
-        warn("  Crea el directorio o ejecuta: git submodule update --init")
-        return None
-
-    plat        = PLATFORMS[platform_key]
-    ext         = ".exe" if plat["goos"] == "windows" else ""
-    needs_cross = plat.get("cross", False) and platform_key != HOST_PLATFORM
-
-    # -- Compilación nativa --------------------------------------------------
-    if not needs_cross and platform_key == HOST_PLATFORM:
-        step(f"Compilando tsuki-webkit (nativo) → {platform_key}")
-        try:
-            run(["cargo", "build", "--release"], cwd=WEBKIT_DIR)
-        except subprocess.CalledProcessError as e:
-            warn(f"tsuki-webkit build falló para {platform_key} (exit={e.returncode}) — omitiendo")
-            return None
-
-        src = os.path.join(WEBKIT_DIR, "target", "release", f"{WEBKIT_BINARY}{ext}")
-        dst = os.path.join(BUILD_DIR, f"{WEBKIT_BINARY}-{platform_key}{ext}")
-        if not os.path.isfile(src):
-            warn(f"tsuki-webkit binary no encontrado en {src}")
-            return None
-        shutil.copy(src, dst)
-        info(f"tsuki-webkit binary → {os.path.basename(dst)}")
-        return dst
-
-    # -- Cross-compilación ---------------------------------------------------
-    rust_target = plat["rust_target"]
-    if _has_cross() or force_cross:
-        tool = "cross" if _has_cross() else "cargo"
-        step(f"Compilando tsuki-webkit ({tool}) → {platform_key}  [{rust_target}]")
-        try:
-            run([tool, "build", "--release", "--target", rust_target], cwd=WEBKIT_DIR)
-        except subprocess.CalledProcessError as e:
-            warn(f"tsuki-webkit cross-build falló (exit={e.returncode}) — omitiendo")
-            return None
-
-        src = os.path.join(WEBKIT_DIR, "target", rust_target, "release", f"{WEBKIT_BINARY}{ext}")
-        dst = os.path.join(BUILD_DIR, f"{WEBKIT_BINARY}-{platform_key}{ext}")
-        if not os.path.isfile(src):
-            warn(f"tsuki-webkit binary no encontrado en {src}")
-            return None
-        shutil.copy(src, dst)
-        info(f"tsuki-webkit binary → {os.path.basename(dst)}")
-        return dst
-
-    # -- Sin herramienta de cross-compilación --------------------------------
-    warn(
-        f"tsuki-webkit omitido para {platform_key} (host={HOST_PLATFORM}).\n"
-        f"  Para compilarlo: cargo install cross && ejecuta build de nuevo."
-    )
-    return None
-
-
 def build_tauri(platform_key, version):
-    step(f"Compilando Tauri IDE → {platform_key}")
+    """Compila la IDE Tauri para platform_key.
+
+    Cross-compilation (sin Docker):
+      Mismo OS, distinta arch  →  CARGO=cargo-zigbuild + tauri build --target
+      macOS universal          →  --target universal-apple-darwin
+      Cross OS                 →  imposible (webkit2gtk / WebView2 / WebKit son
+                                  librerías nativas que deben existir en la máquina
+                                  de compilación del OS destino)
+    """
     plat        = PLATFORMS[platform_key]
     rust_target = plat["rust_target"]
+    needs_cross = platform_key != HOST_PLATFORM
+    host_goos   = PLATFORMS[HOST_PLATFORM]["goos"]
+    target_goos = plat["goos"]
 
-    # Patch version into ide/src-tauri/Cargo.toml so env!("CARGO_PKG_VERSION")
-    # inside main.rs reports the correct version at runtime.
+    # ── Cross-OS ─────────────────────────────────────────────────────────────
+    if needs_cross and not _tauri_can_cross(platform_key):
+        warn(f"Tauri IDE omitido para {platform_key}: cross-OS no soportado desde {HOST_PLATFORM}.")
+        warn(f"  Librerías nativas requeridas en tiempo de compilación:")
+        if target_goos == "linux":
+            warn("    webkit2gtk, gtk3, libsoup — solo disponibles en Linux")
+            if platform.system().lower() == "windows":
+                warn("    (instala WSL para compilar targets Linux automáticamente)")
+        elif target_goos == "windows":
+            warn("    WebView2 SDK, MSVC headers — solo disponibles en Windows")
+        elif target_goos == "darwin":
+            warn("    WebKit.framework, macOS SDK — solo disponibles en macOS")
+            warn("    No hay forma de compilar targets macOS desde Windows o Linux.")
+            warn("    Opciones: GitHub Actions (runner: macos-latest), Mac nativo, o CI/CD.")
+        else:
+            warn(f"  Alternativas: WSL, GitHub Actions, VM con {target_goos}.")
+        return None, None
+
+    # ── Windows → Linux: delegar a WSL ───────────────────────────────────────
+    if needs_cross and host_goos == "windows" and target_goos == "linux":
+        return _wsl_build_tauri(platform_key, version)
+
+    step(f"Compilando Tauri IDE → {platform_key}")
+
+    # ── macOS universal (amd64 + arm64 en un solo binario) ───────────────────
+    # Tauri soporta --target universal-apple-darwin de forma nativa usando lipo
+    is_mac_universal = (
+        host_goos == "darwin"
+        and target_goos == "darwin"
+        and needs_cross
+    )
+    if is_mac_universal:
+        # Asegurarse de que ambos targets están instalados
+        for t in ("x86_64-apple-darwin", "aarch64-apple-darwin"):
+            _ensure_rustup_target(t)
+        # Tauri creará el binario universal automáticamente con lipo
+        rust_target_arg = "universal-apple-darwin"
+        info("  macOS universal binary (x86_64 + arm64) con lipo automático")
+    else:
+        rust_target_arg = rust_target
+
+    # ── Patch version ────────────────────────────────────────────────────────
     ide_cargo = os.path.join(IDE_DIR, "src-tauri", "Cargo.toml")
     if _patch_cargo_version(ide_cargo, version):
-        info(f"ide/src-tauri/Cargo.toml → version = \"{version}\"")
+        info(f"  ide/src-tauri/Cargo.toml → version = \"{version}\"")
     else:
-        warn("No se pudo actualizar version en ide/src-tauri/Cargo.toml")
+        warn("  No se pudo actualizar version en ide/src-tauri/Cargo.toml")
 
     npm = shutil.which("npm")
     if not npm:
         raise FileNotFoundError("npm no encontrado en el PATH")
 
-    # npm install — errores aquí son raros pero se muestran completos
+    # ── npm install ──────────────────────────────────────────────────────────
     try:
         run([npm, "install"], cwd=IDE_DIR)
     except subprocess.CalledProcessError as e:
@@ -580,11 +1610,48 @@ def build_tauri(platform_key, version):
             f"Revisa la salida de arriba para ver el error exacto."
         ) from e
 
-    # tauri build — el error más común es un fallo de cargo (mostrado completo por run())
+    # ── Configurar cross-compilation para mismo OS / distinta arch ───────────
+    build_env = {**os.environ}
+    if needs_cross and not is_mac_universal:
+        is_msvc_target = rust_target.endswith("-pc-windows-msvc")
+
+        if is_msvc_target:
+            # zigbuild no funciona con MSVC — usar cargo + toolchain MSVC ARM64/x86
+            msvc_env = _msvc_env_for(rust_target)
+            if msvc_env is None:
+                warn(f"  Toolchain MSVC para {rust_target} no encontrado.")
+                _msvc_install_hint(rust_target)
+                return None, None
+            build_env.update(msvc_env)
+            info(f"  cross MSVC — toolchain {rust_target} detectado")
+        else:
+            # Non-MSVC: usar cargo-zigbuild (funciona para Linux/macOS/GNU targets)
+            if not _has_zigbuild() or not _has_zig():
+                _ensure_zigbuild(auto_install=True)
+
+            if _has_zigbuild() and _has_zig():
+                build_env["CARGO"] = shutil.which("cargo-zigbuild") or "cargo-zigbuild"
+                info(f"  cross via cargo-zigbuild")
+            else:
+                linker = _system_linker_for(rust_target)
+                if linker:
+                    _write_cargo_config(rust_target, linker)
+                    info(f"  cross via linker del sistema: {linker}")
+                else:
+                    warn(f"  Sin herramienta de cross para {rust_target} — build puede fallar")
+
+        if not _ensure_rustup_target(rust_target):
+            warn(f"  rustup target add {rust_target} falló — abortando build IDE")
+            return None, None
+
+    # ── tauri build ──────────────────────────────────────────────────────────
     try:
-        run([npm, "run", "tauri", "build", "--", "--target", rust_target], cwd=IDE_DIR)
+        run(
+            [npm, "run", "tauri", "build", "--", "--target", rust_target_arg],
+            cwd=IDE_DIR,
+            env=build_env,
+        )
     except subprocess.CalledProcessError as e:
-        # Intentar extraer el resumen de error de cargo de la salida capturada
         output_lines = (e.output or "").splitlines()
         cargo_errors = [l for l in output_lines if "error[" in l or "error:" in l]
         summary = "\n".join(cargo_errors[-10:]) if cargo_errors else "(sin resumen disponible)"
@@ -595,13 +1662,14 @@ def build_tauri(platform_key, version):
             f"El output completo está arriba."
         ) from e
 
-    # Buscar el ejecutable compilado (no el instalador del bundle)
-    release_dir = os.path.join(IDE_DIR, "src-tauri", "target", rust_target, "release")
+    # ── Localizar el ejecutable compilado ────────────────────────────────────
+    # universal-apple-darwin tiene su propia carpeta
+    target_dir_name = rust_target_arg if is_mac_universal else rust_target
+    release_dir     = os.path.join(IDE_DIR, "src-tauri", "target", target_dir_name, "release")
     alt_release_dir = os.path.join(IDE_DIR, "src-tauri", "target", "release")
 
-    # Nombre del ejecutable Tauri — debe coincidir con [[bin]] name en Cargo.toml
-    # y con productName en tauri.conf.json
-    IDE_EXE_NAME = "tsuki-ide.exe"
+    ext = ".exe" if plat["goos"] == "windows" else ""
+    IDE_EXE_NAME = f"tsuki-ide{ext}"
 
     exe_src = None
     exe_name = None
@@ -613,9 +1681,15 @@ def build_tauri(platform_key, version):
             exe_src  = candidate
             exe_name = IDE_EXE_NAME
             break
-        # Fallback: cualquier .exe que no sea instalador/dll (por si cambia el nombre)
+        # Fallback: cualquier binario que no sea instalador/dll
         for f in os.listdir(search_dir):
-            if f.endswith(".exe") and not any(x in f.lower() for x in ["setup", "msi", ".dll"]):
+            is_installer = any(x in f.lower() for x in ["setup", "msi", ".dll", "nsis"])
+            if ext and f.endswith(ext) and not is_installer:
+                exe_src  = os.path.join(search_dir, f)
+                exe_name = f
+                break
+            elif not ext and "." not in f and os.path.isfile(os.path.join(search_dir, f)):
+                # Unix: ejecutable sin extensión
                 exe_src  = os.path.join(search_dir, f)
                 exe_name = f
                 break
@@ -623,15 +1697,18 @@ def build_tauri(platform_key, version):
             break
 
     if not exe_src:
-        raise FileNotFoundError(f"Tauri executable no encontrado en {release_dir}")
+        raise FileNotFoundError(
+            f"Tauri executable no encontrado en {release_dir}\n"
+            f"  Buscado: {IDE_EXE_NAME}"
+        )
 
-    # Copiar solo el ejecutable a una carpeta limpia
+    # ── Copiar a BUILD_DIR ───────────────────────────────────────────────────
     dst = os.path.join(BUILD_DIR, f"ide-{platform_key}")
     os.makedirs(dst, exist_ok=True)
     shutil.copy(exe_src, os.path.join(dst, exe_name))
 
-    info(f"Tauri IDE executable → {dst}")
-    return dst, exe_name  
+    info(f"Tauri IDE executable → {dst}/{exe_name}")
+    return dst, exe_name
 
 # ─────────────────────────────────────────────
 #  INSTALLER: LINUX / macOS  (tar.gz)
@@ -663,7 +1740,6 @@ VERSION="@@version@@"
 BINARY="@@binary@@"
 CORE_BINARY="@@core_binary@@"
 FLASH_BINARY="@@flash_binary@@"
-WEBKIT_BINARY="@@webkit_binary@@"
 REGISTRY_URL="@@registry_url@@"
 
 # ── Defaults ──────────────────────────────────────────────────────
@@ -716,7 +1792,7 @@ CONFDIR="${XDG_CONFIG_HOME:-$HOME/.config}/$BINARY"
 # ── Función de desinstalación ─────────────────────────────────────
 do_uninstall() {
   info "Desinstalando $APP v$VERSION..."
-  for f in "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY" "$BINDIR/$WEBKIT_BINARY"; do
+  for f in "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"; do
     [ -f "$f" ] && { sudo rm -f "$f"; ok "Eliminado $f"; } || true
   done
   [ -d "$DATADIR" ] && { sudo rm -rf "$DATADIR"; ok "Eliminado $DATADIR"; } || true
@@ -768,9 +1844,7 @@ $SUDO mkdir -p "$BINDIR"
 $SUDO cp "$BINARY"        "$BINDIR/$BINARY"
 $SUDO cp "$CORE_BINARY"   "$BINDIR/$CORE_BINARY"
 $SUDO cp "$FLASH_BINARY"  "$BINDIR/$FLASH_BINARY"
-[ -f "$WEBKIT_BINARY" ] && $SUDO cp "$WEBKIT_BINARY" "$BINDIR/$WEBKIT_BINARY" || true
 $SUDO chmod +x "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"
-[ -f "$BINDIR/$WEBKIT_BINARY" ] && $SUDO chmod +x "$BINDIR/$WEBKIT_BINARY" || true
 ok "Binarios instalados"
 
 # ── Datos y configuración ─────────────────────────────────────────
@@ -1028,7 +2102,6 @@ Name: "{localappdata}\\@@app_name@@\\config"; Flags: uninsalwaysuninstall
 Source: "@@go_bin@@";      DestDir: "{app}\\bin"; DestName: "@@binary@@.exe";        Components: cli; Flags: ignoreversion
 Source: "@@core_bin@@";    DestDir: "{app}\\bin"; DestName: "@@core_binary@@.exe";   Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 Source: "@@flash_bin@@";   DestDir: "{app}\\bin"; DestName: "@@flash_binary@@.exe";  Components: cli; Flags: ignoreversion skipifsourcedoesntexist
-Source: "@@webkit_bin@@";  DestDir: "{app}\\bin"; DestName: "@@webkit_binary@@.exe"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Paquetes locales ───────────────────────────────────────────────
 Source: "@@pkg_dir@@\\*"; DestDir: "{app}\\pkg"; Components: cli; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -1081,10 +2154,6 @@ Root: HKCU; Subkey: "Software\@@app_name@@"; \
 Root: HKCU; Subkey: "Software\@@app_name@@"; \
       ValueType: string; ValueName: "FlashBinary"; \
       ValueData: "{app}\bin\@@flash_binary@@.exe"; \
-      Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\@@app_name@@"; \
-      ValueType: string; ValueName: "WebkitBinary"; \
-      ValueData: "{app}\bin\@@webkit_binary@@.exe"; \
       Flags: uninsdeletekey
 
 ; ── Asociación de archivos .goino ───────────────────────────────────
@@ -1279,7 +2348,6 @@ begin
       Lines.Add('libs_dir     = "' + edLibsDir.Text + '"');
       Lines.Add('core_binary  = "' + ExpandConstant('{app}\bin\@@core_binary@@.exe') + '"');
       Lines.Add('flash_binary = "' + ExpandConstant('{app}\bin\@@flash_binary@@.exe') + '"');
-      Lines.Add('webkit_binary = "' + ExpandConstant('{app}\bin\@@webkit_binary@@.exe') + '"');
       Lines.Add('');
       Lines.Add('[registry]');
       Lines.Add('url = "' + edRegistry.Text + '"');
@@ -1330,7 +2398,7 @@ end;
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR LINUX / MACOS
 # ─────────────────────────────────────────────
-def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, webkit_bin=None):
+def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
     step(f"Creando instalador CLI → {platform_key}")
     plat_dir = os.path.join(RELEASE_DIR, f"{APP_NAME}-{version}-{platform_key}")
     os.makedirs(plat_dir, exist_ok=True)
@@ -1342,10 +2410,6 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, we
         shutil.copy(core_bin,  os.path.join(plat_dir, CORE_BINARY))
     if flash_bin:
         shutil.copy(flash_bin, os.path.join(plat_dir, FLASH_BINARY))
-    if webkit_bin:
-        shutil.copy(webkit_bin, os.path.join(plat_dir, WEBKIT_BINARY))
-        info(f"tsuki-webkit incluido en el instalador")
-
     # Copiar paquetes
     pkg_src = os.path.join(PROJECT_ROOT, "pkg")
     if os.path.exists(pkg_src):
@@ -1358,7 +2422,6 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, we
         '@@binary@@':       BINARY,
         '@@core_binary@@':  CORE_BINARY,
         '@@flash_binary@@': FLASH_BINARY,
-        '@@webkit_binary@@': WEBKIT_BINARY,
         '@@registry_url@@': REGISTRY_URL,
         '@@platform_key@@': platform_key,
     }
@@ -1421,7 +2484,7 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, we
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR WINDOWS (Inno Setup)
 # ─────────────────────────────────────────────
-def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64", webkit_bin=None):
+def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64"):
     step("Creando instalador GUI Windows (Inno Setup)")
 
     # Buscar ícono
@@ -1451,11 +2514,9 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@binary@@":       BINARY,
         "@@core_binary@@":  CORE_BINARY,
         "@@flash_binary@@": FLASH_BINARY,
-        "@@webkit_binary@@": WEBKIT_BINARY,
         "@@go_bin@@":        _w(go_bin),
         "@@core_bin@@":      _w(core_bin),
         "@@flash_bin@@":     _w(flash_bin),
-        "@@webkit_bin@@":    _w(webkit_bin) if webkit_bin else "",
         "@@icon_file@@":    _w(icon_file),
         "@@ide_bundle@@":   _w(ide_bundle) if ide_bundle else "",
         "@@pkg_dir@@":      _w(pkg_dir),
@@ -1476,15 +2537,6 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
             '        Components: ide; Flags: ignoreversion recursesubdirs createallsubdirs; \\\n'
             '        Check: HasIdeBundle',
             '; IDE bundle not built on this platform'
-        )
-
-    # Comment out webkit entry when not built for this platform
-    if not webkit_bin:
-        iss_content = iss_content.replace(
-            'Source: "@@webkit_bin@@";  DestDir: "{app}\\\\bin"; '
-            'DestName: "@@webkit_binary@@.exe"; Components: cli; '
-            'Flags: ignoreversion skipifsourcedoesntexist',
-            '; tsuki-webkit not built for this platform'
         )
 
     for placeholder, value in iss_subs.items():
@@ -1533,7 +2585,6 @@ def check_dependencies(skip_go, skip_rust, skip_ide):
     missing = []
     if not skip_go   and not check_tool("go", "version"):      missing.append("go  →  https://go.dev/dl/")
     if not skip_rust and not check_tool("cargo", "--version"):  missing.append("cargo (Rust)  →  https://rustup.rs/")
-    # tsuki-webkit uses cargo too — no extra tool check needed (same binary)
     if not skip_ide:
         if not check_tool("npm", "--version"):   missing.append("npm  →  https://nodejs.org/")
     if missing:
@@ -1541,6 +2592,50 @@ def check_dependencies(skip_go, skip_rust, skip_ide):
         for m in missing: print(f"    • {m}")
         sys.exit(1)
     info("Todas las dependencias están disponibles")
+
+    # Informar qué arquitecturas de IDE se pueden compilar desde este host
+    if not skip_ide:
+        viable_ide = [HOST_PLATFORM] + _tauri_same_os_arch_pairs()
+        cross_ide  = [pk for pk in viable_ide if pk != HOST_PLATFORM]
+        info(f"Tauri IDE compilable para: {', '.join(viable_ide)}")
+        if cross_ide:
+            info(f"  Cross-arch mismo OS: {', '.join(cross_ide)}")
+        cross_os_skipped = [
+            pk for pk in RELEASE_PLATFORMS
+            if pk not in viable_ide
+        ]
+        if cross_os_skipped:
+            # Separar los que son alcanzables por WSL de los que no
+            host_os = platform.system().lower()
+            wsl_reachable = [
+                pk for pk in cross_os_skipped
+                if host_os == "windows" and PLATFORMS[pk]["goos"] == "linux"
+            ]
+            truly_skipped = [pk for pk in cross_os_skipped if pk not in wsl_reachable]
+
+            if wsl_reachable:
+                wsl_ok = _has_wsl()
+                if wsl_ok:
+                    info(f"  Tauri Linux via WSL: {', '.join(wsl_reachable)}")
+                else:
+                    warn(f"  Tauri Linux (WSL no detectado): {', '.join(wsl_reachable)}")
+                    warn("    Instala WSL2: wsl --install")
+                    warn("    luego ejecuta el build de nuevo para compilar targets Linux")
+            if truly_skipped:
+                warn(f"  Tauri omitido para (cross-OS sin solución): {', '.join(truly_skipped)}")
+
+    # Advertencia no-bloqueante: cross-compilation disponible
+    if not skip_rust:
+        if _has_zigbuild() and _has_zig():
+            info("Cross-compilation: cargo-zigbuild + zig detectados — se usarán para targets remotos")
+        elif _has_zigbuild() and not _has_zig():
+            warn("cargo-zigbuild instalado pero zig no está en el PATH.")
+            warn("  Instala zig para habilitar cross-compilation: pip install ziglang")
+        else:
+            warn("cargo-zigbuild no encontrado — solo se compilará para el host.")
+            warn("  Para compilar para otros targets sin Docker:")
+            warn("    cargo install cargo-zigbuild")
+            warn("    pip install ziglang")
 
 
 
@@ -1727,23 +2822,24 @@ def install_ide_direct(platform_key):
     for d in install_candidates:
         if os.path.isdir(d):
             dst = os.path.join(d, exe_name)
-            try:
-                shutil.copy2(exe_src, dst)
+            if _copy_exe_win(exe_src, dst):
                 dst_ts = _dt.datetime.fromtimestamp(os.path.getmtime(dst)).strftime("%H:%M:%S")
                 info(f"  copiado → {dst}  (timestamp: {dst_ts})")
                 if copied_to is None:
                     copied_to = dst
-            except Exception as e:
-                warn(f"  no se pudo copiar a {dst}: {e}")
+            else:
+                warn(f"  no se pudo copiar a {dst}")
 
     if copied_to is None:
         # Ningún directorio de instalacion existia — crear el de Inno user-mode
         d = install_candidates[0]
         os.makedirs(d, exist_ok=True)
         dst = os.path.join(d, exe_name)
-        shutil.copy2(exe_src, dst)
-        info(f"  creado y copiado → {dst}")
-        copied_to = dst
+        if _copy_exe_win(exe_src, dst):
+            info(f"  creado y copiado → {dst}")
+            copied_to = dst
+        else:
+            warn(f"  fallo al copiar a {dst} — abre el IDE manualmente desde {exe_src}")
 
     return copied_to
 
@@ -1813,6 +2909,11 @@ USAGE = """
   python tools/build.py gen-keys      Genera par de claves Ed25519 para stable y testing
   python tools/build.py show-keys     Muestra las claves publicas actuales (para incrustar en el IDE)
 
+  Cross-compilation sin Docker (recomendado para releases):
+    cargo install cargo-zigbuild
+    pip install ziglang
+    # El build detecta zigbuild automáticamente y lo usa para todos los targets
+
   Flags disponibles (--flags, separados por coma):
     restartOnBoarding   Fuerza que el wizard de onboarding aparezca de nuevo en esta version
     whatsNew            Muestra el popup What's New (usa --notes como cuerpo del changelog o JSON)
@@ -1877,9 +2978,14 @@ def parse_command():
 
 
 def _print_header(subtitle=""):
-    print(f"\n{BOLD}{CYAN}{'═'*55}")
-    print(f"  {APP_NAME} Build System  {subtitle}")
-    print(f"{'═'*55}{RESET}\n")
+    w = min(TERM_W(), 60)
+    line = "═" * w
+    print(f"\n{BOLD}{CYAN}{line}")
+    tag = f"  {APP_NAME} Build System"
+    if subtitle:
+        tag += f"  {DIM}{subtitle}{RESET}{BOLD}{CYAN}"
+    print(tag)
+    print(f"{line}{RESET}\n")
 
 
 def _build_platforms(target_platforms, version, commit, date,
@@ -1896,7 +3002,10 @@ def _build_platforms(target_platforms, version, commit, date,
     results = {}
 
     for pk in target_platforms:
-        print(f"\n{BOLD}{'─'*55}\n  Plataforma: {pk}\n{'─'*55}{RESET}")
+        w = min(TERM_W(), 60)
+        print(f"\n{BOLD}{'─'*w}")
+        print(f"  Platform  {CYAN}{pk}{RESET}")
+        print(f"{DIM}{'─'*w}{RESET}\n")
 
         try:
             go_bin = build_go(pk, version, commit, date)
@@ -1905,16 +3014,15 @@ def _build_platforms(target_platforms, version, commit, date,
             continue
 
         core_bin, flash_bin = build_rust(pk)
-        webkit_bin = build_webkit(pk)
-        results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin, "webkit": webkit_bin}
+        results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin}
 
-        # Tauri solo en host
+        # Tauri: compilar si es el host O si es el mismo OS con distinta arch
         ide_bundle = ide_exe_name = None
-        if not skip_ide and pk == host_key:
+        if not skip_ide and _tauri_can_cross(pk):
             try:
                 ide_bundle, ide_exe_name = build_tauri(pk, version)
             except Exception as e:
-                warn(f"Tauri IDE build fallo: {e}")
+                warn(f"Tauri IDE build fallo para {pk}: {e}")
 
         r = results[pk]
         missing_rust = r["core"] is None or r["flash"] is None
@@ -1939,7 +3047,6 @@ def _build_platforms(target_platforms, version, commit, date,
                     go_bin=r["go"],
                     core_bin=r["core"],
                     flash_bin=r["flash"],
-                    webkit_bin=r.get("webkit"),
                     version=version,
                     ide_bundle_dir=ide_bundle,
                     ide_exe_name=ide_exe_name,
@@ -1951,7 +3058,6 @@ def _build_platforms(target_platforms, version, commit, date,
                 go_bin=r["go"],
                 core_bin=r["core"],
                 flash_bin=r["flash"],
-                webkit_bin=r.get("webkit"),
                 version=version,
             )
 
@@ -1959,16 +3065,19 @@ def _build_platforms(target_platforms, version, commit, date,
 
 
 def _print_summary(version):
-    print(f"\n{BOLD}{GREEN}{'═'*55}")
-    print(f"  Build completo — {APP_NAME} v{version}")
-    print(f"{'═'*55}{RESET}\n")
+    w = min(TERM_W(), 60)
+    print(f"\n{BOLD}{GREEN}{'═'*w}")
+    print(f"  {APP_NAME} v{version}  —  build completo")
+    print(f"{'═'*w}{RESET}\n")
     if os.path.isdir(RELEASE_DIR) and os.listdir(RELEASE_DIR):
-        print(f"  Instaladores en: {BOLD}{RELEASE_DIR}{RESET}\n")
+        print(f"  {DIM}Instaladores en:{RESET} {BOLD}{RELEASE_DIR}{RESET}\n")
         for f in sorted(os.listdir(RELEASE_DIR)):
             fp = os.path.join(RELEASE_DIR, f)
+            if not os.path.isfile(fp):
+                continue
             size = os.path.getsize(fp)
             size_str = f"{size/1024/1024:.1f} MB" if size > 1024*1024 else f"{size/1024:.0f} KB"
-            print(f"    📦  {f:55s} {size_str}")
+            print(f"  {GREEN}📦{RESET}  {f:<55}  {DIM}{size_str}{RESET}")
     print()
 
 

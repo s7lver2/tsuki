@@ -211,10 +211,6 @@ pub fn preprocess_hyphenated_packages(source: &str) -> String {
     let mut pkgs: Vec<HyphenPkg> = Vec::new();
 
     // Regex-free path extraction: find every "..." import string
-    let mut chars = source.chars().peekable();
-    let mut i = 0usize;
-    let src_bytes = source.as_bytes();
-
     // Walk looking for double-quoted strings inside import blocks.
     // We track whether we are inside an `import (...)` block.
     let mut in_import = false;

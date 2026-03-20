@@ -520,7 +520,7 @@ fn render_compile_error(e: &FlashError) {
                 else if !line.trim().is_empty()   { eprintln!("  {}", line.dimmed()); }
             }
         }
-        FlashError::SdkNotFound { arch, path, pkg } => {
+        FlashError::SdkNotFound { arch, path, pkg: _ } => {
             eprintln!("  {} SDK not found for arch '{}'", "✗".red(), arch);
             eprintln!("  Expected at: {}", path.yellow());
             eprintln!("  Install with tsuki-modules: {}",

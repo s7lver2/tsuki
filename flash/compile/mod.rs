@@ -69,6 +69,7 @@ pub struct CompileRequest {
 pub struct CompileResult {
     pub hex_path:  Option<PathBuf>,
     pub bin_path:  Option<PathBuf>,
+    #[allow(dead_code)]
     pub elf_path:  Option<PathBuf>,
     pub size_info: String,
 }
@@ -93,14 +94,55 @@ pub fn compile(req: &CompileRequest, board: &Board) -> Result<CompileResult> {
     }
 }
 
-/// Appends `lib_manager::libs_root()` to lib_include_dirs if it exists and
-/// is not already present, so installed libraries are auto-found.
+/// Appends lib include dirs from installed packages, walking the standard
+/// Arduino library layout:
+///   libs_root/<PkgName>/<version>/        ← added
+///   libs_root/<PkgName>/<version>/src/    ← added (standard Arduino headers location)
+///   libs_root/<PkgName>/                  ← added (flat installs)
 fn augment_lib_includes(req: &CompileRequest) -> CompileRequest {
     let mut dirs = req.lib_include_dirs.clone();
 
     if let Ok(libs_root) = crate::lib_manager::libs_root() {
-        if libs_root.is_dir() && !dirs.contains(&libs_root) {
-            dirs.push(libs_root);
+        if libs_root.is_dir() {
+            // Walk each package directory
+            if let Ok(pkg_entries) = std::fs::read_dir(&libs_root) {
+                for pkg_entry in pkg_entries.flatten() {
+                    let pkg_path = pkg_entry.path();
+                    if !pkg_path.is_dir() { continue; }
+
+                    // Check for versioned subdirs (pkg/1.4.4/)
+                    let mut has_versioned = false;
+                    if let Ok(ver_entries) = std::fs::read_dir(&pkg_path) {
+                        for ver_entry in ver_entries.flatten() {
+                            let ver_path = ver_entry.path();
+                            if !ver_path.is_dir() { continue; }
+                            // Skip non-version-like dirs
+                            let name = ver_entry.file_name();
+                            let name_str = name.to_string_lossy();
+                            if name_str.starts_with(|c: char| c.is_ascii_digit()) || name_str.starts_with('v') {
+                                has_versioned = true;
+                                // Add versioned root
+                                if !dirs.contains(&ver_path) {
+                                    dirs.push(ver_path.clone());
+                                }
+                                // Add src/ if it exists
+                                let src = ver_path.join("src");
+                                if src.is_dir() && !dirs.contains(&src) {
+                                    dirs.push(src);
+                                }
+                            }
+                        }
+                    }
+                    // Flat install: no version subdir — add pkg root directly
+                    if !has_versioned && !dirs.contains(&pkg_path) {
+                        dirs.push(pkg_path.clone());
+                        let src = pkg_path.join("src");
+                        if src.is_dir() && !dirs.contains(&src) {
+                            dirs.push(src);
+                        }
+                    }
+                }
+            }
         }
     }
 

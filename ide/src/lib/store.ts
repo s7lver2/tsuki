@@ -117,6 +117,7 @@ export interface SettingsState {
   libsDir: string
   extraLibsDirs: string[]   // additional package search paths (merged with libsDir)
   registryUrl: string
+  registryUrls: string[]   // additional registry sources (merged with registryUrl)
   verifySignatures: boolean
   // -- Updates
   updateChannel: 'stable' | 'testing'
@@ -274,6 +275,7 @@ interface AppState {
    */
   dispatchBuild: (cmd: string, args: string[], cwd?: string, chainArgs?: string[]) => void
   pendingBuild: { cmd: string; args: string[]; cwd?: string; chainArgs?: string[]; id: number } | null
+  clearPendingBuild: () => void
   clearPendingCommand: () => void
   pendingCircuit: { data: Record<string, unknown>; id: number } | null
   loadCircuitInSandbox: (data: Record<string, unknown>) => void
@@ -311,32 +313,46 @@ interface AppState {
 // ── Templates ─────────────────────────────────────────────────────────────────
 
 const TEMPLATES_GO: Record<string, string> = {
-  blink: `package main\n\nimport "arduino"\n\nconst ledPin = 13\nconst interval = 500 // ms\n\nfunc setup() {\n    arduino.PinMode(ledPin, arduino.OUTPUT)\n    arduino.Serial.Begin(9600)\n    arduino.Serial.Println("Blink ready!")\n}\n\nfunc loop() {\n    arduino.DigitalWrite(ledPin, arduino.HIGH)\n    arduino.Delay(interval)\n    arduino.DigitalWrite(ledPin, arduino.LOW)\n    arduino.Delay(interval)\n}`,
-  sensor: `package main\n\nimport (\n    "arduino"\n    "fmt"\n)\n\nfunc setup() {\n    arduino.Serial.Begin(9600)\n}\n\nfunc loop() {\n    val := arduino.AnalogRead(arduino.A0)\n    fmt.Println("sensor:", val)\n    arduino.Delay(500)\n}`,
-  serial: `package main\n\nimport (\n    "arduino"\n    "fmt"\n)\n\nfunc setup() {\n    arduino.Serial.Begin(115200)\n    fmt.Println("Serial ready!")\n}\n\nfunc loop() {\n    if arduino.Serial.Available() > 0 {\n        b := arduino.Serial.Read()\n        fmt.Print(string(b))\n    }\n}`,
-  servo: `package main\n\nimport (\n    "arduino"\n    "Servo"\n)\n\nvar s Servo.Servo\n\nfunc setup() {\n    s.Attach(9)\n}\n\nfunc loop() {\n    for pos := 0; pos <= 180; pos++ {\n        s.Write(pos)\n        arduino.Delay(15)\n    }\n    for pos := 180; pos >= 0; pos-- {\n        s.Write(pos)\n        arduino.Delay(15)\n    }\n}`,
-  empty: `package main\n\nimport "arduino"\n\nfunc setup() {\n    // setup code here\n}\n\nfunc loop() {\n    // main loop\n}`,
+  blink:   `package main\n\nimport "arduino"\n\nconst ledPin = 13\nconst interval = 500 // ms\n\nfunc setup() {\n    arduino.PinMode(ledPin, arduino.OUTPUT)\n    arduino.Serial.Begin(9600)\n    arduino.Serial.Println("Blink ready!")\n}\n\nfunc loop() {\n    arduino.DigitalWrite(ledPin, arduino.HIGH)\n    arduino.Delay(interval)\n    arduino.DigitalWrite(ledPin, arduino.LOW)\n    arduino.Delay(interval)\n}`,
+  serial:  `package main\n\nimport (\n    "arduino"\n    "fmt"\n)\n\nfunc setup() {\n    arduino.Serial.Begin(115200)\n    fmt.Println("Serial ready!")\n}\n\nfunc loop() {\n    if arduino.Serial.Available() > 0 {\n        b := arduino.Serial.Read()\n        fmt.Print(string(b))\n    }\n}`,
+  sensor:  `package main\n\nimport (\n    "arduino"\n    "fmt"\n)\n\nfunc setup() {\n    arduino.Serial.Begin(9600)\n}\n\nfunc loop() {\n    val := arduino.AnalogRead(arduino.A0)\n    fmt.Println("sensor:", val)\n    arduino.Delay(500)\n}`,
+  servo:   `package main\n\nimport (\n    "arduino"\n    "Servo"\n)\n\nvar s Servo.Servo\n\nfunc setup() {\n    s.Attach(9)\n}\n\nfunc loop() {\n    for pos := 0; pos <= 180; pos++ {\n        s.Write(pos)\n        arduino.Delay(15)\n    }\n    for pos := 180; pos >= 0; pos-- {\n        s.Write(pos)\n        arduino.Delay(15)\n    }\n}`,
+  dht:     `package main\n\nimport (\n    "arduino"\n    "dht"\n    "fmt"\n    "time"\n)\n\nconst SENSOR_PIN = 2\n\nvar sensor = dht.New(SENSOR_PIN, dht.DHT22)\n\nfunc setup() {\n    arduino.Serial.Begin(9600)\n    sensor.Begin()\n    fmt.Println("DHT22 ready!")\n}\n\nfunc loop() {\n    temp := sensor.ReadTemperature()\n    hum  := sensor.ReadHumidity()\n    fmt.Println("Temp:", temp, "Humidity:", hum)\n    time.Sleep(2000 * time.Millisecond)\n}`,
+  ws2812:  `package main\n\nimport (\n    "arduino"\n    "ws2812"\n)\n\nconst LED_PIN  = 6\nconst NUM_LEDS = 8\n\nvar strip = ws2812.New(NUM_LEDS, LED_PIN)\n\nfunc setup() {\n    strip.Begin()\n    arduino.Serial.Begin(9600)\n}\n\nfunc loop() {\n    strip.SetPixelColor(0, ws2812.Color(255, 0, 0))\n    strip.Show()\n    arduino.Delay(500)\n    strip.SetPixelColor(0, ws2812.Color(0, 0, 0))\n    strip.Show()\n    arduino.Delay(500)\n}`,
+  mpu6050: `package main\n\nimport (\n    "arduino"\n    "mpu6050"\n    "fmt"\n    "time"\n)\n\nvar imu = mpu6050.New()\n\nfunc setup() {\n    arduino.Serial.Begin(9600)\n    imu.Begin()\n    fmt.Println("MPU6050 ready!")\n}\n\nfunc loop() {\n    ax := imu.GetAccelX()\n    ay := imu.GetAccelY()\n    az := imu.GetAccelZ()\n    fmt.Println("Accel:", ax, ay, az)\n    time.Sleep(500 * time.Millisecond)\n}`,
+  empty:   `package main\n\nimport "arduino"\n\nfunc setup() {\n    // setup code here\n}\n\nfunc loop() {\n    // main loop\n}`,
 }
 
 const TEMPLATES_CPP: Record<string, string> = {
-  blink: `#include <Arduino.h>\n\nconst int ledPin = LED_BUILTIN;\nconst int interval = 500;\n\nvoid setup() {\n    pinMode(ledPin, OUTPUT);\n    Serial.begin(9600);\n    Serial.println("Blink ready!");\n}\n\nvoid loop() {\n    digitalWrite(ledPin, HIGH);\n    delay(interval);\n    digitalWrite(ledPin, LOW);\n    delay(interval);\n}`,
+  blink:  `#include <Arduino.h>\n\nconst int ledPin   = LED_BUILTIN;\nconst int interval = 500;\n\nvoid setup() {\n    pinMode(ledPin, OUTPUT);\n    Serial.begin(9600);\n    Serial.println("Blink ready!");\n}\n\nvoid loop() {\n    digitalWrite(ledPin, HIGH);\n    delay(interval);\n    digitalWrite(ledPin, LOW);\n    delay(interval);\n}`,
   serial: `#include <Arduino.h>\n\nvoid setup() {\n    Serial.begin(115200);\n    Serial.println("Serial ready!");\n}\n\nvoid loop() {\n    if (Serial.available() > 0) {\n        char c = Serial.read();\n        Serial.print(c);\n    }\n}`,
-  empty: `#include <Arduino.h>\n\nvoid setup() {\n    // setup code here\n}\n\nvoid loop() {\n    // main loop\n}`,
+  empty:  `#include <Arduino.h>\n\nvoid setup() {\n    // setup code here\n}\n\nvoid loop() {\n    // main loop\n}`,
 }
 
 const TEMPLATES_INO: Record<string, string> = {
-  blink: `const int ledPin = LED_BUILTIN;\nconst int interval = 500;\n\nvoid setup() {\n    pinMode(ledPin, OUTPUT);\n    Serial.begin(9600);\n    Serial.println("Blink ready!");\n}\n\nvoid loop() {\n    digitalWrite(ledPin, HIGH);\n    delay(interval);\n    digitalWrite(ledPin, LOW);\n    delay(interval);\n}`,
+  blink:  `const int ledPin   = LED_BUILTIN;\nconst int interval = 500;\n\nvoid setup() {\n    pinMode(ledPin, OUTPUT);\n    Serial.begin(9600);\n    Serial.println("Blink ready!");\n}\n\nvoid loop() {\n    digitalWrite(ledPin, HIGH);\n    delay(interval);\n    digitalWrite(ledPin, LOW);\n    delay(interval);\n}`,
   serial: `void setup() {\n    Serial.begin(115200);\n    Serial.println("Serial ready!");\n}\n\nvoid loop() {\n    if (Serial.available() > 0) {\n        char c = Serial.read();\n        Serial.print(c);\n    }\n}`,
-  empty: `void setup() {\n    // setup code here\n}\n\nvoid loop() {\n    // main loop\n}`,
+  empty:  `void setup() {\n    // setup code here\n}\n\nvoid loop() {\n    // main loop\n}`,
 }
 
+const TEMPLATES_PYTHON: Record<string, string> = {
+  blink:  `import arduino\nimport time\n\nLED_PIN: int = 13\n\ndef setup():\n    arduino.pinMode(LED_PIN, arduino.OUTPUT)\n\ndef loop():\n    arduino.digitalWrite(LED_PIN, arduino.HIGH)\n    time.sleep(500 * time.Millisecond)\n    arduino.digitalWrite(LED_PIN, arduino.LOW)\n    time.sleep(500 * time.Millisecond)`,
+  serial: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(115200)\n    print("Serial ready!")\n\ndef loop():\n    if arduino.Serial.available() > 0:\n        b: int = arduino.Serial.read()\n        print(str(b))`,
+  sensor: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(9600)\n\ndef loop():\n    val: int = arduino.analogRead(arduino.A0)\n    print(val)\n    time.sleep(500 * time.Millisecond)`,
+  dht:    `import arduino\nimport dht\nimport time\n\nSENSOR_PIN: int = 2\nsensor = dht.new(SENSOR_PIN, dht.DHT22)\n\ndef setup():\n    arduino.Serial.begin(9600)\n    sensor.begin()\n    print("DHT22 ready!")\n\ndef loop():\n    temp: float = sensor.read_temperature()\n    hum:  float = sensor.read_humidity()\n    print(temp)\n    print(hum)\n    time.sleep(2000 * time.Millisecond)`,
+  ws2812: `import arduino\nimport ws2812\n\nLED_PIN: int  = 6\nNUM_LEDS: int = 8\nstrip = ws2812.new(NUM_LEDS, LED_PIN)\n\ndef setup():\n    strip.begin()\n    arduino.Serial.begin(9600)\n\ndef loop():\n    strip.set_pixel_color(0, ws2812.color(255, 0, 0))\n    strip.show()\n    arduino.delay(500)\n    strip.set_pixel_color(0, ws2812.color(0, 0, 0))\n    strip.show()\n    arduino.delay(500)`,
+  empty:  `import arduino\n\ndef setup():\n    pass\n\ndef loop():\n    pass`,
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const TEMPLATES = TEMPLATES_GO
 
-const TEMPLATES_PYTHON: Record<string, string> = {
-  blink: `import arduino\nimport time\n\nLED_PIN: int = 13\n\ndef setup():\n    arduino.pinMode(LED_PIN, arduino.OUTPUT)\n\ndef loop():\n    arduino.digitalWrite(LED_PIN, arduino.HIGH)\n    time.sleep(500 * time.Millisecond)\n    arduino.digitalWrite(LED_PIN, arduino.LOW)\n    time.sleep(500 * time.Millisecond)`,
-  sensor: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(9600)\n\ndef loop():\n    val: int = arduino.analogRead(arduino.A0)\n    print(val)\n    time.sleep(500 * time.Millisecond)`,
-  serial: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(115200)\n    print("Serial ready!")\n\ndef loop():\n    if arduino.Serial.available() > 0:\n        b: int = arduino.Serial.read()\n        print(str(b))`,
-  empty: `import arduino\n\ndef setup():\n    pass\n\ndef loop():\n    pass`,
+/** Packages required by each template. Injected into tsuki_package.json at project creation. */
+const TEMPLATE_PACKAGES: Record<string, Array<{ name: string; version: string }>> = {
+  dht:     [{ name: 'dht',     version: '^1.0.0' }],
+  ws2812:  [{ name: 'ws2812',  version: '^1.0.0' }],
+  mpu6050: [{ name: 'mpu6050', version: '^1.0.0' }],
+  servo:   [{ name: 'Servo',   version: '^1.0.0' }],
 }
 
 function templatesForLang(lang: string): Record<string, string> {
@@ -348,8 +364,14 @@ function templatesForLang(lang: string): Record<string, string> {
   }
 }
 
-function manifest(name: string, board: string, backend = 'tsuki-flash', language = 'go') {
-  const base: Record<string, unknown> = { name, version: '0.1.0', board, backend, language, packages: [] }
+function manifest(
+  name:     string,
+  board:    string,
+  backend   = 'tsuki-flash',
+  language  = 'go',
+  packages: Array<{ name: string; version: string }> = [],
+) {
+  const base: Record<string, unknown> = { name, version: '0.1.0', board, backend, language, packages }
   if (language === 'go') base.go_version = '1.21'
   return JSON.stringify(base, null, 2)
 }
@@ -378,6 +400,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   libsDir: '~/.tsuki/libs',
   extraLibsDirs: [],
   registryUrl: 'https://registry.goduino.dev/v1/index.json',
+  registryUrls: [],
   verifySignatures: true,
   updateChannel: 'stable',
   autoCheckUpdates: true,
@@ -601,9 +624,10 @@ export const useStore = create<AppState>((set, get) => ({
   // ── loadProject ────────────────────────────────────────────────────────────
 
   loadProject: async (name, board, template, backend = 'tsuki-flash', gitInit = true, path = '', language = 'go') => {
-    const langTemplates = templatesForLang(language)
-    const mainContent = langTemplates[template] ?? langTemplates.blink ?? TEMPLATES_GO.blink
-    const manifestContent = manifest(name, board, backend, language)
+    const langTemplates   = templatesForLang(language)
+    const mainContent     = langTemplates[template] ?? langTemplates.blink ?? TEMPLATES_GO.blink
+    const templatePkgs    = TEMPLATE_PACKAGES[template] ?? []
+    const manifestContent = manifest(name, board, backend, language, templatePkgs)
     const gitignoreContent = 'build/\n*.hex\n*.bin\n*.elf\n'
 
     const tree: FileNode[] = [
@@ -630,17 +654,20 @@ export const useStore = create<AppState>((set, get) => ({
       { letter: 'A', name: '.gitignore',          path: '.gitignore' },
     ]
 
-    set({ projectName: name, projectPath: path, projectLanguage: (language as 'go' | 'cpp' | 'ino' | 'python') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
-
     if (path) {
       try {
         const { writeFile, createDirectory, runGit } = await import('./tauri')
+        // Create directory structure FIRST — then update projectPath in the
+        // store so the terminal's cd effect only fires once the dir exists.
         await createDirectory(path)
         await createDirectory(pathJoin(path, 'src'))
         await createDirectory(pathJoin(path, 'build'))
         await writeFile(pathJoin(path, 'tsuki_package.json'), manifestContent)
         await writeFile(pathJoin(path, 'src', mainFileName), mainContent)
         await writeFile(pathJoin(path, '.gitignore'), gitignoreContent)
+
+        // Now that files are on disk, set projectPath (triggers terminal cd)
+        set({ projectName: name, projectPath: path, projectLanguage: (language as 'go' | 'cpp' | 'ino' | 'python') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
         const gitExperimentEnabled = get().settings.experimentsEnabled && get().settings.expGitEnabled
         if (gitInit && gitExperimentEnabled) {
           await runGit(['init'], path).catch(() => {})
@@ -649,12 +676,33 @@ export const useStore = create<AppState>((set, get) => ({
         }
         get().addLog('ok', `Project files written to ${path}`)
         get().addRecentProject({ name, path, board, backend, lastOpened: Date.now() })
+
+        // Auto-install packages required by the template
+        if (templatePkgs.length > 0) {
+          const tsukiBin = (get().settings.tsukiPath?.trim() || 'tsuki').replace(/^"|"$/g, '')
+          get().addLog('info', `[template] Auto-installing ${templatePkgs.length} required package(s): ${templatePkgs.map(p => p.name).join(', ')}`)
+          for (const pkg of templatePkgs) {
+            get().addLog('info', `[template] Running: ${tsukiBin} pkg install ${pkg.name}`)
+            get().dispatchCommand(tsukiBin, ['pkg', 'install', pkg.name], path)
+            // Small delay between installs so the terminal output is readable
+            await new Promise(r => setTimeout(r, 300))
+          }
+          get().addLog('info', '[template] Package installation dispatched — check the terminal for progress.')
+        }
       } catch (e) {
         get().addLog('err', `Failed to write project: ${e}`)
+        // Even on error, navigate to IDE with what we have (no path set)
+        set({ projectName: name, projectPath: '', projectLanguage: (language as 'go' | 'cpp' | 'ino' | 'python') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
       }
+    } else {
+      // No path provided — navigate to IDE immediately (in-memory project)
+      set({ projectName: name, projectPath: '', projectLanguage: (language as 'go' | 'cpp' | 'ino' | 'python') ?? 'go', board, backend, gitInit, tree, gitChanges, commitHistory: [], openTabs: [], activeTabIdx: -1, screen: 'ide', logs: [], terminalLines: [] })
     }
 
-    setTimeout(() => get().openFile('main'), 50)
+    setTimeout(() => {
+      const mainNode = get().tree.find(n => n.id === 'main' || (n.type === 'file' && (n.name === 'main.go' || n.name === 'main.py' || n.name === 'main.cpp' || n.name === `${name}.ino`)))
+      if (mainNode) get().openFile(mainNode.id)
+    }, 50)
     get().addLog('info', `Project "${name}" loaded · Lang: ${language} · Board: ${board} · Backend: ${backend}`)
     const gitExperimentActive = get().settings.experimentsEnabled && get().settings.expGitEnabled
     get().addLog('ok', (gitInit && gitExperimentActive) ? 'Git repo initialized · Ready.' : 'Ready.')
@@ -823,6 +871,7 @@ export const useStore = create<AppState>((set, get) => ({
   closeTab: (idx) => {
     const tabs = get().openTabs.filter((_, i) => i !== idx)
     let active = get().activeTabIdx
+    if (active > idx)          active -= 1  // shift left when closing a tab before the active one
     if (active >= tabs.length) active = tabs.length - 1
     set({ openTabs: tabs, activeTabIdx: active })
   },
@@ -1004,6 +1053,69 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
 
+      // ── Experiment settings: structured audit log ─────────────────────────
+      // Logs every experiment toggle with name, new state, and resource cost.
+      const EXP_META: Record<string, { name: string; cost: string }> = {
+        expSandboxEnabled:      { name: 'Sandbox (circuit simulator)', cost: '~800 KB renderer bundle' },
+        expGitEnabled:          { name: 'Git Integration',             cost: 'subprocess on demand, no background polling' },
+        expLspEnabled:          { name: 'Language Server (LSP)',       cost: '~5–15 MB RAM + background tsuki-lsp process' },
+        expWorkstationsEnabled: { name: 'Workstations page bar',       cost: 'zero overhead when inactive' },
+        expWebkitEnabled:       { name: 'tsuki-webkit',                cost: 'WebSocket server + renderer JS bundle' },
+      }
+
+      if (key === 'experimentsEnabled') {
+        const nowOn = value as boolean
+        if (nowOn && !s.settings.experimentsEnabled) {
+          get().addLog('info', '[experiments] Master switch ENABLED — experimental features are now accessible')
+          get().addLog('info', '[experiments] Toggle individual experiments in Settings → Experiments')
+        } else if (!nowOn && s.settings.experimentsEnabled) {
+          const active = Object.keys(EXP_META).filter(k => s.settings[k as keyof SettingsState])
+          if (active.length > 0) {
+            const names = active.map(k => EXP_META[k].name).join(', ')
+            get().addLog('warn', `[experiments] Master switch DISABLED — the following experiments were deactivated: ${names}`)
+          } else {
+            get().addLog('info', '[experiments] Master switch DISABLED — no individual experiments were active')
+          }
+        }
+      } else if (key in EXP_META) {
+        const { name, cost } = EXP_META[key as string]
+        if (value as boolean) {
+          get().addLog('info',  `[experiments] ✓ "${name}" ENABLED`)
+          get().addLog('info',  `[experiments]   resource cost: ${cost}`)
+        } else {
+          get().addLog('info',  `[experiments] ✗ "${name}" DISABLED — resources freed`)
+        }
+      }
+
+      // ── High-value setting changes: targeted log entries ──────────────────
+      // Covers sandbox config, LSP feature flags, build options, and dev mode.
+      type LoggableKey = keyof SettingsState
+      const SETTING_LOG: Partial<Record<LoggableKey, (v: unknown, prev: unknown) => string | null>> = {
+        sandboxWireStyle:       (v) => `[sandbox] Wire style changed → "${v}"`,
+        sandboxWirePalette:     (v) => `[sandbox] Wire colour palette → "${v}"`,
+        sandboxAutoColorVcc:    (v) => `[sandbox] Auto-colour VCC wires → ${v ? 'on' : 'off'}`,
+        sandboxAutoColorGnd:    (v) => `[sandbox] Auto-colour GND wires → ${v ? 'on' : 'off'}`,
+        showCurrentFlow:        (v) => `[sandbox] Current-flow animation → ${v ? 'on' : 'off'}`,
+        lspEnabled:             (v) => `[lsp] Language server → ${v ? 'starting' : 'stopping'}`,
+        lspDiagnosticsEnabled:  (v) => `[lsp] Inline diagnostics → ${v ? 'on' : 'off'}`,
+        lspCompletionsEnabled:  (v) => `[lsp] Auto-completions → ${v ? 'on' : 'off'}`,
+        verbose:                (v) => `[build] Verbose compiler output → ${v ? 'on' : 'off'}`,
+        compileOnSave:          (v) => `[build] Compile-on-save → ${v ? 'on' : 'off'}`,
+        autoDetect:             (v) => `[build] Auto-detect board on port → ${v ? 'on' : 'off'}`,
+        verifySignatures:       (v) => `[build] Verify firmware signatures → ${v ? 'on' : 'off'}`,
+        developerOptions:       (v) => `[dev] Developer options → ${v ? 'unlocked' : 'hidden'}`,
+        formatOnSave:           (v) => `[editor] Format-on-save → ${v ? 'on' : 'off'}`,
+        tsukiSimPath:           (v, prev) => v !== prev ? `[sandbox] tsuki-sim path updated → "${v}"` : null,
+        ideTheme:               (v, prev) => v !== prev ? `[appearance] Theme → "${v}"` : null,
+        syntaxTheme:            (v, prev) => v !== prev ? `[appearance] Syntax theme → "${v}"` : null,
+      }
+
+      const logFn = SETTING_LOG[key as LoggableKey]
+      if (logFn) {
+        const msg = logFn(value, s.settings[key as LoggableKey])
+        if (msg) get().addLog('info', msg)
+      }
+
       return { settings: next }
     })
   },
@@ -1064,8 +1176,14 @@ export const useStore = create<AppState>((set, get) => ({
       createdAt: Date.now(),
       settings: { username: name.trim(), avatarDataUrl, ...initialSettings },
     }
-    const profiles = [...get().profiles, profile]
-    const merged: SettingsState = { ...DEFAULT_SETTINGS, ...get().settings, ...profile.settings }
+    // Save current settings back into the currently-active profile before creating the new one
+    const cur = get()
+    const savedProfiles = cur.profiles.map(p =>
+      p.id === cur.activeProfileId ? { ...p, settings: { ...cur.settings } } : p
+    )
+    const profiles = [...savedProfiles, profile]
+    // New profile starts from DEFAULT_SETTINGS + explicit initialSettings only (no bleed from current)
+    const merged: SettingsState = { ...DEFAULT_SETTINGS, username: name.trim(), ...initialSettings }
     set({ profiles, activeProfileId: id, settings: merged })
     saveProfiles(profiles)
     saveActiveProfileId(id)
@@ -1084,6 +1202,16 @@ export const useStore = create<AppState>((set, get) => ({
     set({ activeProfileId: id, profiles: updatedProfiles, settings: merged })
     saveProfiles(updatedProfiles)
     saveActiveProfileId(id)
+    // Apply visual settings immediately so the IDE reflects the switched profile
+    // (applyTheme etc. are already imported at the top of this file)
+    applyTheme(merged.ideTheme, merged.syntaxTheme)
+    applyUiScale(merged.uiScale)
+    applyFontRendering(merged.fontRendering)
+    applyCompactMode(merged.compactMode ?? false)
+    // Sync legacy dark/light flag
+    const { IDE_THEMES: switchThemes } = require('./themes') as typeof import('./themes')
+    const switchBase = switchThemes.find((t: { id: string; base: string }) => t.id === merged.ideTheme)?.base ?? 'dark'
+    useStore.setState({ theme: switchBase })
   },
 
   deleteProfile: (id) => {
@@ -1095,6 +1223,9 @@ export const useStore = create<AppState>((set, get) => ({
       activeProfileId = next[0].id
       const merged: SettingsState = { ...DEFAULT_SETTINGS, ...next[0].settings }
       set({ settings: merged })
+      // Apply the newly-active profile's visual settings
+      applyTheme(merged.ideTheme, merged.syntaxTheme)
+      applyUiScale(merged.uiScale)
     }
     set({ profiles: next, activeProfileId })
     saveProfiles(next)
@@ -1127,6 +1258,29 @@ export const useStore = create<AppState>((set, get) => ({
 }))
 
 
+// ── Bootstrap helpers ────────────────────────────────────────────────────────
+
+/**
+ * If the profile list is empty (first ever launch), seed it with a "Default"
+ * profile that captures the current settings.  This prevents the profiles
+ * panel from ever showing "No profiles yet" on a fresh install.
+ */
+function ensureDefaultProfile() {
+  const { profiles, settings } = useStore.getState()
+  if (profiles.length > 0) return
+  const id = makeProfileId()
+  const def: UserProfile = {
+    id,
+    name: 'Default',
+    avatarDataUrl: '',
+    createdAt: Date.now(),
+    settings: { ...settings },
+  }
+  useStore.setState({ profiles: [def], activeProfileId: id })
+  saveProfiles([def])
+  saveActiveProfileId(id)
+}
+
 // ── Bootstrap: load persisted settings and apply theme on startup ─────────────
 
 if (typeof window !== 'undefined') {
@@ -1151,3 +1305,6 @@ if (typeof window !== 'undefined') {
     }).catch(() => {})
   )
 }
+
+// Seed default profile if none exist (first-launch guard)
+if (typeof window !== 'undefined') setTimeout(ensureDefaultProfile, 200)
