@@ -67,6 +67,12 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
 
     // Add extra include dirs (external libraries)
     let mut includes: Vec<String> = common_flags.clone();
+    // Platform-bundled libraries (SPI, Wire, Servo, …) — must come before user
+    // libraries so their headers are found when compiling user library sources
+    // (e.g. U8g2's U8x8lib.cpp includes <SPI.h> from the platform bundle).
+    for bundled_dir in &sdk.bundled_libs_dirs {
+        includes.push(format!("-I{}", bundled_dir.display()));
+    }
     for lib_dir in &req.lib_include_dirs {
         includes.push(format!("-I{}", lib_dir.display()));
     }

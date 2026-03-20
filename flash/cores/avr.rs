@@ -261,11 +261,17 @@ fn build_sdk_paths(
         if d.is_dir() { Some(d) } else { None }
     };
 
+    // Platform-bundled libraries (SPI, Wire, …) live inside the core dir.
+    let bundled_libs_dirs = crate::sdk::collect_bundled_lib_dirs(
+        &core_dir.join("libraries")
+    );
+
     Ok(SdkPaths {
-        core_dir:      core_src,
+        core_dir:          core_src,
         variant_dir,
         toolchain_bin,
         libraries_dir,
-        sdk_version:   AVR_CORE_VERSION.into(),
+        bundled_libs_dirs,
+        sdk_version:       AVR_CORE_VERSION.into(),
     })
 }

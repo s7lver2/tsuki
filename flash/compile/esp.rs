@@ -61,6 +61,9 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         for extra in &req.lib_include_dirs {
             f.push(format!("-I{}", extra.display()));
         }
+        for bundled in &sdk.bundled_libs_dirs {
+            f.push(format!("-I{}", bundled.display()));
+        }
         for flag in arch_flags {
             f.push(flag.to_string());
         }

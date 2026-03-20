@@ -252,6 +252,7 @@ fn cmd_compile(args: CompileArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name,
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        lib_source_dirs:  vec![],  // populated by augment_lib_includes()
         language:         compile::Language::from_str(&args.language),
         use_modules:      args.use_modules,
         verbose,
@@ -321,6 +322,7 @@ fn cmd_run(args: RunArgs, verbose: bool, quiet: bool) -> Result<()> {
         project_name:     name.clone(),
         cpp_std:          args.cpp_std,
         lib_include_dirs: args.include,
+        lib_source_dirs:  vec![],  // populated by augment_lib_includes()
         language:         compile::Language::from_str(&args.language),
         use_modules:      args.use_modules,
         verbose,

@@ -51,6 +51,11 @@ pub struct CompileRequest {
     pub cpp_std:          String,
     /// Extra -I dirs (tsuki libraries, passed via --include).
     pub lib_include_dirs: Vec<PathBuf>,
+    /// Source directories for tsukilib packages — .cpp/.c files found here
+    /// are compiled into libs.a and linked into the final firmware.
+    /// Populated automatically by augment_lib_includes(); callers can leave
+    /// this empty and let the compile pipeline fill it in.
+    pub lib_source_dirs: Vec<PathBuf>,
     /// Source language — determines how the sketch dir is treated.
     /// For Go and Cpp projects the pipeline is identical (the CLI already
     /// transpiled .go → .cpp or copied .cpp into the sketch dir before calling
@@ -96,49 +101,49 @@ pub fn compile(req: &CompileRequest, board: &Board) -> Result<CompileResult> {
 
 /// Appends lib include dirs from installed packages, walking the standard
 /// Arduino library layout:
-///   libs_root/<PkgName>/<version>/        ← added
-///   libs_root/<PkgName>/<version>/src/    ← added (standard Arduino headers location)
-///   libs_root/<PkgName>/                  ← added (flat installs)
+///   libs_root/<PkgName>/<version>/        ← added as include + source dir
+///   libs_root/<PkgName>/<version>/src/    ← added as include + source dir
+///   libs_root/<PkgName>/                  ← added as include + source dir (flat installs)
+///
+/// Also collects `lib_source_dirs`: every directory that contains at least
+/// one `.cpp` or `.c` file at depth-1.  These are compiled into `libs.a`
+/// and linked into the firmware — fixing the "undefined reference" linker
+/// errors that occur when a library ships a `.cpp` implementation file.
 fn augment_lib_includes(req: &CompileRequest) -> CompileRequest {
-    let mut dirs = req.lib_include_dirs.clone();
+    let mut include_dirs = req.lib_include_dirs.clone();
+    let mut source_dirs  = req.lib_source_dirs.clone();
 
     if let Ok(libs_root) = crate::lib_manager::libs_root() {
         if libs_root.is_dir() {
-            // Walk each package directory
             if let Ok(pkg_entries) = std::fs::read_dir(&libs_root) {
                 for pkg_entry in pkg_entries.flatten() {
                     let pkg_path = pkg_entry.path();
                     if !pkg_path.is_dir() { continue; }
 
-                    // Check for versioned subdirs (pkg/1.4.4/)
                     let mut has_versioned = false;
                     if let Ok(ver_entries) = std::fs::read_dir(&pkg_path) {
                         for ver_entry in ver_entries.flatten() {
                             let ver_path = ver_entry.path();
                             if !ver_path.is_dir() { continue; }
-                            // Skip non-version-like dirs
-                            let name = ver_entry.file_name();
-                            let name_str = name.to_string_lossy();
+                            let name_str = ver_entry.file_name();
+                            let name_str = name_str.to_string_lossy();
                             if name_str.starts_with(|c: char| c.is_ascii_digit()) || name_str.starts_with('v') {
                                 has_versioned = true;
-                                // Add versioned root
-                                if !dirs.contains(&ver_path) {
-                                    dirs.push(ver_path.clone());
-                                }
-                                // Add src/ if it exists
+
+                                add_lib_dir(&ver_path, &mut include_dirs, &mut source_dirs);
+
                                 let src = ver_path.join("src");
-                                if src.is_dir() && !dirs.contains(&src) {
-                                    dirs.push(src);
+                                if src.is_dir() {
+                                    add_lib_dir(&src, &mut include_dirs, &mut source_dirs);
                                 }
                             }
                         }
                     }
-                    // Flat install: no version subdir — add pkg root directly
-                    if !has_versioned && !dirs.contains(&pkg_path) {
-                        dirs.push(pkg_path.clone());
+                    if !has_versioned {
+                        add_lib_dir(&pkg_path, &mut include_dirs, &mut source_dirs);
                         let src = pkg_path.join("src");
-                        if src.is_dir() && !dirs.contains(&src) {
-                            dirs.push(src);
+                        if src.is_dir() {
+                            add_lib_dir(&src, &mut include_dirs, &mut source_dirs);
                         }
                     }
                 }
@@ -151,9 +156,36 @@ fn augment_lib_includes(req: &CompileRequest) -> CompileRequest {
         build_dir:        req.build_dir.clone(),
         project_name:     req.project_name.clone(),
         cpp_std:          req.cpp_std.clone(),
-        lib_include_dirs: dirs,
+        lib_include_dirs: include_dirs,
+        lib_source_dirs:  source_dirs,
         language:         req.language.clone(),
         use_modules:      req.use_modules,
         verbose:          req.verbose,
     }
+}
+
+/// Add `dir` to both `include_dirs` and `source_dirs` (if it has sources).
+/// Avoids duplicates in both lists.
+fn add_lib_dir(dir: &PathBuf, include_dirs: &mut Vec<PathBuf>, source_dirs: &mut Vec<PathBuf>) {
+    if !include_dirs.contains(dir) {
+        include_dirs.push(dir.clone());
+    }
+    // Only add as a source dir if it actually contains .cpp or .c files
+    // (depth-1 only — we don't recurse into examples/ or test/ subdirs).
+    if dir_has_sources(dir) && !source_dirs.contains(dir) {
+        source_dirs.push(dir.clone());
+    }
+}
+
+/// Returns true if `dir` contains at least one `.cpp` or `.c` file at depth 1.
+fn dir_has_sources(dir: &PathBuf) -> bool {
+    std::fs::read_dir(dir)
+        .map(|entries| entries.flatten().any(|e| {
+            e.file_type().map(|t| t.is_file()).unwrap_or(false) &&
+            e.path().extension()
+                .and_then(|x| x.to_str())
+                .map(|x| matches!(x, "cpp" | "c"))
+                .unwrap_or(false)
+        }))
+        .unwrap_or(false)
 }

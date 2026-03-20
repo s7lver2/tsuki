@@ -59,6 +59,9 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     for lib_dir in &req.lib_include_dirs {
         common_flags.push(format!("-I{}", lib_dir.display()));
     }
+    for bundled in &sdk.bundled_libs_dirs {
+        common_flags.push(format!("-I{}", bundled.display()));
+    }
     if let Some(ld) = &sdk.libraries_dir {
         common_flags.push(format!("-I{}", ld.display()));
     }

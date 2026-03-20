@@ -26,6 +26,12 @@ pub struct SdkPaths {
     pub toolchain_bin: PathBuf,
     /// Installed user libraries root (for -I)
     pub libraries_dir: Option<PathBuf>,
+    /// Include dirs for platform-bundled libraries (SPI, Wire, Servo, …).
+    /// These live inside the SDK platform directory itself:
+    ///   <sdk>/libraries/SPI/        → added
+    ///   <sdk>/libraries/SPI/src/    → added (standard Arduino src/ layout)
+    /// Required so that user libraries (e.g. U8g2) can #include <SPI.h>.
+    pub bundled_libs_dirs: Vec<PathBuf>,
     /// SDK version string (informational)
     pub sdk_version: String,
 }
@@ -267,11 +273,17 @@ fn scan_arduino15_vendor(
         if d.is_dir() { Some(d) } else { None }
     };
 
+    // Platform-bundled libraries (SPI, Wire, Servo, EEPROM, …) live inside
+    // the SDK platform directory under libraries/.  They must be on the include
+    // path so that user libraries (e.g. U8g2) can #include <SPI.h>.
+    let bundled_libs_dirs = collect_bundled_lib_dirs(&sdk_dir.join("libraries"));
+
     Some(SdkPaths {
         core_dir,
         variant_dir,
         toolchain_bin,
         libraries_dir,
+        bundled_libs_dirs,
         sdk_version: version,
     })
 }
@@ -328,6 +340,7 @@ fn try_arduino1_install(base: &Path, arch: &str, variant: &str) -> Option<SdkPat
         core_dir, variant_dir,
         toolchain_bin,
         libraries_dir: Some(base.join("libraries")),
+        bundled_libs_dirs: collect_bundled_lib_dirs(&hw.join("libraries")),
         sdk_version: "1.x".into(),
     })
 }
@@ -346,8 +359,45 @@ fn try_sdk_root(base: &Path, _arch: &str, variant: &str) -> Option<SdkPaths> {
         core_dir, variant_dir,
         toolchain_bin,
         libraries_dir: None,
+        bundled_libs_dirs: collect_bundled_lib_dirs(&base.join("libraries")),
         sdk_version: "custom".into(),
     })
+}
+
+/// Collect include dirs for platform-bundled Arduino libraries.
+///
+/// Arduino platforms ship libraries like SPI, Wire, Servo, EEPROM under
+/// `<sdk>/libraries/`.  Each library may use either a flat layout (headers
+/// directly in the library root) or the standard `src/` subdirectory layout.
+/// Both the root and `src/` are added so `#include <SPI.h>` resolves
+/// regardless of how the library is structured.
+///
+/// Example output for an AVR SDK:
+///   <sdk>/libraries/SPI/
+///   <sdk>/libraries/SPI/src/      (if present)
+///   <sdk>/libraries/Wire/
+///   <sdk>/libraries/Wire/utility/ (if present — Wire uses this)
+///   …
+pub(crate) fn collect_bundled_lib_dirs(libs_root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(libs_root) else { return dirs };
+
+    for entry in entries.flatten() {
+        let lib_dir = entry.path();
+        if !lib_dir.is_dir() { continue; }
+
+        // Always add the library root (headers may live here directly)
+        dirs.push(lib_dir.clone());
+
+        // Add src/ if present (standard Arduino library layout)
+        let src = lib_dir.join("src");
+        if src.is_dir() { dirs.push(src); }
+
+        // Add utility/ if present (Wire and some other bundled libs use this)
+        let util = lib_dir.join("utility");
+        if util.is_dir() { dirs.push(util); }
+    }
+    dirs
 }
 
 /// Return the string name of the latest (semver-ish) directory inside `base`.
