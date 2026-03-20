@@ -74,6 +74,8 @@ pub struct CompileRequest {
 pub struct CompileResult {
     pub hex_path:  Option<PathBuf>,
     pub bin_path:  Option<PathBuf>,
+    /// UF2 drag-and-drop image (RP2040 only)
+    pub uf2_path:  Option<PathBuf>,
     #[allow(dead_code)]
     pub elf_path:  Option<PathBuf>,
     pub size_info: String,

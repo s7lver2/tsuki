@@ -530,6 +530,14 @@ fn render_compile_error(e: &FlashError) {
             eprintln!("  {} tsuki-modules handles this automatically on next build.", "→".cyan());
         }
         FlashError::ToolchainNotFound(msg) => eprintln!("  {} {}", "✗".red(), msg),
+        FlashError::Other(msg) => {
+            // Print each line of the message with proper indentation so the
+            // user sees the actual reason (e.g. "RP2040: board not in BOOTSEL
+            // mode") instead of the generic header above.
+            for line in msg.lines() {
+                eprintln!("  {}", line);
+            }
+        }
         _ => eprintln!("  {}", e),
     }
     eprintln!("{}", "─".repeat(60).dimmed());

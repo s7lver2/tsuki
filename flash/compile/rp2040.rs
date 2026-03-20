@@ -197,12 +197,65 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
 
     if req.verbose { eprint!("{}", size_out); }
 
+    // ── Step 5: convert .bin → .uf2 ──────────────────────────────────────
+    // UF2 is the drag-and-drop format used by the RP2040 USB bootloader.
+    // We generate it in pure Rust — no external tool required.
+    let uf2_path = req.build_dir.join(format!("{}.uf2", req.project_name));
+    if let Ok(bin_bytes) = std::fs::read(&bin_path) {
+        if let Ok(uf2_bytes) = bin_to_uf2(&bin_bytes, RP2040_FLASH_BASE, RP2040_FAMILY_ID) {
+            let _ = std::fs::write(&uf2_path, &uf2_bytes);
+        }
+    }
+
     Ok(CompileResult {
-        hex_path:  None,          // RP2040 uses .bin / .uf2, not .hex
+        hex_path:  None,
         bin_path:  Some(bin_path),
         elf_path:  Some(elf_path),
+        uf2_path:  if uf2_path.exists() { Some(uf2_path) } else { None },
         size_info: size_out,
     })
+}
+
+// ── UF2 generation ────────────────────────────────────────────────────────────
+// https://github.com/microsoft/uf2
+// Each UF2 block is 512 bytes and wraps up to 256 bytes of payload.
+
+const RP2040_FLASH_BASE: u32 = 0x1000_0000;
+const RP2040_FAMILY_ID:  u32 = 0xe48b_ff56;
+
+const UF2_MAGIC_START0: u32 = 0x0A32_4655;
+const UF2_MAGIC_START1: u32 = 0x9E5D_5157;
+const UF2_MAGIC_END:    u32 = 0xAB16_F30;
+const UF2_FLAG_FAMILY:  u32 = 0x0000_2000;
+const UF2_PAYLOAD_SIZE: usize = 256;
+const UF2_BLOCK_SIZE:   usize = 512;
+
+fn bin_to_uf2(bin: &[u8], base_addr: u32, family_id: u32) -> std::result::Result<Vec<u8>, ()> {
+    let num_blocks = bin.chunks(UF2_PAYLOAD_SIZE).count() as u32;
+    let mut out = Vec::with_capacity(num_blocks as usize * UF2_BLOCK_SIZE);
+
+    for (block_no, chunk) in bin.chunks(UF2_PAYLOAD_SIZE).enumerate() {
+        let target_addr = base_addr + (block_no as u32 * UF2_PAYLOAD_SIZE as u32);
+
+        let mut block = [0u8; UF2_BLOCK_SIZE];
+        let write_u32 = |buf: &mut [u8], offset: usize, val: u32| {
+            buf[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+        };
+
+        write_u32(&mut block, 0,  UF2_MAGIC_START0);
+        write_u32(&mut block, 4,  UF2_MAGIC_START1);
+        write_u32(&mut block, 8,  UF2_FLAG_FAMILY);
+        write_u32(&mut block, 12, target_addr);
+        write_u32(&mut block, 16, UF2_PAYLOAD_SIZE as u32);
+        write_u32(&mut block, 20, block_no as u32);
+        write_u32(&mut block, 24, num_blocks);
+        write_u32(&mut block, 28, family_id);
+        block[32..32 + chunk.len()].copy_from_slice(chunk);
+        write_u32(&mut block, 508, UF2_MAGIC_END);
+
+        out.extend_from_slice(&block);
+    }
+    Ok(out)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -44,6 +44,21 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         (&["-mlongcalls", "-mtext-section-literals", "-falign-functions=4"], "eagle.app.v6.common.ld")
     };
 
+    // Derive the SDK platform root from core_dir:
+    //   core_dir  = <sdk_dir>/cores/esp8266/  (or .../cores/esp32/)
+    //   sdk_dir   = <sdk_dir>/
+    // ESP8266 keeps SDK headers/libs/ld-scripts under tools/sdk/ inside the
+    // platform directory — NOT the toolchain tools directory.
+    let sdk_dir = sdk.core_dir.parent().and_then(|p| p.parent())
+        .map(|p| p.to_owned())
+        .unwrap_or_else(|| sdk.core_dir.clone());
+
+    // ESP8266-specific paths under tools/sdk/
+    let esp8266_sdk = sdk_dir.join("tools").join("sdk");
+    let esp8266_sdk_include = esp8266_sdk.join("include");
+    let esp8266_sdk_ld      = esp8266_sdk.join("ld");
+    let esp8266_sdk_lib     = esp8266_sdk.join("lib");
+
     let common_flags: Vec<String> = {
         let mut f = vec![
             format!("-DF_CPU={}L", board.f_cpu()),
@@ -55,6 +70,13 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
             format!("-I{}", sdk.core_dir.display()),
             format!("-I{}", sdk.variant_dir.display()),
         ];
+        // ESP8266 requires tools/sdk/include on the include path.
+        // c_types.h, ets_sys.h, and many other SDK headers live there.
+        // Without it the very first #include in cores/esp8266/esp8266_peri.h
+        // fails with "c_types.h: No such file or directory".
+        if !is_esp32 && esp8266_sdk_include.is_dir() {
+            f.push(format!("-I{}", esp8266_sdk_include.display()));
+        }
         for d in board.defines {
             f.push(format!("-D{}", d));
         }
@@ -131,12 +153,41 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     };
 
     let mut link_cmd = Command::new(&linker);
-    link_cmd.args(&common_flags)
-        .arg(format!("-Wl,-T{}", link_script))
-        .arg("-Wl,--gc-sections")
-        .arg("-Wl,-Map,/dev/null");
-    for obj in &obj_files { link_cmd.arg(obj); }
-    link_cmd.arg("-lm").arg("-o").arg(&elf);
+    link_cmd.args(&common_flags);
+
+    if !is_esp32 {
+        // ESP8266: linker scripts live in tools/sdk/ld/ and system libraries
+        // in tools/sdk/lib/.  Both -L dirs must be present before -T so the
+        // linker can resolve the script and the archive symbols.
+        if esp8266_sdk_ld.is_dir() {
+            link_cmd.arg(format!("-L{}", esp8266_sdk_ld.display()));
+        }
+        if esp8266_sdk_lib.is_dir() {
+            link_cmd.arg(format!("-L{}", esp8266_sdk_lib.display()));
+        }
+        link_cmd
+            .arg(format!("-T{}", link_script))   // just the filename; -L above resolves it
+            .arg("-Wl,--gc-sections")
+            .arg("-nostdlib");
+        for obj in &obj_files { link_cmd.arg(obj); }
+        // ESP8266 system libraries required by the SDK — order matters for ld
+        link_cmd
+            .arg("-Wl,--start-group")
+            .arg("-lhal").arg("-lphy").arg("-lpp").arg("-lnet80211")
+            .arg("-lwpa").arg("-lcrypto").arg("-lmain").arg("-lwps")
+            .arg("-laxtls").arg("-lespnow").arg("-lsmartconfig")
+            .arg("-lairkiss").arg("-lwpa2").arg("-lstdc++").arg("-lm")
+            .arg("-lc").arg("-lgcc")
+            .arg("-Wl,--end-group");
+    } else {
+        link_cmd
+            .arg(format!("-Wl,-T{}", link_script))
+            .arg("-Wl,--gc-sections")
+            .arg("-Wl,-Map,/dev/null");
+        for obj in &obj_files { link_cmd.arg(obj); }
+        link_cmd.arg("-lm");
+    }
+    link_cmd.arg("-o").arg(&elf);
 
     let link_out = link_cmd.output()?;
     if !link_out.status.success() {
@@ -162,6 +213,7 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         hex_path: None,
         bin_path: if bin.exists() { Some(bin) } else { None },
         elf_path: Some(elf),
+        uf2_path: None,
         size_info: String::new(),
     })
 }
