@@ -2382,14 +2382,25 @@ begin
 end;
 
 // ─── Detectar si hay bundle de IDE disponible ─────────────────────────
+// NOTE: HasIdeBundle MUST check the SOURCE path (the build artifact), NOT
+// the destination. Checking {app}\ide\... causes a silent deadlock:
+//   [Files] Check: fires BEFORE any files are copied → exe not there yet →
+//   HasIdeBundle = False → IDE files never copied → [Run] also False →
+//   "Open IDE" checkbox never shown. No errors, just total silence.
+// We resolve this once in InitializeSetup and cache it in a global.
+var
+  IdeBundleExists: Boolean;
+
 function HasIdeBundle: Boolean;
 begin
-  // Check the actual exe exists, not just the folder (folder is always created by [Dirs])
-  Result := FileExists(ExpandConstant('{app}\\ide\\@@ide_exe_name@@'));
+  Result := IdeBundleExists;
 end;
 
 function InitializeSetup: Boolean;
 begin
+  // @@ide_bundle_exe@@ is substituted by build.py with the absolute path
+  // to the compiled IDE executable in the build output directory.
+  IdeBundleExists := FileExists('@@ide_bundle_exe@@');
   Result := True;
 end;
 '''
@@ -2519,6 +2530,11 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@flash_bin@@":     _w(flash_bin),
         "@@icon_file@@":    _w(icon_file),
         "@@ide_bundle@@":   _w(ide_bundle) if ide_bundle else "",
+        # Full SOURCE path to the IDE exe — used by HasIdeBundle/InitializeSetup.
+        # Must point to the BUILD OUTPUT, not {app}\ide (destination).
+        # Checking the destination was the original bug: it doesn't exist yet
+        # when [Files] Check: fires, so IDE files were silently never copied.
+        "@@ide_bundle_exe@@": _w(os.path.join(ide_bundle, ide_exe_name or f"{APP_NAME}.exe")) if ide_bundle else "",
         "@@pkg_dir@@":      _w(pkg_dir),
         "@@cores_avr_dir@@": _w(cores_avr),
         "@@release_dir@@":  _w(RELEASE_DIR),
