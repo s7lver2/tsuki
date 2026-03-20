@@ -1703,11 +1703,62 @@ def build_tauri(platform_key, version):
         )
 
     # ── Copiar a BUILD_DIR ───────────────────────────────────────────────────
-    dst = os.path.join(BUILD_DIR, f"ide-{platform_key}")
-    os.makedirs(dst, exist_ok=True)
-    shutil.copy(exe_src, os.path.join(dst, exe_name))
+    # IMPORTANT: copy the WHOLE release directory, not just the exe.
+    # On Windows, Tauri produces WebView2Loader.dll (and possibly other DLLs
+    # or a resources/ folder) alongside the binary.  Copying only the exe
+    # leaves those out → the installed IDE crashes on launch, the desktop
+    # shortcut fails, and the "Open IDE" run entry never fires because
+    # HasIdeBundle found the exe but the app can't actually start.
+    #
+    # We deliberately exclude:
+    #   bundle/        – Tauri's own NSIS/MSI installers (we use Inno instead)
+    #   incremental/   – Cargo incremental build artifacts (hundreds of MB)
+    #   .fingerprint/  – Cargo fingerprints
+    #   deps/          – intermediate object files
+    #   build/         – build-script output
+    #   examples/      – Cargo example binaries
+    #   *.pdb          – debug symbols
+    #   *.d            – Makefile dependency files
+    #   *.rlib *.rmeta *.exp *.lib  – Rust/MSVC intermediate artifacts
+    _EXCLUDE_DIRS = {"bundle", "incremental", ".fingerprint", "deps", "build", "examples"}
+    _EXCLUDE_EXTS = {".pdb", ".d", ".rlib", ".rmeta", ".exp"}
+    # Keep import-lib .lib files only for DLLs; Rust static .lib artifacts
+    # bloat the bundle by hundreds of MB.  We only need DLLs + the exe.
 
-    info(f"Tauri IDE executable → {dst}/{exe_name}")
+    # Determine which of the two candidate dirs actually has the exe
+    bundle_src_dir = None
+    for sd in [release_dir, alt_release_dir]:
+        if os.path.isfile(os.path.join(sd, exe_name)):
+            bundle_src_dir = sd
+            break
+    if bundle_src_dir is None:
+        bundle_src_dir = release_dir  # fallback (exe_src was found somewhere)
+
+    dst = os.path.join(BUILD_DIR, f"ide-{platform_key}")
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    os.makedirs(dst, exist_ok=True)
+
+    for entry in os.listdir(bundle_src_dir):
+        if entry in _EXCLUDE_DIRS:
+            continue
+        _, sext = os.path.splitext(entry)
+        if sext in _EXCLUDE_EXTS:
+            continue
+        # Skip heavy Rust/MSVC static-lib artifacts (.lib that aren't import libs).
+        # Import-lib .lib files are small (<1 KB) and sit next to their .dll;
+        # Rust rlib .lib files are large.  We skip all .lib to be safe — the
+        # DLLs themselves (not their import libs) are what the exe needs at runtime.
+        if sext == ".lib":
+            continue
+        src_path = os.path.join(bundle_src_dir, entry)
+        dst_path = os.path.join(dst, entry)
+        if os.path.isdir(src_path):
+            shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src_path, dst_path)
+
+    info(f"Tauri IDE bundle → {dst}  ({len(os.listdir(dst))} entradas)")
     return dst, exe_name
 
 # ─────────────────────────────────────────────
@@ -2382,25 +2433,19 @@ begin
 end;
 
 // ─── Detectar si hay bundle de IDE disponible ─────────────────────────
-// NOTE: HasIdeBundle MUST check the SOURCE path (the build artifact), NOT
-// the destination. Checking {app}\ide\... causes a silent deadlock:
-//   [Files] Check: fires BEFORE any files are copied → exe not there yet →
-//   HasIdeBundle = False → IDE files never copied → [Run] also False →
-//   "Open IDE" checkbox never shown. No errors, just total silence.
-// We resolve this once in InitializeSetup and cache it in a global.
-var
-  IdeBundleExists: Boolean;
-
+// This value is baked in at BUILD TIME by build.py.
+// @@has_ide_bundle@@ is substituted with 'True' or 'False' depending on
+// whether build_tauri produced an IDE bundle for this platform.
+// DO NOT check {app}\ide\... here — that destination doesn't exist yet
+// when [Files] Check: fires (silent deadlock), and DO NOT check a source
+// path from the build machine — it won't exist on the user's machine.
 function HasIdeBundle: Boolean;
 begin
-  Result := IdeBundleExists;
+  Result := @@has_ide_bundle@@;
 end;
 
 function InitializeSetup: Boolean;
 begin
-  // @@ide_bundle_exe@@ is substituted by build.py with the absolute path
-  // to the compiled IDE executable in the build output directory.
-  IdeBundleExists := FileExists('@@ide_bundle_exe@@');
   Result := True;
 end;
 '''
@@ -2530,11 +2575,9 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@flash_bin@@":     _w(flash_bin),
         "@@icon_file@@":    _w(icon_file),
         "@@ide_bundle@@":   _w(ide_bundle) if ide_bundle else "",
-        # Full SOURCE path to the IDE exe — used by HasIdeBundle/InitializeSetup.
-        # Must point to the BUILD OUTPUT, not {app}\ide (destination).
-        # Checking the destination was the original bug: it doesn't exist yet
-        # when [Files] Check: fires, so IDE files were silently never copied.
-        "@@ide_bundle_exe@@": _w(os.path.join(ide_bundle, ide_exe_name or f"{APP_NAME}.exe")) if ide_bundle else "",
+        # Baked in at build time: True/False Pascal literal.
+        # HasIdeBundle() reads this directly — no runtime FileExists() needed.
+        "@@has_ide_bundle@@": "True" if ide_bundle else "False",
         "@@pkg_dir@@":      _w(pkg_dir),
         "@@cores_avr_dir@@": _w(cores_avr),
         "@@release_dir@@":  _w(RELEASE_DIR),
