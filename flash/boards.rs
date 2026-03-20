@@ -266,6 +266,25 @@ static BOARDS: &[Board] = &[
         toolchain: Toolchain::Esp8266,
         defines: &["ARDUINO_ESP8266_WEMOS_D1MINI", "ARDUINO_ARCH_ESP8266", "ESP8266"],
     },
+    // Alias: "lolin_d1_mini" and "wemos_d1_mini" both resolve to the same board.
+    // The Lolin (formerly Wemos) D1 Mini is identical hardware — same ESP8266,
+    // same 4MB flash, same pinout.  Users may refer to it by either brand name.
+    Board {
+        id: "lolin_d1_mini", name: "Lolin Wemos D1 Mini",
+        fqbn: "esp8266:esp8266:d1_mini",
+        variant: "d1_mini",
+        flash_kb: 4096, ram_kb: 80,
+        toolchain: Toolchain::Esp8266,
+        defines: &["ARDUINO_ESP8266_WEMOS_D1MINI", "ARDUINO_ARCH_ESP8266", "ESP8266"],
+    },
+    Board {
+        id: "wemos_d1_mini", name: "Wemos D1 Mini (alias)",
+        fqbn: "esp8266:esp8266:d1_mini",
+        variant: "d1_mini",
+        flash_kb: 4096, ram_kb: 80,
+        toolchain: Toolchain::Esp8266,
+        defines: &["ARDUINO_ESP8266_WEMOS_D1MINI", "ARDUINO_ARCH_ESP8266", "ESP8266"],
+    },
     Board {
         id: "nodemcu", name: "NodeMCU 1.0 (ESP-12E)",
         fqbn: "esp8266:esp8266:nodemcuv2",

@@ -94,8 +94,13 @@ static VID_PID_MAP: &[(u16, u16, &str, &str)] = &[
     (0x0403, 0x6001, "nano",     "Arduino Nano (FT232RL)"),
     (0x0403, 0x6015, "nano",     "Arduino Nano (FT-X)"),
     // ── Silicon Labs CP210x (0x10C4) ──────────────────────────────────────
-    (0x10C4, 0xEA60, "esp32",    "ESP32 / ESP8266 (CP2102)"),
+    // CP2102 (0xEA60) appears on both D1 Mini / NodeMCU (ESP8266) and some
+    // ESP32 boards. ESP8266 boards are far more common on this PID, so we
+    // map to d1_mini. Users with an ESP32 on CP2102 can pass --board esp32.
+    (0x10C4, 0xEA60, "d1_mini",  "Wemos D1 Mini / NodeMCU (CP2102)"),
     (0x10C4, 0xEA70, "esp32",    "ESP32 (CP2105)"),
+    // CP2104 is used on many official Espressif ESP32 DevKitC boards
+    (0x10C4, 0xEA71, "esp32",    "ESP32 DevKitC (CP2104)"),
     // ── Raspberry Pi RP2040 (0x2E8A) ──────────────────────────────────────
     (0x2E8A, 0x000A, "pico",     "Raspberry Pi Pico"),
     (0x2E8A, 0x0005, "pico",     "Raspberry Pi Pico (MicroPython)"),
@@ -360,40 +365,88 @@ fn parse_ioreg_str(line: &str) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn windows_enumerate() -> Vec<(String, Option<(u16, u16)>)> {
-    // Use WMIC — available on every Windows install since XP.
-    // Output format (CSV):
-    //   Node,DeviceID,PNPDeviceID
-    //   HOSTNAME,COM3,USB\VID_1A86&PID_7523\5&...
+    // WMIC was deprecated in Windows 10 21H1 and fully REMOVED in Windows 11
+    // 24H2 (Oct 2024). On those machines the old code silently fell back to
+    // the registry (names only, no VID:PID) → board not recognized →
+    // serial port connection error.
+    //
+    // Priority: PowerShell → WMIC → registry fallback.
+    let ps = windows_enumerate_powershell();
+    if !ps.is_empty() { return ps; }
+
+    let wmic = windows_enumerate_wmic();
+    if !wmic.is_empty() { return wmic; }
+
+    windows_enumerate_registry_fallback()
+}
+
+/// Enumerate COM ports via PowerShell Get-PnpDevice.
+/// Available on Windows 10 and all Windows 11 versions including 24H2+.
+#[cfg(target_os = "windows")]
+fn windows_enumerate_powershell() -> Vec<(String, Option<(u16, u16)>)> {
+    let script =
+        "Get-PnpDevice -Class Ports -Status OK | \
+         Select-Object InstanceId,FriendlyName | \
+         ForEach-Object { \"$($_.InstanceId)|$($_.FriendlyName)\" }";
+
+    let out = match std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return vec![],
+    };
+
+    let mut results = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let mut parts = line.splitn(2, '|');
+        let instance_id   = parts.next().unwrap_or("").trim();
+        let friendly_name = parts.next().unwrap_or("").trim();
+        let port = match extract_com_port(friendly_name) {
+            Some(p) => p,
+            None    => continue,
+        };
+        let vid_pid = parse_pnp_vid_pid(instance_id);
+        results.push((port, vid_pid));
+    }
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    results
+}
+
+/// Extract "COM3" from a FriendlyName like "USB-SERIAL CH340 (COM3)".
+#[cfg(target_os = "windows")]
+fn extract_com_port(s: &str) -> Option<String> {
+    let start = s.rfind("(COM")? + 1;
+    let rest  = &s[start..];
+    let end   = rest.find(')')? + start;
+    let port  = &s[start..end];
+    if port.starts_with("COM") { Some(port.to_owned()) } else { None }
+}
+
+/// Enumerate via WMIC — works on Windows 7/8/10 and early Win11, NOT 24H2+.
+#[cfg(target_os = "windows")]
+fn windows_enumerate_wmic() -> Vec<(String, Option<(u16, u16)>)> {
     let out = match std::process::Command::new("wmic")
         .args(["path", "Win32_SerialPort", "get", "DeviceID,PNPDeviceID", "/FORMAT:CSV"])
         .output()
     {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(_) => return windows_enumerate_registry_fallback(),
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return vec![],
     };
 
     let mut results = Vec::new();
-
     for line in out.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with("Node") { continue; }
-
         let cols: Vec<&str> = line.split(',').collect();
         if cols.len() < 3 { continue; }
-
-        let device_id = cols[1].trim();   // e.g. COM3
-        let pnp_id    = cols[2].trim();   // e.g. USB\VID_1A86&PID_7523\...
-
+        let device_id = cols[1].trim();
+        let pnp_id    = cols[2].trim();
         if !device_id.starts_with("COM") { continue; }
-
-        let vid_pid = parse_pnp_vid_pid(pnp_id);
-        results.push((device_id.to_owned(), vid_pid));
+        results.push((device_id.to_owned(), parse_pnp_vid_pid(pnp_id)));
     }
-
-    if results.is_empty() {
-        return windows_enumerate_registry_fallback();
-    }
-
     results.sort_by(|a, b| a.0.cmp(&b.0));
     results
 }

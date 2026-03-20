@@ -581,7 +581,7 @@ pub fn arch_to_package(arch: &str) -> Result<(&'static str, &'static str, &'stat
         "avr"     => Ok(("arduino", "avr",     "arduino")),
         "sam"     => Ok(("arduino", "sam",     "arduino")),
         "esp32"   => Ok(("esp32",   "esp32",   "esp32")),
-        "esp8266" => Ok(("esp8266", "esp8266", "esp8266com")),
+        "esp8266" => Ok(("esp8266", "esp8266", "esp8266")),
         "rp2040"  => Ok(("rp2040",  "rp2040",  "rp2040")),
         other => Err(FlashError::Other(format!(
             "Unknown architecture '{}'. Supported: avr, sam, esp32, esp8266, rp2040", other
@@ -594,7 +594,7 @@ fn find_latest_platform<'a>(
     pkg_name: &str,
     hw_arch: &str,
 ) -> Result<(&'a IndexPackage, &'a Platform)> {
-    // Case-insensitive search handles e.g. "esp8266com" vs "esp8266Com".
+    // Case-insensitive search handles minor capitalisation differences.
     let pkg = index.packages.iter()
         .find(|p| p.name.to_lowercase() == pkg_name.to_lowercase())
         .ok_or_else(|| FlashError::Other(format!("Package '{}' not found in index", pkg_name)))?;
