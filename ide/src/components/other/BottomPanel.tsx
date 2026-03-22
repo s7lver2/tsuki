@@ -2,7 +2,7 @@
 import { useStore, BottomTab } from '@/lib/store'
 import { useEffect, useRef, useState, useCallback, KeyboardEvent as RKE } from 'react'
 import { IconBtn } from '@/components/shared/primitives'
-import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Filter, Copy, ChevronDown } from 'lucide-react'
+import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Filter, Copy, ChevronDown, Radio, Circle, PlugZap, Unplug, Settings2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
 import { ptyCreate, ptyWrite, ptyKill, ptyOnData, ptyOnExit, spawnProcess, listShells, pathExists, type ShellInfo, isTauri } from '@/lib/tauri'
@@ -15,6 +15,7 @@ function useTabs() {
     { id: 'output'   as BottomTab, label: t('bottomPanel.output')   },
     { id: 'problems' as BottomTab, label: t('bottomPanel.problems') },
     { id: 'terminal' as BottomTab, label: t('bottomPanel.terminal') },
+    { id: 'monitor'  as BottomTab, label: 'Monitor' },
   ]
 }
 
@@ -800,6 +801,305 @@ function ProblemsTab() {
   )
 }
 
+// ── Serial Monitor ────────────────────────────────────────────────────────────
+//
+// Uses `tsuki monitor --port <port> --baud <baud>` as the backend.
+// The monitor command streams serial data to stdout; we pipe it via
+// spawnProcess and write lines via stdin.
+//
+// Port discovery: runs `tsuki-flash detect` (which prints COM/tty ports)
+// or falls back to a manual port entry.
+
+const BAUD_RATES = ['300','1200','2400','4800','9600','14400','19200','28800','38400','57600','74880','115200','230400','250000','500000','1000000','2000000']
+
+interface MonitorLine { id: number; text: string; dir: 'rx' | 'tx' | 'sys' }
+let _mlid = 0
+
+function SerialMonitor() {
+  const { settings, updateSetting } = useStore()
+  const tsukiPath = (settings.tsukiPath?.trim() || 'tsuki').replace(/^"|"$/g, '')
+
+  const [port,     setPort    ] = useState(settings.monitorPort || '')
+  const [baud,     setBaud    ] = useState(settings.monitorBaud || '9600')
+  const [ports,    setPorts   ] = useState<string[]>([])
+  const [lines,    setLines   ] = useState<MonitorLine[]>([])
+  const [input,    setInput   ] = useState('')
+  const [running,  setRunning ] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [showCfg,  setShowCfg ] = useState(false)
+  const [nl,       setNl      ] = useState<'nl'|'cr'|'crlf'|'none'>('nl')
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [hexMode,  setHexMode ] = useState(false)
+
+  const scrollRef  = useRef<HTMLDivElement>(null)
+  const inputRef   = useRef<HTMLInputElement>(null)
+  const handleRef  = useRef<Awaited<ReturnType<typeof spawnProcess>> | null>(null)
+
+  // Auto-scroll
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [lines, autoScroll])
+
+  // Persist port/baud to settings
+  useEffect(() => { updateSetting('monitorPort', port) }, [port])   // eslint-disable-line
+  useEffect(() => { updateSetting('monitorBaud',  baud) }, [baud])  // eslint-disable-line
+
+  function push(text: string, dir: MonitorLine['dir']) {
+    setLines(prev => [...prev, { id: _mlid++, text, dir }])
+  }
+
+  // ── Port scan ─────────────────────────────────────────────────────────────
+  async function scanPorts() {
+    setScanning(true)
+    try {
+      const flashBin = (settings.tsukiFlashPath?.trim() || 'tsuki-flash').replace(/^"|"$/g, '')
+      const found: string[] = []
+      const handle = await spawnProcess(flashBin, ['detect'], undefined, (line) => {
+        const trimmed = line.trim()
+        // tsuki-flash detect prints one port per line, e.g. "COM3" or "/dev/ttyUSB0"
+        if (trimmed && (trimmed.startsWith('COM') || trimmed.startsWith('/dev/'))) {
+          found.push(trimmed)
+        }
+      })
+      await handle.done
+      handle.dispose()
+      setPorts(found)
+      if (found.length > 0 && !port) setPort(found[0])
+    } catch {
+      push('⚠ Could not run tsuki-flash detect — enter port manually', 'sys')
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  // ── Connect ───────────────────────────────────────────────────────────────
+  async function connect() {
+    if (!port.trim()) { push('⚠ No port selected', 'sys'); return }
+    if (running) return
+
+    push(`Connecting to ${port} @ ${baud} baud…`, 'sys')
+    setRunning(true)
+
+    try {
+      const handle = await spawnProcess(
+        tsukiPath,
+        ['monitor', '--port', port.trim(), '--baud', baud],
+        undefined,
+        (line, isErr) => {
+          if (!line.trim()) return
+          if (hexMode) {
+            const hex = Array.from(line).map(c => c.charCodeAt(0).toString(16).padStart(2,'0')).join(' ')
+            push(hex, 'rx')
+          } else {
+            push(line, isErr ? 'sys' : 'rx')
+          }
+        },
+      )
+      handleRef.current = handle
+      push(`Connected to ${port}`, 'sys')
+      inputRef.current?.focus()
+
+      handle.done.then(code => {
+        handleRef.current = null
+        setRunning(false)
+        push(`Connection closed (exit ${code})`, 'sys')
+      })
+    } catch (e) {
+      setRunning(false)
+      push(`Failed to connect: ${e}`, 'sys')
+    }
+  }
+
+  // ── Disconnect ────────────────────────────────────────────────────────────
+  async function disconnect() {
+    if (handleRef.current) {
+      await handleRef.current.kill().catch(() => {})
+      handleRef.current = null
+    }
+    setRunning(false)
+    push('Disconnected.', 'sys')
+  }
+
+  // Cleanup on unmount
+  useEffect(() => () => { handleRef.current?.kill().catch(() => {}) }, [])
+
+  // ── Send ─────────────────────────────────────────────────────────────────
+  async function send(text: string) {
+    if (!running || !handleRef.current) return
+    const suffix = nl === 'nl' ? '\n' : nl === 'cr' ? '\r' : nl === 'crlf' ? '\r\n' : ''
+    const payload = text + suffix
+    try {
+      await handleRef.current.write(payload)
+      push(text, 'tx')
+    } catch (e) {
+      push(`Send error: ${e}`, 'sys')
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); send(input); setInput('') }
+  }
+
+  const lineColor = (dir: MonitorLine['dir']) =>
+    dir === 'tx'  ? '#98c379' :
+    dir === 'sys' ? 'var(--fg-faint)' :
+    'var(--fg-muted)'
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ fontFamily: '"JetBrains Mono", Consolas, monospace' }}>
+
+      {/* ── Toolbar ── */}
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-[var(--border)] flex-shrink-0 flex-wrap"
+        style={{ background: 'var(--surface-2)' }}>
+
+        {/* Port selector */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <span className="text-[10px] text-[var(--fg-faint)] select-none">Port</span>
+          <select value={port} onChange={e => setPort(e.target.value)}
+            disabled={running}
+            className="text-[11px] bg-[var(--surface-3)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[var(--fg)] outline-none cursor-pointer disabled:opacity-50"
+            style={{ maxWidth: 120 }}>
+            <option value="">— select —</option>
+            {ports.map(p => <option key={p} value={p}>{p}</option>)}
+            {port && !ports.includes(port) && <option value={port}>{port}</option>}
+          </select>
+          <input
+            value={port} onChange={e => setPort(e.target.value)}
+            disabled={running}
+            placeholder="COM3 / /dev/ttyUSB0"
+            className="text-[11px] bg-[var(--surface-3)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[var(--fg)] outline-none w-32 disabled:opacity-50"
+          />
+          <button onClick={scanPorts} disabled={running || scanning}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--border)] bg-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer disabled:opacity-40 transition-colors">
+            {scanning ? '…' : '⟳'}
+          </button>
+        </div>
+
+        {/* Baud rate */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <span className="text-[10px] text-[var(--fg-faint)] select-none">Baud</span>
+          <select value={baud} onChange={e => setBaud(e.target.value)}
+            disabled={running}
+            className="text-[11px] bg-[var(--surface-3)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[var(--fg)] outline-none cursor-pointer disabled:opacity-50">
+            {BAUD_RATES.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+
+        {/* Connect / Disconnect */}
+        {!running ? (
+          <button onClick={connect} disabled={!port.trim()}
+            className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-[var(--border)] bg-transparent text-green-400 hover:bg-green-500/10 cursor-pointer disabled:opacity-40 transition-colors">
+            <PlugZap size={11} /> Connect
+          </button>
+        ) : (
+          <button onClick={disconnect}
+            className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-[var(--border)] bg-transparent text-red-400 hover:bg-red-500/10 cursor-pointer transition-colors">
+            <Unplug size={11} /> Disconnect
+          </button>
+        )}
+
+        {/* Running indicator */}
+        {running && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" title="Connected" />}
+
+        <div className="flex-1" />
+
+        {/* Config toggle */}
+        <button onClick={() => setShowCfg(s => !s)}
+          className={clsx('p-1 rounded border border-transparent hover:border-[var(--border)] bg-transparent cursor-pointer transition-colors',
+            showCfg ? 'text-[var(--fg)] bg-[var(--active)]' : 'text-[var(--fg-faint)] hover:text-[var(--fg)]')}>
+          <Settings2 size={11} />
+        </button>
+
+        {/* Auto-scroll */}
+        <button onClick={() => setAutoScroll(s => !s)} title={autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF'}
+          className={clsx('p-1 rounded border border-transparent hover:border-[var(--border)] bg-transparent cursor-pointer transition-colors',
+            autoScroll ? 'text-green-400' : 'text-[var(--fg-faint)] hover:text-[var(--fg)]')}>
+          <ChevronDown size={11} />
+        </button>
+
+        {/* Clear */}
+        <button onClick={() => setLines([])} title="Clear"
+          className="p-1 rounded border border-transparent hover:border-[var(--border)] bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer transition-colors">
+          <Trash2 size={11} />
+        </button>
+      </div>
+
+      {/* ── Config panel ── */}
+      {showCfg && (
+        <div className="flex items-center gap-3 px-3 py-1.5 border-b border-[var(--border)] flex-shrink-0 flex-wrap"
+          style={{ background: 'var(--surface-2)', fontSize: 11 }}>
+          <div className="flex items-center gap-1">
+            <span className="text-[var(--fg-faint)]">Line ending</span>
+            {(['none','nl','cr','crlf'] as const).map(v => (
+              <button key={v} onClick={() => setNl(v)}
+                className={clsx('px-1.5 py-0.5 rounded border text-[10px] font-mono cursor-pointer transition-colors bg-transparent',
+                  nl === v ? 'border-[var(--fg-faint)] text-[var(--fg)]' : 'border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)]')}>
+                {v === 'none' ? 'None' : v === 'nl' ? '\\n' : v === 'cr' ? '\\r' : '\\r\\n'}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[var(--fg-faint)]">Display</span>
+            <button onClick={() => setHexMode(false)}
+              className={clsx('px-1.5 py-0.5 rounded border text-[10px] cursor-pointer transition-colors bg-transparent',
+                !hexMode ? 'border-[var(--fg-faint)] text-[var(--fg)]' : 'border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)]')}>ASCII</button>
+            <button onClick={() => setHexMode(true)}
+              className={clsx('px-1.5 py-0.5 rounded border text-[10px] cursor-pointer transition-colors bg-transparent',
+                hexMode ? 'border-[var(--fg-faint)] text-[var(--fg)]' : 'border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)]')}>HEX</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Scrollback ── */}
+      <div ref={scrollRef}
+        className="flex-1 overflow-y-auto px-3 pt-2 pb-1 select-text"
+        style={{ fontSize: 12, lineHeight: 1.65, scrollbarWidth: 'thin' }}
+        onScroll={e => {
+          const el = e.currentTarget
+          setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+        }}>
+        {lines.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full gap-2 text-[var(--fg-faint)]" style={{ minHeight: 80 }}>
+            <Radio size={20} className="opacity-30" />
+            <span className="text-xs">Select a port and click Connect</span>
+          </div>
+        )}
+        {lines.map(l => (
+          <div key={l.id} className="whitespace-pre-wrap break-all flex gap-2"
+            style={{ color: lineColor(l.dir), fontStyle: l.dir === 'sys' ? 'italic' : undefined, opacity: l.dir === 'sys' ? 0.65 : 1 }}>
+            <span className="select-none flex-shrink-0 w-3 text-[10px] mt-[2px]"
+              style={{ color: l.dir === 'tx' ? '#98c379' : l.dir === 'rx' ? '#61afef' : 'transparent' }}>
+              {l.dir === 'tx' ? '▲' : l.dir === 'rx' ? '▼' : '·'}
+            </span>
+            <span className="flex-1 min-w-0">{l.text}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Input row ── */}
+      <div className="flex items-center gap-2 px-3 border-t flex-shrink-0"
+        style={{ borderColor: 'var(--border)', paddingTop: 5, paddingBottom: 5,
+          opacity: running ? 1 : 0.4, pointerEvents: running ? 'auto' : 'none' }}>
+        <span style={{ color: '#98c379', fontSize: 11, flexShrink: 0, userSelect: 'none' }}>▲</span>
+        <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={!running}
+          spellCheck={false} autoComplete="off" autoCapitalize="off"
+          className="flex-1 border-0 outline-none bg-transparent min-w-0 text-[var(--fg)]"
+          style={{ fontFamily: 'inherit', fontSize: 12, caretColor: '#98c379' }}
+          placeholder={running ? `Send data (${nl === 'none' ? 'no newline' : nl})…` : ''}
+        />
+        <button onClick={() => { send(input); setInput('') }} disabled={!running || !input.trim()}
+          className="text-[10px] px-2 py-0.5 rounded border border-[var(--border)] bg-transparent text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer disabled:opacity-30 transition-colors flex-shrink-0">
+          Send
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main BottomPanel ──────────────────────────────────────────────────────────
 
 export default function BottomPanel() {
@@ -995,6 +1295,10 @@ export default function BottomPanel() {
 
       <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'terminal' && 'hidden')}>
         <Terminal />
+      </div>
+
+      <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'monitor' && 'hidden')}>
+        <SerialMonitor />
       </div>
     </div>
   )

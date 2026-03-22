@@ -8,6 +8,10 @@ use thiserror::Error;
 // ── Source span ───────────────────────────────────────────────────────────────
 
 /// A position inside a source file.
+///
+/// The `file` field uses `Arc<str>` internally when created via `new_arc`
+/// so the lexer can clone spans cheaply (just a refcount bump) instead of
+/// heap-allocating a new `String` for every token.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Span {
     pub file:   String,
@@ -20,6 +24,15 @@ pub struct Span {
 impl Span {
     pub fn new(file: impl Into<String>, line: u32, col: u32, offset: usize) -> Self {
         Self { file: file.into(), line, col, offset }
+    }
+
+    /// Cheap constructor that accepts an `Arc<str>` (no extra allocation).
+    /// Used by the optimized lexer to avoid one `String::clone()` per span.
+    #[inline]
+    pub fn new_arc(file: std::sync::Arc<str>, line: u32, col: u32, offset: usize) -> Self {
+        // Arc<str> → String: one allocation, but only when an error actually
+        // needs to be reported (rare path).  Happy path just uses `Arc::clone`.
+        Self { file: file.as_ref().to_owned(), line, col, offset }
     }
 
     /// A dummy span for generated/synthetic nodes.

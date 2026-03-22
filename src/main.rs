@@ -42,13 +42,13 @@ fn main() {
         .collect();
 
     let input: PathBuf = match positional.first() {
-        Some(p) => (*p).clone().into(),
+        Some(p) => PathBuf::from(p.as_str()),
         None => {
             eprintln!("error: missing input file\n\nUsage: tsuki <input.go> [output.cpp] [FLAGS]\nRun `tsuki --help` for more information.");
             std::process::exit(1);
         }
     };
-    let output: Option<PathBuf> = positional.get(1).map(|s| (*s).clone().into());
+    let output: Option<PathBuf> = positional.get(1).map(|s| PathBuf::from(s.as_str()));
 
     // ── Named flags ───────────────────────────────────────────────────────────
     let board      = flag_value(&args, "--board").unwrap_or_else(|| "uno".into());
@@ -94,24 +94,16 @@ fn main() {
     };
 
     // Dispatch to the appropriate pipeline based on language
-    let run_pipeline = |source: &str, filename: &str| -> tsuki_core::Result<String> {
+    let run_pipeline = |source: &str, filename: &str, cfg: TranspileConfig, opts: PipelineOptions| -> tsuki_core::Result<String> {
         match lang.as_str() {
-            "py" | "python" => PythonPipeline::new(cfg.clone()).with_options(PipelineOptions {
-                libs_dir:           opts.libs_dir.clone(),
-                pkg_names:          opts.pkg_names.clone(),
-                webkit_project_dir: opts.webkit_project_dir.clone(),
-            }).run(source, filename),
-            _ => Pipeline::new(cfg.clone()).with_options(PipelineOptions {
-                libs_dir:           opts.libs_dir.clone(),
-                pkg_names:          opts.pkg_names.clone(),
-                webkit_project_dir: opts.webkit_project_dir.clone(),
-            }).run(source, filename),
+            "py" | "python" => PythonPipeline::new(cfg).with_options(opts).run(source, filename),
+            _               => Pipeline::new(cfg).with_options(opts).run(source, filename),
         }
     };
 
     // ── Run (check-only or full transpile) ────────────────────────────────────
     if check_only {
-        match run_pipeline(&source, &filename) {
+        match run_pipeline(&source, &filename, cfg.clone(), PipelineOptions { libs_dir: opts.libs_dir.clone(), pkg_names: opts.pkg_names.clone(), webkit_project_dir: None }) {
             Ok(_)  => {
                 eprintln!("ok  {} — no errors", input.display());
                 std::process::exit(0);
@@ -123,7 +115,7 @@ fn main() {
         }
     }
 
-    match run_pipeline(&source, &filename) {
+    match run_pipeline(&source, &filename, cfg, opts) {
         Ok(cpp) => {
             // ── Emit .sim.json bundle if requested ────────────────────────────
             if let Some(ref sim_path) = emit_sim {
@@ -302,7 +294,14 @@ fn fetch_registry_or_exit(url: &str) -> pkg_manager::Registry {
 }
 
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
-    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
+    // Single pass; only clone the value string (not the entire arg list)
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == flag {
+            return iter.next().cloned();
+        }
+    }
+    None
 }
 
 fn print_help() {

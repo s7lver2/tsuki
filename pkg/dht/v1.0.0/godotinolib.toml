@@ -13,33 +13,33 @@ aliases = ["DHT"]
 [[function]]
 go     = "New"
 python = "new"
-cpp    = "new DHT({0}, {1})"
+cpp    = "DHT({0}, {1})"
 
 # ── Instance methods ──────────────────────────────────────────────────────────
 [[function]]
 go     = "Begin"
 python = "begin"
-cpp    = "{0}->begin()"
+cpp    = "{0}.begin()"
 
 [[function]]
 go     = "ReadTemperature"
 python = "read_temperature"
-cpp    = "{0}->readTemperature()"
+cpp    = "{0}.readTemperature()"
 
 [[function]]
 go     = "ReadTemperatureF"
 python = "read_temperature_f"
-cpp    = "{0}->readTemperature(true)"
+cpp    = "{0}.readTemperature(true)"
 
 [[function]]
 go     = "ReadHumidity"
 python = "read_humidity"
-cpp    = "{0}->readHumidity()"
+cpp    = "{0}.readHumidity()"
 
 [[function]]
 go     = "ComputeHeatIndex"
 python = "compute_heat_index"
-cpp    = "{0}->computeHeatIndex({1}, {2})"
+cpp    = "{0}.computeHeatIndex({1}, {2})"
 
 [[function]]
 go     = "IsNan"

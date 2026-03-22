@@ -168,7 +168,7 @@ pub fn remove(name_ver: &str, libs_dir: &Path) -> Result<String> {
 
 /// Update all installed packages to their latest registry version.
 pub fn update_all(libs_dir: &Path, registry: &Registry) -> Result<Vec<String>> {
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(8);
 
     let Ok(entries) = fs::read_dir(libs_dir) else {
         return Ok(results);
@@ -200,7 +200,7 @@ pub fn list_registry(registry: &Registry, query: Option<&str>) -> Vec<RegistryEn
 
 /// List locally installed packages (name + version).
 pub fn list_installed(libs_dir: &Path) -> Vec<(String, String)> {
-    let mut result = Vec::new();
+    let mut result  = Vec::with_capacity(8);
 
     let Ok(pkg_entries) = fs::read_dir(libs_dir) else { return result };
 

@@ -104,19 +104,16 @@ impl PyToken {
 
 // ── Lexer ─────────────────────────────────────────────────────────────────────
 
+/// Optimised Python lexer — iterates the source as bytes/chars directly
+/// instead of collecting into Vec<char> first.
 pub struct PyLexer<'src> {
-    #[allow(dead_code)]
-    src:      &'src str,
-    chars:    Vec<char>,
-    pos:      usize,
-    line:     u32,
-    col:      u32,
-    filename: String,
-    /// Stack of indentation levels (in spaces). Starts with [0].
+    src:          &'src str,    // original source — indexed directly
+    pos:          usize,        // byte offset
+    line:         u32,
+    col:          u32,
+    filename:     std::sync::Arc<str>,
     indent_stack: Vec<usize>,
-    /// Tokens queued to emit before we continue scanning (e.g. multiple DEDENT).
-    pending: Vec<PyToken>,
-    /// Whether we are at the start of a logical line (after NEWLINE).
+    pending:      Vec<PyToken>,
     at_line_start: bool,
 }
 
@@ -124,13 +121,12 @@ impl<'src> PyLexer<'src> {
     pub fn new(src: &'src str, filename: &str) -> Self {
         Self {
             src,
-            chars: src.chars().collect(),
-            pos: 0,
-            line: 1,
-            col: 1,
-            filename: filename.to_owned(),
+            pos:          0,
+            line:         1,
+            col:          1,
+            filename:     filename.into(),
             indent_stack: vec![0],
-            pending: Vec::new(),
+            pending:      Vec::with_capacity(4),
             at_line_start: true,
         }
     }
@@ -138,7 +134,8 @@ impl<'src> PyLexer<'src> {
     // ── Public entry ──────────────────────────────────────────────────────────
 
     pub fn tokenize(mut self) -> Result<Vec<PyToken>> {
-        let mut tokens = Vec::new();
+        let capacity = (self.src.len() / 5).max(32);
+        let mut tokens = Vec::with_capacity(capacity);
         loop {
             let tok = self.next_token()?;
             let is_eof = tok.kind == PyTokenKind::Eof;
@@ -151,26 +148,27 @@ impl<'src> PyLexer<'src> {
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn span(&self) -> Span {
-        Span::new(&self.filename, self.line, self.col, self.pos)
+        Span::new_arc(self.filename.clone(), self.line, self.col, self.pos)
     }
 
+    #[inline]
     fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
+        self.src[self.pos..].chars().next()
     }
 
+    #[inline]
     fn peek2(&self) -> Option<char> {
-        self.chars.get(self.pos + 1).copied()
+        let mut it = self.src[self.pos..].chars();
+        it.next();
+        it.next()
     }
 
+    #[inline]
     fn advance(&mut self) -> Option<char> {
-        let c = self.chars.get(self.pos).copied()?;
-        self.pos += 1;
-        if c == '\n' {
-            self.line += 1;
-            self.col = 1;
-        } else {
-            self.col += 1;
-        }
+        let c = self.src[self.pos..].chars().next()?;
+        self.pos += c.len_utf8();
+        if c == '\n' { self.line += 1; self.col = 1; }
+        else           { self.col += 1; }
         Some(c)
     }
 
@@ -194,9 +192,9 @@ impl<'src> PyLexer<'src> {
     fn measure_indent(&mut self) -> usize {
         let mut col = 0usize;
         loop {
-            match self.peek() {
-                Some(' ')  => { self.advance(); col += 1; }
-                Some('\t') => { self.advance(); col = (col / 8 + 1) * 8; }
+            match self.src.as_bytes().get(self.pos).copied() {
+                Some(b' ')  => { self.pos += 1; self.col += 1; col += 1; }
+                Some(b'\t') => { self.pos += 1; self.col += 1; col = (col / 8 + 1) * 8; }
                 _ => break,
             }
         }
@@ -345,30 +343,33 @@ impl<'src> PyLexer<'src> {
     }
 
     fn skip_comment(&mut self) {
-        while self.peek() != Some('\n') && self.peek().is_some() {
-            self.advance();
+        while self.pos < self.src.len() && self.src.as_bytes()[self.pos] != b'\n' {
+            self.pos += 1;
         }
     }
 
     fn lex_comment(&mut self) -> String {
         self.advance(); // consume '#'
-        let mut s = String::new();
-        while self.peek() != Some('\n') && self.peek().is_some() {
-            s.push(self.advance().unwrap());
+        let start = self.pos;
+        // Fast byte scan — comments are ASCII
+        while self.pos < self.src.len() && self.src.as_bytes()[self.pos] != b'\n' {
+            self.pos += 1;
         }
-        s.trim().to_owned()
+        self.src[start..self.pos].trim().to_owned()
     }
 
     fn lex_ident(&mut self) -> String {
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
+        let start = self.pos;
+        while self.pos < self.src.len() {
+            let c = self.src[self.pos..].chars().next().unwrap();
             if c.is_alphanumeric() || c == '_' {
-                s.push(self.advance().unwrap());
+                self.pos += c.len_utf8();
+                self.col += 1;
             } else {
                 break;
             }
         }
-        s
+        self.src[start..self.pos].to_owned()
     }
 
     fn classify_ident(s: &str) -> PyTokenKind {

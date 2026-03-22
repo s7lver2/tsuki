@@ -31,7 +31,8 @@ use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use colored::Colorize;
+use tsuki_ux::{bold, C_WARN, C_INFO, C_ERROR, C_SUCCESS, C_MUTED, C_ACCENT};
+use tsuki_ux::color::Style;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -176,7 +177,7 @@ pub fn ensure_arch(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths>
     // when the SDK is missing (especially important on first use of a new board).
     println!(
         "{} Core '{}' not found — downloading via tsuki-modules…",
-        "→".cyan().bold(), arch.bold()
+        C_ACCENT.paint("→"), bold(arch)
     );
     println!("  (this happens once; subsequent builds will be fast)");
 
@@ -187,7 +188,7 @@ pub fn ensure_arch(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths>
             // through to the arduino-cli package cache. If the user has the
             // core installed via arduino-cli the build will succeed even when
             // the tsuki-modules auto-download fails (offline, firewall, etc.).
-            eprintln!("  {} tsuki-modules install failed for '{}': {}", "⚠".yellow(), arch, e);
+            eprintln!("  {} tsuki-modules install failed for '{}': {}", C_WARN.paint("⚠"), arch, e);
             eprintln!("  Trying arduino-cli package cache as fallback…");
             return Err(e);   // sdk::resolve() catches this and continues
         }
@@ -210,7 +211,7 @@ pub fn install(arch: &str, verbose: bool) -> Result<()> {
     fs::create_dir_all(&root)?;
 
     println!("{} Installing {} core via tsuki-modules…",
-        "→".cyan().bold(), arch.bold());
+        C_ACCENT.paint("→"), bold(arch));
 
     let index   = load_index(arch, verbose)?;
     let (vendor, hw_arch, pkg_name) = arch_to_package(arch)?;
@@ -240,7 +241,7 @@ pub fn install(arch: &str, verbose: bool) -> Result<()> {
 
     if !core_needed && tools_needed.is_empty() {
         println!("  {} {} {} already up to date",
-            "•".dimmed(), arch.bold(), platform.version.dimmed());
+            C_MUTED.paint("•"), bold(arch), C_MUTED.paint(&platform.version));
         return write_installed_manifest(&root, arch, &platform.version);
     }
 
@@ -272,9 +273,9 @@ pub fn install(arch: &str, verbose: bool) -> Result<()> {
     let errors: Vec<String> = work
         .par_iter()
         .filter_map(|item| {
-            println!("  {}  Downloading {}…", "↓".cyan(), item.label.bold());
+            println!("  {}  Downloading {}…", C_INFO.paint("↓"), bold(&item.label));
             match download_and_extract(&item.url, item.checksum.as_deref(), &item.dest, verbose) {
-                Ok(()) => { println!("  {}  {}", "✓".green().bold(), item.label.bold()); None }
+                Ok(()) => { println!("  {}  {}", C_SUCCESS.paint("✓"), bold(&item.label)); None }
                 Err(e) => Some(format!("{}: {}", item.label, e)),
             }
         })
@@ -292,8 +293,8 @@ pub fn install(arch: &str, verbose: bool) -> Result<()> {
 
     println!(
         "\n  {} {} {} ready  ({})",
-        "✓".green().bold(), "tsuki-modules".bold(), arch.bold(),
-        root.display().to_string().dimmed()
+        C_SUCCESS.paint("✓"), bold("tsuki-modules"), bold(arch),
+        C_MUTED.paint(&root.display().to_string())
     );
     Ok(())
 }
@@ -307,8 +308,8 @@ pub fn list() -> Result<()> {
     let installed_dir = root.join("installed");
 
     if !installed_dir.exists() {
-        println!("{} No cores installed via tsuki-modules.", "!".yellow());
-        println!("  Install one with: {}", "tsuki-flash modules install avr".bold());
+        println!("{} No cores installed via tsuki-modules.", C_WARN.paint("!"));
+        println!("  Install one with: {}", bold("tsuki-flash modules install avr"));
         return Ok(());
     }
 
@@ -322,20 +323,20 @@ pub fn list() -> Result<()> {
         .collect();
 
     if cores.is_empty() {
-        println!("{} No cores installed.", "!".yellow());
+        println!("{} No cores installed.", C_WARN.paint("!"));
         return Ok(());
     }
 
     cores.sort_by(|a, b| a.arch.cmp(&b.arch));
-    println!("{:<12}  {:<10}  {}", "ARCH".bold().underline(), "VERSION".bold().underline(), "INDEX URL".bold().underline());
-    println!("{}", "─".repeat(60).dimmed());
+    println!("{:<12}  {:<10}  {}", Style::new().bold().underline().paint("ARCH"), Style::new().bold().underline().paint("VERSION"), Style::new().bold().underline().paint("INDEX URL"));
+    println!("{}", C_MUTED.paint(&"─".repeat(60)));
     for c in &cores {
         println!("{:<12}  {:<10}  {}",
-            c.arch.cyan(),
-            c.version.dimmed(),
-            index_url_for_arch(&c.arch).dimmed());
+            C_INFO.paint(&c.arch),
+            C_MUTED.paint(&c.version),
+            C_MUTED.paint(index_url_for_arch(&c.arch)));
     }
-    println!("\n  {} installed  —  {}", cores.len(), root.display().to_string().dimmed());
+    println!("\n  {} installed  —  {}", cores.len(), C_MUTED.paint(&root.display().to_string()));
     Ok(())
 }
 
@@ -351,21 +352,21 @@ pub fn update(verbose: bool) -> Result<()> {
         let cache = index_cache_path_for(&root, arch)?;
         if cache.exists() { fs::remove_file(&cache)?; removed += 1; }
     }
-    println!("{} Refreshing package indices ({} cached files removed)…", "→".cyan(), removed);
+    println!("{} Refreshing package indices ({} cached files removed)…", C_INFO.paint("→"), removed);
     let installed_dir = root.join("installed");
     if installed_dir.exists() {
         for entry in fs::read_dir(&installed_dir)?.flatten() {
             if let Some(stem) = entry.path().file_stem() {
                 let arch = stem.to_string_lossy().to_string();
-                print!("  {} {}… ", "↓".cyan(), arch.bold());
+                print!("  {} {}… ", C_INFO.paint("↓"), bold(&arch));
                 match load_index(&arch, verbose) {
-                    Ok(_)  => println!("{}", "ok".green()),
-                    Err(e) => println!("{} ({})", "failed".red(), e),
+                    Ok(_)  => println!("{}", C_SUCCESS.paint("ok")),
+                    Err(e) => println!("{} ({})", C_ERROR.paint("failed"), e),
                 }
             }
         }
     }
-    println!("{} Package indices updated.", "✓".green().bold());
+    println!("{} Package indices updated.", C_SUCCESS.paint("✓"));
     Ok(())
 }
 
@@ -388,7 +389,7 @@ fn load_index(arch: &str, verbose: bool) -> Result<PackageIndex> {
         }
     }
 
-    println!("{} Fetching {} package index…", "→".cyan(), arch);
+    println!("{} Fetching {} package index…", C_INFO.paint("→"), arch);
     let resp = ureq::get(url)
         .call()
         .map_err(|e| FlashError::Other(format!("Failed to download {} index: {}", arch, e)))?;
@@ -679,17 +680,34 @@ fn current_host() -> String {
     #[cfg(all(target_os = "linux",   target_arch = "aarch64"))] { return "aarch64-linux-gnu".into(); }
     #[cfg(all(target_os = "macos",   target_arch = "x86_64"))]  { return "x86_64-apple-darwin".into(); }
     #[cfg(all(target_os = "macos",   target_arch = "aarch64"))] { return "arm64-apple-darwin".into(); }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]  { return "i686-mingw32".into(); }
-    #[cfg(all(target_os = "windows", target_arch = "aarch64"))] { return "i686-mingw32".into(); }
+    // The earlephilhower arduino-pico package index uses "x86_64-w64-mingw32"
+    // for 64-bit Windows (the overwhelmingly common case on modern PCs).
+    // "i686-mingw32" is the 32-bit Windows host string — only relevant on very
+    // old machines.  Using it for x86_64 hosts means find_tool_system_any()
+    // may download the 32-bit toolchain package instead of the 64-bit one.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]  { return "x86_64-w64-mingw32".into(); }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))] { return "aarch64-w64-mingw32".into(); }
+    #[cfg(all(target_os = "windows", target_arch = "x86"))]     { return "i686-mingw32".into(); }
     #[allow(unreachable_code)]
     "unknown".into()
 }
 
 fn host_matches(system_host: &str, current: &str) -> bool {
-    (system_host.contains("linux-gnu")  && current.contains("linux-gnu"))
-    || (system_host.contains("apple")   && current.contains("apple"))
-    || (system_host.contains("mingw")   && current.contains("mingw"))
-    || system_host == current
+    // Exact match first — fastest exit.
+    if system_host == current { return true; }
+
+    // Family-based matching: the package index may list a more-specific triple
+    // (e.g. "x86_64-w64-mingw32") while our current_host() returns the same
+    // or a related triple.  We treat any two "mingw" strings as compatible
+    // because all published mingw32 and mingw-w64 ARM toolchains run fine on
+    // 64-bit Windows; similarly for linux-gnu families and Apple triples.
+    let sh = system_host;
+    let cu = current;
+    (sh.contains("linux-gnu")  && cu.contains("linux-gnu"))
+    || (sh.contains("linux-musl") && cu.contains("linux-musl"))
+    || (sh.contains("apple")      && cu.contains("apple"))
+    || (sh.contains("mingw")      && cu.contains("mingw"))
+    || (sh.contains("freebsd")    && cu.contains("freebsd"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

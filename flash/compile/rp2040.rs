@@ -34,6 +34,63 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     let objcopy = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-objcopy");
     let size    = resolve_tool(&sdk.toolchain_bin, "arm-none-eabi-size");
 
+    // ── Early toolchain sanity check ──────────────────────────────────────
+    // Validate the compiler exists BEFORE launching the parallel compile loop.
+    // Without this, a missing toolchain surfaces as a cryptic "program not found"
+    // error buried inside a rayon thread, with no context about why or how to fix it.
+    //
+    // We probe `arm-none-eabi-gcc --version` — a fast, harmless command that
+    // exits 0 on every known version.  Failure means the toolchain is genuinely
+    // absent and we emit an actionable SdkNotFound error immediately.
+    {
+        let probe = std::process::Command::new(&cxx)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if probe.is_err() || probe.map(|s| !s.success()).unwrap_or(true) {
+            let install_hint = if cfg!(windows) {
+                // Give Windows users a concrete path to follow.
+                // Option 1: tsuki-flash modules install rp2040 (preferred)
+                // Option 2: arduino-cli core install with earlephilhower URL
+                format!(
+                    "The ARM cross-compiler (arm-none-eabi-gcc) could not be found.\n\
+                    \n\
+                    To fix this, run ONE of the following:\n\
+                    \n\
+                      Option A — tsuki-modules (recommended, no arduino-cli needed):\n\
+                        tsuki-flash modules install rp2040\n\
+                    \n\
+                      Option B — arduino-cli:\n\
+                        arduino-cli core install rp2040:rp2040 --additional-urls \\\n\
+                          https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json\n\
+                    \n\
+                      Option C — verify existing install:\n\
+                        Expected toolchain at: {}\\packages\\rp2040\\tools\\pqt-gcc-arm-none-eabi\\<version>\\bin\\\n\
+                    \n\
+                    If you just installed, restart the IDE so the PATH is refreshed.",
+                    std::env::var("LOCALAPPDATA").unwrap_or_else(|_| "%LOCALAPPDATA%".into())
+                )
+            } else {
+                format!(
+                    "arm-none-eabi-gcc not found.\n\
+                    \n\
+                    Install it with:\n\
+                      tsuki-flash modules install rp2040\n\
+                    or on Debian/Ubuntu:\n\
+                      sudo apt install gcc-arm-none-eabi"
+                )
+            };
+
+            return Err(FlashError::SdkNotFound {
+                arch:  "rp2040".into(),
+                path:  cxx.display().to_string(),
+                pkg:   install_hint,
+            });
+        }
+    }
+
     // ── Compile flags ─────────────────────────────────────────────────────
     let arduino_ver = "10819";
     let mut common_flags: Vec<String> = vec![
@@ -64,6 +121,16 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     }
     if let Some(ld) = &sdk.libraries_dir {
         common_flags.push(format!("-I{}", ld.display()));
+    }
+
+    // ── lwIP / pico-sdk extra includes ────────────────────────────────────
+    // The earlephilhower arduino-pico core includes IPAddress.h (via ArduinoCore-API)
+    // which does `#include <lwip/init.h>`. The lwIP headers live inside the pico-sdk
+    // that is bundled as a tool alongside the core. We scan two locations:
+    //   1. <platform_root>/tools/  — for self-contained layouts (older cores)
+    //   2. <packages_root>/rp2040/tools/  — for tool-download layouts (5.x cores)
+    for inc in find_extra_includes(&sdk.core_dir) {
+        common_flags.push(format!("-I{}", inc.display()));
     }
 
     let cflags = ["-x", "c", "-std=gnu11"];
@@ -117,7 +184,11 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
                 ));
             }
             Err(e) => {
-                errors.lock().unwrap().push(format!("Failed to run compiler: {}", e));
+                errors.lock().unwrap().push(format!(
+                    "Failed to run compiler '{}': {}\n  \
+                     Hint: run `tsuki-flash modules install rp2040` to install the ARM toolchain.",
+                    compiler.display(), e
+                ));
             }
         }
         obj
@@ -261,13 +332,25 @@ fn bin_to_uf2(bin: &[u8], base_addr: u32, family_id: u32) -> std::result::Result
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn resolve_tool(toolchain_bin: &Path, name: &str) -> PathBuf {
-    let candidate = toolchain_bin.join(name);
-    if candidate.exists() { candidate }
-    else {
-        // Try with .exe on Windows
-        let win = toolchain_bin.join(format!("{}.exe", name));
-        if win.exists() { win } else { PathBuf::from(name) }
+    // When toolchain_bin is non-empty, look for the binary inside it.
+    // We try both the plain name and the .exe variant (Windows) regardless of
+    // OS so a Windows SDK mounted on Linux (or vice-versa) still resolves.
+    if toolchain_bin != Path::new("") {
+        let candidate = toolchain_bin.join(name);
+        if candidate.is_file() { return candidate; }
+
+        let with_exe = toolchain_bin.join(format!("{}.exe", name));
+        if with_exe.is_file() { return with_exe; }
+
+        // Some earlephilhower Windows packages name the binary with the full
+        // target triple prefix, e.g. "arm-none-eabi-g++.exe" inside a dir
+        // whose parent is named "pqt-gcc-arm-none-eabi".  The simple join above
+        // should already handle this; the fallback is a best-effort scan.
     }
+
+    // toolchain_bin is empty → rely on system PATH.
+    // Return just the binary name; std::process::Command resolves it via PATH.
+    PathBuf::from(name)
 }
 
 fn collect_sources(sketch_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -296,4 +379,99 @@ fn find_linker_script(core_dir: &Path, variant_dir: &Path) -> Option<PathBuf> {
         if c.exists() { return Some(c.clone()); }
     }
     None
+}
+// ── Extra include discovery (lwIP / pico-sdk) ─────────────────────────────────
+//
+// The earlephilhower arduino-pico core (IPAddress.h via ArduinoCore-API) needs
+// <lwip/init.h>. The lwIP headers are bundled inside the pico-sdk that is
+// downloaded as a separate tool alongside the core.
+//
+// Layout for 5.x (earlephilhower):
+//   <packages>/rp2040/tools/pqt-pico-sdk/<ver>/lib/lwip/src/include/
+//   <packages>/rp2040/tools/pqt-pico-sdk/<ver>/src/rp2040/
+//   <packages>/rp2040/tools/pqt-pico-sdk/<ver>/src/common/pico_base/include/
+//   <packages>/rp2040/tools/pqt-pico-sdk/<ver>/pico-sdk/lib/lwip/src/include/  (alt)
+//
+// Layout for ≤4.x (self-contained in platform):
+//   <platform>/tools/libpico/include/
+//   <platform>/pico-sdk/lib/lwip/src/include/
+//
+// Strategy: probe all known fixed paths first (fast, no directory walking).
+// Fall back to a shallow scan of the tools dir only when nothing is found.
+fn find_extra_includes(core_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    // core_dir → <platform>/cores/arduino
+    // platform_root → <platform>  e.g. .../rp2040/hardware/rp2040/5.5.1
+    let platform_root = match core_dir.parent().and_then(|p| p.parent()) {
+        Some(p) => p.to_owned(),
+        None    => return dirs,
+    };
+
+    // packages_vendor → <packages>/rp2040
+    // path: platform_root / .. / .. / ..  strips  <ver> / rp2040(arch) / hardware
+    let packages_vendor = platform_root
+        .parent()                             // strip <ver>
+        .and_then(|p| p.parent())             // strip <arch>
+        .and_then(|p| p.parent())             // strip hardware/
+        .map(|p| p.to_owned());
+
+    let mut add = |p: PathBuf| { if p.is_dir() && !dirs.contains(&p) { dirs.push(p); } };
+
+    // ── ≤4.x paths (inside platform itself) ───────────────────────────────
+    let pt = platform_root.join("tools");
+    add(pt.join("libpico").join("include"));
+    // Some 4.x layouts embed the whole pico-sdk
+    add(platform_root.join("pico-sdk").join("lib").join("lwip").join("src").join("include"));
+    add(platform_root.join("pico-sdk").join("src").join("rp2040"));
+    add(platform_root.join("pico-sdk").join("src").join("common").join("pico_base").join("include"));
+
+    // ── 5.x paths (pqt-pico-sdk tool download) ────────────────────────────
+    if let Some(ref pv) = packages_vendor {
+        let tool_root = pv.join("tools").join("pqt-pico-sdk");
+        if tool_root.is_dir() {
+            // Find the installed version directory (there should be exactly one)
+            if let Ok(entries) = std::fs::read_dir(&tool_root) {
+                for entry in entries.flatten() {
+                    let ver_dir = entry.path();
+                    if !ver_dir.is_dir() { continue; }
+
+                    // Primary lwIP include root
+                    add(ver_dir.join("lib").join("lwip").join("src").join("include"));
+                    // Alternate layout: pico-sdk embedded inside the tool
+                    add(ver_dir.join("pico-sdk").join("lib").join("lwip").join("src").join("include"));
+                    // pico_base headers (needed for pico/types.h etc.)
+                    add(ver_dir.join("src").join("rp2040"));
+                    add(ver_dir.join("src").join("common").join("pico_base").join("include"));
+                    add(ver_dir.join("src").join("boards").join("include"));
+                    // Some versions put everything under include/
+                    add(ver_dir.join("include"));
+                    // Generated headers (pico/config.h, lwipopts.h may live here)
+                    // They are placed in the variant dir by the build system, but
+                    // some setups need the platform-level generated includes too.
+                    add(ver_dir.join("generated").join("pico_base"));
+                }
+            }
+        }
+
+        // Also check for a plain "pico-sdk" tool name (community builds)
+        let plain_sdk = pv.join("tools").join("pico-sdk");
+        if plain_sdk.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&plain_sdk) {
+                for entry in entries.flatten() {
+                    let ver_dir = entry.path();
+                    if !ver_dir.is_dir() { continue; }
+                    add(ver_dir.join("lib").join("lwip").join("src").join("include"));
+                    add(ver_dir.join("src").join("rp2040"));
+                    add(ver_dir.join("src").join("common").join("pico_base").join("include"));
+                }
+            }
+        }
+    }
+
+    // ── lwipopts.h — the variant dir already has it (added in common_flags) ─
+    // Some variants ship lwipopts.h directly, others inherit from the platform.
+    // The variant_dir is already in common_flags as -I, so nothing extra needed.
+
+    dirs
 }

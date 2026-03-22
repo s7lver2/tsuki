@@ -25,12 +25,18 @@ pub struct FlashRequest {
 
 /// Flash compiled firmware to a connected board.
 pub fn flash(req: &FlashRequest, board: &Board) -> Result<()> {
+    // RP2040 is dispatched early: it only produces .uf2 (not .hex/.bin),
+    // so find_firmware would fail. flash_rp2040 locates the .uf2 itself.
+    if matches!(&board.toolchain, Toolchain::Rp2040) {
+        return flash_rp2040(req, board);
+    }
+
     let firmware = find_firmware(&req.build_dir, &req.project_name, board)?;
 
     match &board.toolchain {
         Toolchain::Avr { baud, .. } => {
-            let _baud = if req.baud_override > 0 { req.baud_override } else { *baud };
-            avrdude::flash(&firmware, &req.port, board, req.verbose)
+            let baud_to_use = if req.baud_override > 0 { req.baud_override } else { *baud };
+            avrdude::flash(&firmware, &req.port, board, baud_to_use, req.verbose)
         }
         Toolchain::Esp32 { .. } | Toolchain::Esp8266 => {
             let baud = if req.baud_override > 0 { req.baud_override } else { 921_600 };
@@ -39,6 +45,7 @@ pub fn flash(req: &FlashRequest, board: &Board) -> Result<()> {
         Toolchain::Sam { .. } => Err(FlashError::Other(
             "SAM (Due) flash not yet implemented — use arduino-cli for now".into(),
         )),
+        // Already handled above; satisfies exhaustiveness.
         Toolchain::Rp2040 => flash_rp2040(req, board),
     }
 }
@@ -138,31 +145,35 @@ fn find_rpi_rp2_drive() -> Option<std::path::PathBuf> {
 
 
 /// Locate the firmware file inside build_dir.
-/// Priority: .with_bootloader.hex > .hex > .bin > .elf
+/// Priority: .with_bootloader.hex > .hex > .bin
+///
+/// NOTE: RP2040 is dispatched before this function is called (see `flash()`);
+/// .uf2 files are never needed here.
 fn find_firmware(build_dir: &Path, name: &str, board: &Board) -> Result<PathBuf> {
     let prefer_hex = matches!(&board.toolchain, Toolchain::Avr { .. });
 
-    let candidates: &[&str] = if prefer_hex {
-        &[
-            &format!("{}.with_bootloader.hex", name) as &str,
-            &format!("{}.hex", name),
-            &format!("{}.bin", name),
+    // Use owned Strings to avoid temporaries with dangling &str references.
+    let candidates: Vec<String> = if prefer_hex {
+        vec![
+            format!("{}.with_bootloader.hex", name),
+            format!("{}.hex", name),
+            format!("{}.bin", name),
         ]
     } else {
-        &[
-            &format!("{}.bin", name) as &str,
-            &format!("{}.hex", name),
+        vec![
+            format!("{}.bin", name),
+            format!("{}.hex", name),
         ]
     };
 
-    for candidate in candidates {
+    for candidate in &candidates {
         let path = build_dir.join(candidate);
         if path.exists() { return Ok(path); }
     }
 
     // Also check one level down in .cache/
     let cache = build_dir.join(".cache");
-    for candidate in candidates {
+    for candidate in &candidates {
         let path = cache.join(candidate);
         if path.exists() { return Ok(path); }
     }

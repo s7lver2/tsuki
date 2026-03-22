@@ -4,7 +4,7 @@ import { applyTheme, applyUiScale, applyFontRendering, applyCompactMode } from '
 
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
-export type BottomTab = 'output' | 'problems' | 'terminal'
+export type BottomTab = 'output' | 'problems' | 'terminal' | 'monitor'
 export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'exp-webkit' | 'language' | 'developer' | 'profile' | 'updates'
 
 export interface FileNode {
@@ -26,6 +26,10 @@ export interface TabItem {
   content: string
   modified: boolean
   path?: string
+  /** True when the file lives inside the project's build/ directory.
+   *  In build-file mode the editor is read-only and LSP is suppressed
+   *  unless the user enables `allowEditBuildFiles` in settings. */
+  buildFile?: boolean
 }
 
 export interface GitChange {
@@ -200,6 +204,13 @@ export interface SettingsState {
   lspAutoDownloadLibs: boolean  // silently download missing libs without prompting
   lspShowLibPrompt: boolean     // show popup when a missing lib import is detected
   lspIgnoredLibs: string[]      // libs the user has clicked "don't ask again" for
+  // ── Build files ───────────────────────────────────────────────────────────
+  /** When false (default), files inside build/ open in read-only view mode with
+   *  LSP disabled. Set to true in Settings → Editor to allow editing them. */
+  allowEditBuildFiles: boolean
+  // ── Serial monitor ────────────────────────────────────────────────────────
+  monitorPort: string       // last used serial port
+  monitorBaud: string       // last used baud rate
   // ── Windows ──────────────────────────────────────────────────────────────
   winSpawnMethod: 'shell' | 'direct' | 'detached'
   // ── Debug / Logging ───────────────────────────────────────────────────────
@@ -465,6 +476,9 @@ const DEFAULT_SETTINGS: SettingsState = {
   lspAutoDownloadLibs: false,
   lspShowLibPrompt: true,
   lspIgnoredLibs: [],
+  allowEditBuildFiles: false,
+  monitorPort: '',
+  monitorBaud: '9600',
   winSpawnMethod: 'shell',
   debugMode: false,
   debugLogFormat: 'flat',
@@ -747,18 +761,25 @@ export const useStore = create<AppState>((set, get) => ({
       const savedCircuit = loadSandboxCircuit(folder)
       if (savedCircuit) set({ sandboxCircuit: savedCircuit })
 
-      // Find the main source file for any language
-      const mainNode = allNodes.find(n =>
-        n.type === 'file' && (
-          n.name === 'main.go' ||
-          n.name === 'main.cpp' ||
-          n.name?.endsWith('.ino') ||
-          (projectLanguage === 'go' && n.name?.endsWith('.go')) ||
-          (projectLanguage === 'cpp' && n.name?.endsWith('.cpp')) ||
-          (projectLanguage === 'ino' && n.name?.endsWith('.ino')) ||
-          (projectLanguage === 'python' && n.name?.endsWith('.py'))
-        )
-      )
+      // Find the main source file for any language.
+      // Priority: canonical name (main.go / main.py / main.cpp / <project>.ino)
+      // → any matching ext in src/ → any matching ext outside build/.
+      // Files inside build/ are generated artefacts and are never auto-opened.
+      const isBuildPath = (p?: string) => !!(p && /[\\/]build[\\/]/.test(p))
+      const langExts: Record<string, string[]> = {
+        go: ['go'], python: ['py'], cpp: ['cpp', 'cxx', 'cc'], ino: ['ino'],
+      }
+      const exts = new Set(langExts[projectLanguage] ?? ['go'])
+      const canonicalName =
+        projectLanguage === 'python' ? 'main.py'  :
+        projectLanguage === 'cpp'    ? 'main.cpp' :
+        projectLanguage === 'ino'    ? `${projectName}.ino` :
+        'main.go'
+      const candidates = allNodes.filter(n => n.type === 'file' && !isBuildPath(n.path))
+      const mainNode =
+        candidates.find(n => n.name === canonicalName) ??
+        candidates.find(n => exts.has(n.ext ?? '') && /[\\/]src[\\/]/.test(n.path ?? '')) ??
+        candidates.find(n => exts.has(n.ext ?? ''))
       if (mainNode) setTimeout(() => get().openFile(mainNode.id), 50)
 
       get().addLog('info', `Opened "${projectName}" from ${folder}`)
@@ -838,11 +859,14 @@ export const useStore = create<AppState>((set, get) => ({
     const node = get().tree.find(n => n.id === id)
     if (!node || node.type === 'dir') return
 
+    // Detect build artefacts — files whose path contains /build/ or \build\
+    const isBuild = !!(node.path && /[\\/]build[\\/]/.test(node.path))
+
     const existing = get().openTabs.findIndex(t => t.fileId === id)
     if (existing >= 0) { set({ activeTabIdx: existing }); return }
 
     if (node.content !== undefined) {
-      const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content: node.content, modified: false, path: node.path }
+      const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content: node.content, modified: false, path: node.path, buildFile: isBuild }
       const tabs = [...get().openTabs, tab]
       set({ openTabs: tabs, activeTabIdx: tabs.length - 1 })
       return
@@ -852,17 +876,17 @@ export const useStore = create<AppState>((set, get) => ({
       import('./tauri').then(({ readFile }) =>
         readFile(node.path!).then(content => {
           const tree = get().tree.map(n => n.id === id ? { ...n, content } : n)
-          const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content, modified: false, path: node.path }
+          const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content, modified: false, path: node.path, buildFile: isBuild }
           const tabs = [...get().openTabs, tab]
           set({ tree, openTabs: tabs, activeTabIdx: tabs.length - 1 })
         }).catch(() => {
-          const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content: '', modified: false, path: node.path }
+          const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content: '', modified: false, path: node.path, buildFile: isBuild }
           const tabs = [...get().openTabs, tab]
           set({ openTabs: tabs, activeTabIdx: tabs.length - 1 })
         })
       )
     } else {
-      const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content: '', modified: false }
+      const tab: TabItem = { fileId: id, name: node.name, ext: node.ext || '', content: '', modified: false, buildFile: isBuild }
       const tabs = [...get().openTabs, tab]
       set({ openTabs: tabs, activeTabIdx: tabs.length - 1 })
     }

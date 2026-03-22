@@ -144,13 +144,11 @@ pub fn load_from_str(toml_str: &str, path: &Path) -> Result<LoadedLib> {
     }
 
     for f in &manifest.functions {
-        pkg = pkg.fun(&f.go, FnMap::Template(f.cpp.clone()));
-        // Also register under the Python snake_case name when provided.
-        // This lets Python source files call `dht.read_temperature()` while
-        // Go source files keep using `dht.ReadTemperature()`.
+        // FnMap::template() parses the template once at load time
+        pkg = pkg.fun(&f.go, FnMap::template(&f.cpp));
         if let Some(ref py_name) = f.python {
             if !py_name.is_empty() && py_name != &f.go {
-                pkg = pkg.fun(py_name, FnMap::Template(f.cpp.clone()));
+                pkg = pkg.fun(py_name, FnMap::template(&f.cpp));
             }
         }
     }

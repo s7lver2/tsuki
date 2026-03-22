@@ -32,7 +32,7 @@ clap       = { version = "4.5", features = ["derive", "color"] }
 rayon      = "1.10"
 sha2       = "0.10"
 hex        = "0.4"
-colored    = "2.1"
+tsuki-ux   = "1.0"
 walkdir    = "2.5"
 ureq       = { version = "2.9", features = ["json"] }
 zip        = { version = "0.6", default-features = false, features = ["deflate"] }
@@ -40,17 +40,40 @@ flate2     = "1.0"
 bzip2      = "0.4"
 tar        = "0.4"
 lzma-rs    = "0.3"
+serialport = { version = "4.5", default-features = false }
 
 # ─── dev dependencies ─────────────────────────────────────────
 [dev-dependencies]
 pretty_assertions = "1.4"
 
 # ─── profiles ─────────────────────────────────────────────────
+# Standard release: fast compile, good runtime performance
 [profile.release]
-opt-level     = 3
-lto           = true
-codegen-units = 1
-strip         = true
+opt-level       = 3
+lto             = "thin"      # thin LTO: good perf, reasonable compile time
+codegen-units   = 4           # parallel codegen, slightly larger but faster builds
+strip           = "symbols"   # strip debug symbols (keeps debuginfo in .pdb on Win)
+panic           = "abort"     # removes unwinding machinery (~10-15% size reduction)
+overflow-checks = false       # remove integer overflow checks in release
+debug           = false
+debug-assertions = false
+incremental     = false       # disable incremental for reproducible releases
+
+# dist profile: maximum size/speed optimization for distributed binaries
+# Used by build.py for official releases. Roughly 25-40% smaller than release.
+[profile.dist]
+inherits        = "release"
+opt-level       = "z"         # optimize for size (smaller than "s" in most cases)
+lto             = "fat"       # full LTO across all crates — maximally aggressive
+codegen-units   = 1           # single codegen unit: enables all cross-function opts
+strip           = true        # strip everything including symbol table
+panic           = "abort"
+overflow-checks = false
+debug           = false
+debug-assertions = false
+incremental     = false
+# rpath not needed for standalone binaries
+rpath           = false
 
 # ─── future workspace members ─────────────────────────────────
 # [workspace]

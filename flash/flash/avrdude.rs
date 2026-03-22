@@ -8,9 +8,12 @@ use crate::boards::Board;
 use crate::error::{FlashError, Result};
 
 /// Flash a .hex file to an AVR board using avrdude.
-pub fn flash(hex: &Path, port: &str, board: &Board, verbose: bool) -> Result<()> {
-    let (programmer, baud) = board.avrdude_programmer()
+///
+/// `baud_override`: when non-zero, overrides the board's default baud rate.
+pub fn flash(hex: &Path, port: &str, board: &Board, baud_override: u32, verbose: bool) -> Result<()> {
+    let (programmer, default_baud) = board.avrdude_programmer()
         .ok_or_else(|| FlashError::Other("Not an AVR board".into()))?;
+    let baud = if baud_override > 0 { baud_override } else { default_baud };
 
     let mcu = board.avr_mcu()
         .ok_or_else(|| FlashError::Other("Missing MCU for AVR board".into()))?;

@@ -56,31 +56,40 @@ pub struct Method {
 
 impl Type {
     /// Emit the equivalent C++ type string for Arduino / AVR-GCC.
+    ///
+    /// Returns `Cow::Borrowed` for all primitive types (zero allocation),
+    /// and `Cow::Owned` only for compound types that require formatting.
     pub fn to_cpp(&self) -> String {
+        self.to_cpp_str().into_owned()
+    }
+
+    /// Like `to_cpp` but returns a `Cow` — avoids allocation for primitive types.
+    pub fn to_cpp_str(&self) -> std::borrow::Cow<'static, str> {
+        use std::borrow::Cow::*;
         match self {
-            Type::Void             => "void".into(),
-            Type::Bool             => "bool".into(),
-            Type::Int              => "int".into(),
-            Type::Int8             => "int8_t".into(),
-            Type::Int16            => "int16_t".into(),
-            Type::Int32 | Type::Rune  => "int32_t".into(),
-            Type::Int64            => "int64_t".into(),
-            Type::Uint             => "unsigned int".into(),
-            Type::Uint8 | Type::Byte  => "uint8_t".into(),
-            Type::Uint16           => "uint16_t".into(),
-            Type::Uint32           => "uint32_t".into(),
-            Type::Uint64           => "uint64_t".into(),
-            Type::Uintptr          => "uintptr_t".into(),
-            Type::Float32          => "float".into(),
-            Type::Float64          => "double".into(),
-            Type::String           => "String".into(),
-            Type::Ptr(inner)       => format!("{}*", inner.to_cpp()),
-            Type::Slice(elem)      => format!("{}*", elem.to_cpp()),
-            Type::Array { len: Some(n), elem } => format!("{} /* [{}] */", elem.to_cpp(), n),
-            Type::Array { len: None,    elem } => format!("{}*", elem.to_cpp()),
-            Type::Named(n)         => n.split('.').last().unwrap_or(n).to_owned(),
-            Type::Infer            => "auto".into(),
-            _                      => "void* /* unsupported */".into(),
+            Type::Void                    => Borrowed("void"),
+            Type::Bool                    => Borrowed("bool"),
+            Type::Int                     => Borrowed("int"),
+            Type::Int8                    => Borrowed("int8_t"),
+            Type::Int16                   => Borrowed("int16_t"),
+            Type::Int32 | Type::Rune      => Borrowed("int32_t"),
+            Type::Int64                   => Borrowed("int64_t"),
+            Type::Uint                    => Borrowed("unsigned int"),
+            Type::Uint8 | Type::Byte      => Borrowed("uint8_t"),
+            Type::Uint16                  => Borrowed("uint16_t"),
+            Type::Uint32                  => Borrowed("uint32_t"),
+            Type::Uint64                  => Borrowed("uint64_t"),
+            Type::Uintptr                 => Borrowed("uintptr_t"),
+            Type::Float32                 => Borrowed("float"),
+            Type::Float64                 => Borrowed("double"),
+            Type::String                  => Borrowed("String"),
+            Type::Infer                   => Borrowed("auto"),
+            Type::Ptr(inner)              => Owned(format!("{}*", inner.to_cpp())),
+            Type::Slice(elem)             => Owned(format!("{}*", elem.to_cpp())),
+            Type::Array { len: Some(n), elem } => Owned(format!("{} /* [{}] */", elem.to_cpp(), n)),
+            Type::Array { len: None, elem }    => Owned(format!("{}*", elem.to_cpp())),
+            Type::Named(n)  => Owned(n.split('.').last().unwrap_or(n).to_owned()),
+            _               => Borrowed("void* /* unsupported */"),
         }
     }
 }

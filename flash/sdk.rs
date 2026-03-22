@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use std::path::{Path, PathBuf};
-use colored::Colorize;
+use tsuki_ux::color::C_WARN;
 use crate::error::{FlashError, Result};
 
 /// All filesystem paths required to compile for a given architecture.
@@ -54,7 +54,7 @@ pub fn resolve(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths> {
     match crate::cores::ensure_arch(arch, variant, verbose) {
         Ok(paths) => return Ok(paths),
         Err(e) => {
-            eprintln!("  {} tsuki-modules unavailable for '{}': {}", "⚠".yellow(), arch, e);
+            eprintln!("  {} tsuki-modules unavailable for '{}': {}", C_WARN.paint("⚠"), arch, e);
             eprintln!("  Falling back to arduino-cli package cache…");
         }
     }
@@ -307,31 +307,95 @@ fn find_toolchain_bin(base: &Path, arch: &str, _vendor: &str) -> Option<PathBuf>
     // For rp2040 there are two possible toolchain package names:
     //   earlephilhower core uses "pqt-gcc-arm-none-eabi" under vendor "rp2040"
     //   Newer versions may use "arm-none-eabi-gcc" under vendor "arduino"
-    // We try all candidates in order; fall back to system PATH if none found.
+    //
+    // The search is intentionally broad:
+    //   1. Check all known package/vendor combinations.
+    //   2. For each installed version, try both `bin/` and the version root itself
+    //      (earlephilhower on Windows sometimes places binaries at the root).
+    //   3. If nothing found in the package cache, check system PATH explicitly
+    //      via a probe command — return the empty path ONLY when the tool is
+    //      confirmed reachable, otherwise return None so the caller can emit a
+    //      proper SdkNotFound error instead of a silent "program not found".
     let candidates: &[(&str, &str)] = match arch {
         "avr"    => &[("arduino", "avr-gcc")],
         "sam"    => &[("arduino", "arm-none-eabi-gcc")],
         "rp2040" => &[
-            ("rp2040", "pqt-gcc-arm-none-eabi"),
-            ("rp2040", "pqt-arm-none-eabi-gcc"),
+            ("rp2040", "pqt-gcc"),               // earlephilhower 5.x (actual name on disk)
+            ("rp2040", "pqt-gcc-arm-none-eabi"), // earlephilhower older alias
+            ("rp2040", "pqt-arm-none-eabi-gcc"), // alternate naming
+            ("rp2040", "arm-none-eabi"),          // some community builds
             ("arduino", "arm-none-eabi-gcc"),
         ],
-        "esp32"  => &[("esp32", "xtensa-esp32-elf-gcc")],
+        "esp32"  => &[("esp32",   "xtensa-esp32-elf-gcc"),
+                      ("esp32",   "xtensa-esp32s2-elf-gcc"),
+                      ("esp32",   "xtensa-esp32s3-elf-gcc")],
         "esp8266"=> &[("esp8266", "xtensa-lx106-elf-gcc")],
         _        => return None,
     };
 
+    // Primary probe tool name (used for PATH check and bin/ subfolder validation)
+    let probe_bin = match arch {
+        "avr"          => "avr-gcc",
+        "sam" | "rp2040" => "arm-none-eabi-gcc",
+        "esp32"        => "xtensa-esp32-elf-gcc",
+        "esp8266"      => "xtensa-lx106-elf-gcc",
+        _              => return None,
+    };
+    let probe_exe = if cfg!(windows) { format!("{}.exe", probe_bin) } else { probe_bin.to_owned() };
+
     for &(tc_vendor, tc_name) in candidates {
         let tc_base = base.join("packages").join(tc_vendor).join("tools").join(tc_name);
         if !tc_base.is_dir() { continue; }
+
         if let Some(version) = latest_version_dir(&tc_base) {
-            let bin = tc_base.join(&version).join("bin");
-            if bin.is_dir() { return Some(bin); }
+            let ver_dir = tc_base.join(&version);
+
+            // Layout 1: standard `bin/` subdir (Linux, macOS, most Windows builds)
+            let bin_dir = ver_dir.join("bin");
+            if bin_dir.join(&probe_exe).is_file() {
+                return Some(bin_dir);
+            }
+            // Layout 2: binaries directly in the version root (some earlephilhower
+            // Windows packages omit the `bin/` level entirely)
+            if ver_dir.join(&probe_exe).is_file() {
+                return Some(ver_dir);
+            }
+            // Layout 3: bin/ exists but tool has a different name — any .exe inside
+            // whose stem matches the architecture prefix is good enough
+            if bin_dir.is_dir() {
+                let arch_prefix = match arch {
+                    "rp2040" => "arm-none-eabi",
+                    "avr"    => "avr-gcc",
+                    _        => probe_bin,
+                };
+                let has_compiler = std::fs::read_dir(&bin_dir)
+                    .map(|rd| rd.flatten().any(|e| {
+                        let n = e.file_name().to_string_lossy().to_lowercase();
+                        n.starts_with(arch_prefix) && (n.ends_with(".exe") || !n.contains('.'))
+                    }))
+                    .unwrap_or(false);
+                if has_compiler { return Some(bin_dir); }
+            }
         }
     }
 
-    // Fall back to system PATH — caller will resolve the binary by name
-    Some(PathBuf::from(""))
+    // Nothing found in the package cache.
+    // Check if the tool is reachable via system PATH before returning the
+    // "use PATH" sentinel (empty PathBuf).  If it is NOT on PATH we return
+    // None so sdk::resolve() can ultimately emit a SdkNotFound error with
+    // proper installation instructions instead of an opaque "program not found".
+    let path_found = std::process::Command::new(probe_bin)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok();
+
+    if path_found {
+        Some(PathBuf::from(""))   // use system PATH — tool is confirmed reachable
+    } else {
+        None   // triggers SdkNotFound with a proper actionable error message
+    }
 }
 
 /// Arduino IDE 1.x system install (e.g. /usr/share/arduino).

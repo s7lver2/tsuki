@@ -522,6 +522,74 @@ function LineNumbers({ count, fontSize, errLines, warnLines, curLine }: {
   )
 }
 
+// ── Indent guides ─────────────────────────────────────────────────────────────
+// Draws faint vertical lines at each indent level, aligned to character grid.
+
+function IndentGuides({ code, fontSize, tabSize, scrollTop, scrollLeft, curLine }: {
+  code: string; fontSize: number; tabSize: number; scrollTop: number; scrollLeft: number; curLine: number
+}) {
+  const lineH   = Math.round(fontSize * 1.62)
+  const charW   = fontSize * 0.601
+  const indentW = tabSize * charW
+  const lines   = code.split('\n')
+  const totalH  = lines.length * lineH + 200
+
+  const levels: number[] = lines.map(l => {
+    const stripped = l.trimStart()
+    if (!stripped) return -1
+    return Math.floor((l.length - stripped.length) / tabSize)
+  })
+
+  for (let i = 0; i < levels.length; i++) {
+    if (levels[i] !== -1) continue
+    let next = 0
+    for (let j = i + 1; j < levels.length; j++) { if (levels[j] !== -1) { next = levels[j]; break } }
+    levels[i] = next
+  }
+
+  // The active indent column is the current line's level (1-based column index)
+  const curLevel = levels[curLine - 1] ?? 0
+
+  type Seg = { x: number; y1: number; y2: number; active: boolean }
+  const segs: Seg[] = []
+
+  const maxLevel = Math.max(...levels.filter(l => l >= 0), 0)
+  for (let col = 1; col <= maxLevel; col++) {
+    let inRun = false
+    let runStart = 0
+    let runHasCur = false
+    for (let row = 0; row <= levels.length; row++) {
+      const active = row < levels.length && levels[row] >= col
+      if (active && !inRun) { inRun = true; runStart = row; runHasCur = false }
+      if (active && inRun && row === curLine - 1) runHasCur = true
+      if (!active && inRun) {
+        inRun = false
+        const x  = (col - 1) * indentW + 16
+        const y1 = runStart * lineH + 12
+        const y2 = row      * lineH + 12
+        if (y2 - y1 > lineH) segs.push({ x, y1, y2, active: runHasCur && col === curLevel })
+      }
+    }
+  }
+
+  if (!segs.length) return null
+
+  return (
+    <svg
+      className="absolute top-0 left-0 pointer-events-none"
+      style={{ width: '100%', height: totalH, transform: `translate(-${scrollLeft}px, -${scrollTop}px)`, overflow: 'visible', zIndex: 0 }}
+    >
+      {segs.map((s, i) => (
+        <line key={i}
+          x1={s.x} y1={s.y1} x2={s.x} y2={s.y2}
+          stroke={s.active ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.065)'}
+          strokeWidth={s.active ? 1.5 : 1}
+        />
+      ))}
+    </svg>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  MAIN EDITOR
 // ─────────────────────────────────────────────────────────────────────────────
@@ -593,6 +661,18 @@ export default function CodeEditor() {
   const lspActive = !!(settings.experimentsEnabled && settings.expLspEnabled && settings.lspEnabled && settings.lspDiagnosticsEnabled)
   const featuresActive = lspActive
 
+  // ── Build-file read-only guard ─────────────────────────────────────────────
+  // Files inside build/ are generated artefacts (transpiled C++, object files,
+  // linker output, etc.).  Opening them in full edit mode causes the LSP to fire
+  // on auto-generated code and produce hundreds of spurious diagnostics.
+  // We show a read-only view with a dismissible banner instead.
+  const isBuildFile   = !!(tab?.buildFile)
+  const buildReadOnly = isBuildFile && !settings.allowEditBuildFiles
+  // Suppress ALL LSP features for build files regardless of the setting above —
+  // generated code is never a valid LSP target.
+  const lspEffective      = lspActive      && !isBuildFile
+  const featuresEffective = featuresActive && !isBuildFile
+
   // ── Effects ────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -609,22 +689,22 @@ export default function CodeEditor() {
     clearTimeout(lintTimer.current)
     lintTimer.current = setTimeout(() => runLsp(tab.content, tab.ext ?? '', tab.name, tab.fileId), settings.lspDiagnosticDelay ?? 600)
     return () => clearTimeout(lintTimer.current)
-  }, [tab?.fileId, lspActive]) // eslint-disable-line
+  }, [tab?.fileId, lspEffective]) // eslint-disable-line
 
   // Inlay hints refresh
   useEffect(() => {
-    if (!featuresActive || !settings.lspInlayHints || !tab) { setInlayHints([]); return }
+    if (!featuresEffective || !settings.lspInlayHints || !tab) { setInlayHints([]); return }
     const timer = setTimeout(() => {
       const hints = getInlayHints(tab.content, tab.ext ?? '')
       setInlayHints(hints)
     }, 800)
     return () => clearTimeout(timer)
-  }, [tab?.content, tab?.ext, featuresActive, settings.lspInlayHints]) // eslint-disable-line
+  }, [tab?.content, tab?.ext, featuresEffective, settings.lspInlayHints]) // eslint-disable-line
 
   // ── LSP ────────────────────────────────────────────────────────────────────
 
   function runLsp(code: string, ext: string, name: string, fileId: string) {
-    if (!lspActive) { setDiags([]); return }
+    if (!lspEffective) { setDiags([]); return }
     const result = runDiagnostics(code, name, ext, {
       lspGoEnabled:  settings.lspGoEnabled  ?? true,
       lspCppEnabled: settings.lspCppEnabled ?? true,
@@ -664,7 +744,7 @@ export default function CodeEditor() {
   // ── Completions ───────────────────────────────────────────────────────────
 
   function triggerCompletion(ta: HTMLTextAreaElement, offset: number) {
-    if (!featuresActive || !settings.lspCompletionsEnabled) return
+    if (!featuresEffective || !settings.lspCompletionsEnabled) return
     const ext = tab?.ext ?? ''
     clearTimeout(compTimer.current)
     compTimer.current = setTimeout(() => {
@@ -700,7 +780,7 @@ export default function CodeEditor() {
   // ── Signature help trigger ────────────────────────────────────────────────
 
   function triggerSignatureHelp(ta: HTMLTextAreaElement) {
-    if (!featuresActive || !settings.lspSignatureHelp) return
+    if (!featuresEffective || !settings.lspSignatureHelp) return
     const ext  = tab?.ext ?? ''
     const help = getSignatureHelp(ta.value, ta.selectionStart, ext)
     setSigHelp(help)
@@ -717,7 +797,7 @@ export default function CodeEditor() {
     const line = Math.floor((e.clientY - rect.top + scrollTop - 12) / lineH) + 1
     setHoverLine(line); setTipPos({ x: e.clientX, y: e.clientY })
 
-    if (!featuresActive || !settings.lspHoverEnabled) return
+    if (!featuresEffective || !settings.lspHoverEnabled) return
     clearTimeout(hoverDocTimer.current)
     hoverDocTimer.current = setTimeout(() => {
       const ta = taRef.current; if (!ta) return
@@ -831,16 +911,50 @@ export default function CodeEditor() {
       }
     }
 
-    // ── Enter: auto-indent ───────────────────────────────────────────────
+    // ── Enter: smart brace expansion + auto-indent ───────────────────────
     if (e.key === 'Enter') {
       e.preventDefault()
-      const s = ta.selectionStart
-      const lineStart = ta.value.lastIndexOf('\n', s - 1) + 1
-      const currentLine = ta.value.slice(lineStart, s)
+      const s   = ta.selectionStart
+      const end = ta.selectionEnd
+      const val = ta.value
+      const lineStart   = val.lastIndexOf('\n', s - 1) + 1
+      const currentLine = val.slice(lineStart, s)
       const indentMatch = currentLine.match(/^(\s*)/)
-      let indent = indentMatch ? indentMatch[1] : ''
-      if (currentLine.trimEnd().endsWith('{')) indent += ' '.repeat(tabSize)
-      const next = ta.value.slice(0, s) + '\n' + indent + ta.value.slice(ta.selectionEnd)
+      const baseIndent  = indentMatch ? indentMatch[1] : ''
+
+      // Smart brace expansion: cursor is directly between { and }
+      // (possibly with spaces between them on the same line)
+      // Result:
+      //   {        →    {
+      //   |}            |    ← cursor here, one tab deeper
+      //   }             }   ← closing brace on its own line
+      const charBefore = val[s - 1]
+      const charAfter  = val[end]
+      const OPEN  = new Set(['{', '[', '('])
+      const CLOSE: Record<string, string> = { '{': '}', '[': ']', '(': ')' }
+
+      if (OPEN.has(charBefore) && charAfter === CLOSE[charBefore]) {
+        const innerIndent  = baseIndent + ' '.repeat(tabSize)
+        const newLine      = '\n' + innerIndent
+        const closingLine  = '\n' + baseIndent
+        const next = val.slice(0, s) + newLine + val.slice(end)
+        updateTabContent(activeTabIdx, next); pushUndo(next)
+        // Put the closing brace on its own line after the inner content
+        const insertAt = s + newLine.length
+        const finalVal = next.slice(0, insertAt) + closingLine + next.slice(insertAt)
+        updateTabContent(activeTabIdx, finalVal); pushUndo(finalVal)
+        requestAnimationFrame(() => {
+          if (taRef.current) taRef.current.selectionStart = taRef.current.selectionEnd = insertAt
+        })
+        return
+      }
+
+      // Normal Enter: auto-indent + extra level after opening brace
+      let indent = baseIndent
+      if (currentLine.trimEnd().endsWith('{') || currentLine.trimEnd().endsWith('[') || currentLine.trimEnd().endsWith('(')) {
+        indent += ' '.repeat(tabSize)
+      }
+      const next = val.slice(0, s) + '\n' + indent + val.slice(end)
       updateTabContent(activeTabIdx, next); pushUndo(next)
       requestAnimationFrame(() => { if (taRef.current) taRef.current.selectionStart = taRef.current.selectionEnd = s + 1 + indent.length })
       return
@@ -942,7 +1056,7 @@ export default function CodeEditor() {
       { label: 'Format Document', shortcut: 'Ctrl+Shift+F', sep: true, disabled: tab?.ext !== 'go',
         action: () => { if (tab?.ext === 'go') { const fmt = formatGo(content, settings.tabSize ?? 2); updateTabContent(activeTabIdx, fmt); pushUndo(fmt) } } },
       { label: 'Save', shortcut: 'Ctrl+S', action: () => saveFile(activeTabIdx) },
-      ...(lspActive ? [{ label: ghostEnabled ? '🔇 Hide inline hints' : '💬 Show inline hints', sep: true, action: () => setGhostEnabled(v => !v) }] : []),
+      ...(lspEffective ? [{ label: ghostEnabled ? '🔇 Hide inline hints' : '💬 Show inline hints', sep: true, action: () => setGhostEnabled(v => !v) }] : []),
       ...fixes,
     ])
   }
@@ -982,6 +1096,21 @@ export default function CodeEditor() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <>
+      {/* Build-file read-only banner */}
+      {isBuildFile && (
+        <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0"
+          style={{ background: 'rgba(245,158,11,0.08)', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
+          <span style={{ color: '#f59e0b', fontSize: 11 }}>⊘</span>
+          <span style={{ fontSize: 11, color: 'rgba(245,158,11,0.9)' }}>
+            <strong>Generated file</strong> — read-only.
+            {buildReadOnly
+              ? <> Enable <em>Allow editing build files</em> in Settings → Editor to unlock.</>
+              : <> Editing is unlocked — changes will be overwritten on next build.</>
+            }
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden bg-[var(--surface)]" style={editorStyle}>
 
         {/* Line numbers */}
@@ -1010,26 +1139,34 @@ export default function CodeEditor() {
             }} />
           ))}
 
+          {/* Indent guides */}
+          {settings.showLineNumbers && (
+            <IndentGuides code={content} fontSize={fontSize} tabSize={tabSize} scrollTop={scrollTop} scrollLeft={scrollLeft} curLine={curLine} />
+          )}
+
           {/* Syntax highlight */}
           <div ref={hlRef} className="editor-highlight absolute top-0 left-0 pointer-events-none"
             style={{ ...editorStyle, willChange: 'transform', minWidth: '100%' }}
             dangerouslySetInnerHTML={{ __html: highlighted + '\n' }} />
 
           {/* LSP overlays */}
-          {lspActive && <Squiggles diags={diags} fontSize={fontSize} scrollTop={scrollTop} scrollLeft={scrollLeft} />}
-          {lspActive && ghostEnabled && <InlineGhostText diags={diags} fontSize={fontSize} scrollTop={scrollTop} />}
+          {lspEffective && <Squiggles diags={diags} fontSize={fontSize} scrollTop={scrollTop} scrollLeft={scrollLeft} />}
+          {lspEffective && ghostEnabled && <InlineGhostText diags={diags} fontSize={fontSize} scrollTop={scrollTop} />}
 
           {/* Inlay hints */}
-          {featuresActive && settings.lspInlayHints && (
+          {featuresEffective && settings.lspInlayHints && (
             <InlayHintsLayer hints={inlayHints} fontSize={fontSize} scrollTop={scrollTop} scrollLeft={scrollLeft} code={content} />
           )}
 
           {/* Textarea */}
           <textarea ref={taRef} value={content}
-            onChange={onChange} onKeyDown={onKeyDown} onKeyUp={onKeyUp}
+            onChange={buildReadOnly ? undefined : onChange}
+            onKeyDown={buildReadOnly ? undefined : onKeyDown}
+            onKeyUp={onKeyUp}
             onScroll={onScroll} onMouseUp={onMouseUp}
             onContextMenu={buildContextMenu}
-            className="editor-textarea" style={editorStyle}
+            readOnly={buildReadOnly}
+            className="editor-textarea" style={{ ...editorStyle, ...(buildReadOnly ? { cursor: 'default', opacity: 0.75 } : {}) }}
             spellCheck={false} autoCorrect="off" autoCapitalize="off" data-gramm="false" />
 
           {/* Search bar */}
@@ -1042,17 +1179,17 @@ export default function CodeEditor() {
           )}
 
           {/* Diag hover */}
-          {lspActive && hoveredDiags.length > 0 && !hoverDoc && (
+          {lspEffective && hoveredDiags.length > 0 && !hoverDoc && (
             <DiagTip diags={hoveredDiags} x={tipPos.x} y={tipPos.y}
               onInstall={lib => { setPendingLibs([lib]); setShowLibModal(true) }} />
           )}
 
           {/* Hover doc */}
-          {featuresActive && settings.lspHoverEnabled && hoverDoc && hoveredDiags.length === 0 && (
+          {featuresEffective && settings.lspHoverEnabled && hoverDoc && hoveredDiags.length === 0 && (
             <HoverDocTooltip doc={hoverDoc} x={hoverDocPos.x} y={hoverDocPos.y} />
           )}
 
-          {lspActive && <DiagBadge diags={diags} />}
+          {lspEffective && <DiagBadge diags={diags} />}
         </div>
 
         {/* Minimap */}
@@ -1064,7 +1201,7 @@ export default function CodeEditor() {
       </div>
 
       {/* Completions dropdown (portal) */}
-      {featuresActive && compVisible && (
+      {featuresEffective && compVisible && (
         <CompletionDropdown
           items={completions} activeIdx={compIdx}
           x={compPos.x} y={compPos.y} maxH={compPos.maxH}
@@ -1072,12 +1209,12 @@ export default function CodeEditor() {
           onHover={setHoveredComp}
         />
       )}
-      {featuresActive && hoveredComp && (
+      {featuresEffective && hoveredComp && (
         <CompletionDetail item={hoveredComp} x={compPos.x} y={compPos.y} />
       )}
 
       {/* Signature help (portal) */}
-      {featuresActive && settings.lspSignatureHelp && sigHelp && !compVisible && (
+      {featuresEffective && settings.lspSignatureHelp && sigHelp && !compVisible && (
         <SignatureHelpWidget help={sigHelp} x={sigPos.x} y={sigPos.y} />
       )}
 

@@ -12,33 +12,112 @@ use std::path::Path;
 
 // ── Mapping types ─────────────────────────────────────────────────────────────
 
+/// A pre-parsed slot in a mapping template.
+/// Parsed once at registration time, applied in O(n_slots) with zero scanning.
+#[derive(Debug, Clone)]
+pub(crate) enum TemplateSlot {
+    Lit(Box<str>),  // literal segment between placeholders
+    Arg(usize),     // {0}, {1}, {2} ...
+    Self_,          // {self}
+    Args,           // {args} — all args joined with ", "
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedTemplate {
+    slots: Vec<TemplateSlot>,
+}
+
+impl ParsedTemplate {
+    fn parse(t: &str) -> Self {
+        let mut slots: Vec<TemplateSlot> = Vec::new();
+        let mut lit   = String::new();
+        let mut chars = t.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '{' { lit.push(c); continue; }
+            let mut inner = String::new();
+            let mut closed = false;
+            for nc in chars.by_ref() {
+                if nc == '}' { closed = true; break; }
+                inner.push(nc);
+            }
+            if !closed { lit.push('{'); lit.push_str(&inner); continue; }
+            if !lit.is_empty() {
+                slots.push(TemplateSlot::Lit(std::mem::take(&mut lit).into_boxed_str()));
+            }
+            match inner.as_str() {
+                "self" => slots.push(TemplateSlot::Self_),
+                "args" => slots.push(TemplateSlot::Args),
+                s => if let Ok(n) = s.parse::<usize>() {
+                    slots.push(TemplateSlot::Arg(n));
+                } else {
+                    lit.push('{'); lit.push_str(s); lit.push('}');
+                }
+            }
+        }
+        if !lit.is_empty() { slots.push(TemplateSlot::Lit(lit.into_boxed_str())); }
+        Self { slots }
+    }
+
+    /// Write the expanded template into `out` — zero allocations if `out` has capacity.
+    #[inline]
+    fn apply_into(&self, args: &[String], out: &mut String) {
+        for slot in &self.slots {
+            match slot {
+                TemplateSlot::Lit(s)  => out.push_str(s),
+                TemplateSlot::Self_   => { if let Some(r) = args.first() { out.push_str(r) } }
+                TemplateSlot::Arg(i)  => { if let Some(a) = args.get(*i)  { out.push_str(a) } }
+                TemplateSlot::Args    => {
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        out.push_str(a);
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply(&self, args: &[String]) -> String {
+        let cap: usize = self.slots.iter().map(|s| match s {
+            TemplateSlot::Lit(l) => l.len(),
+            _ => 8,
+        }).sum();
+        let mut out = String::with_capacity(cap.max(16));
+        self.apply_into(args, &mut out);
+        out
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum FnMap {
+    /// Direct C++ identifier or expression — returned as-is.
     Direct(String),
-    Template(String),
-    /// All args joined by ", " replace the `{args}` placeholder.
-    /// Used for variadic calls like Serial.printf where arg count varies.
-    Variadic(String),
+    /// Parameterised template:  {0}, {1}, {self}, {args}
+    Template(ParsedTemplate),
+    /// Legacy alias for Template("{args}").
+    Variadic(ParsedTemplate),
 }
 
 impl FnMap {
+    /// Convenience constructors (parse once at registration).
+    pub fn direct(s: impl Into<String>)  -> Self { Self::Direct(s.into()) }
+    pub fn template(t: &str)             -> Self { Self::Template(ParsedTemplate::parse(t)) }
+    pub fn variadic(t: &str)             -> Self { Self::Variadic(ParsedTemplate::parse(t)) }
+
+    #[inline]
     pub fn apply(&self, args: &[String]) -> String {
         match self {
             Self::Direct(s)   => s.clone(),
-            Self::Template(t) => {
-                let mut out = t.clone();
-                // {self} is a named alias for the receiver (args[0])
-                if let Some(receiver) = args.first() {
-                    out = out.replace("{self}", receiver);
-                }
-                for (i, a) in args.iter().enumerate() {
-                    out = out.replace(&format!("{{{i}}}"), a);
-                }
-                out
-            }
-            Self::Variadic(t) => {
-                t.replace("{args}", &args.join(", "))
-            }
+            Self::Template(t) => t.apply(args),
+            Self::Variadic(t) => t.apply(args),
+        }
+    }
+
+    #[inline]
+    pub fn apply_into(&self, args: &[String], out: &mut String) {
+        match self {
+            Self::Direct(s)   => out.push_str(s),
+            Self::Template(t) => t.apply_into(args, out),
+            Self::Variadic(t) => t.apply_into(args, out),
         }
     }
 }
@@ -55,7 +134,13 @@ pub struct PkgMap {
 
 impl PkgMap {
     pub fn new(header: Option<&str>) -> Self {
-        Self { header: header.map(str::to_owned), ..Default::default() }
+        Self {
+            header:    header.map(str::to_owned),
+            functions: HashMap::with_capacity(16),
+            constants: HashMap::with_capacity(8),
+            types:     HashMap::with_capacity(4),
+            cpp_class: None,
+        }
     }
     pub fn with_class(mut self, class: &str) -> Self {
         self.cpp_class = Some(class.to_owned()); self
@@ -79,8 +164,12 @@ impl Default for Runtime { fn default() -> Self { Self::new() } }
 
 impl Runtime {
     /// Create a runtime with only the built-in packages.
+    /// HashMap capacities are pre-sized to avoid rehashing during the ~220 registrations.
     pub fn new() -> Self {
-        let mut r = Runtime { packages: HashMap::new(), builtins: HashMap::new() };
+        let mut r = Runtime {
+            packages: HashMap::with_capacity(24),  // ~15 built-in packages
+            builtins: HashMap::with_capacity(16),  // ~10 built-in functions
+        };
         r.init_builtins();
         r.init_fmt();
         r.init_time();
@@ -161,16 +250,16 @@ impl Runtime {
 
     fn init_builtins(&mut self) {
         let b = &mut self.builtins;
-        b.insert("print".into(),   FnMap::Template("Serial.print({0})".into()));
-        b.insert("println".into(), FnMap::Template("Serial.println({0})".into()));
-        b.insert("panic".into(),   FnMap::Template("{ Serial.println({0}); for(;;) {} }".into()));
-        b.insert("len".into(),     FnMap::Template("(sizeof({0})/sizeof({0}[0]))".into()));
-        b.insert("cap".into(),     FnMap::Template("(sizeof({0})/sizeof({0}[0]))".into()));
-        b.insert("new".into(),     FnMap::Template("(new {0}())".into()));
-        b.insert("delete".into(),  FnMap::Template("delete {0}".into()));
-        b.insert("make".into(),    FnMap::Template("/* make({0}) */".into()));
-        b.insert("append".into(),  FnMap::Template("/* append({0}) */".into()));
-        b.insert("copy".into(),    FnMap::Template("memcpy({0},{1},sizeof({0}))".into()));
+        b.insert("print".into(),   FnMap::template("Serial.print({0})"));
+        b.insert("println".into(), FnMap::template("Serial.println({0})"));
+        b.insert("panic".into(),   FnMap::template("{ Serial.println({0}); for(;;) {} }"));
+        b.insert("len".into(),     FnMap::template("(sizeof({0})/sizeof({0}[0]))"));
+        b.insert("cap".into(),     FnMap::template("(sizeof({0})/sizeof({0}[0]))"));
+        b.insert("new".into(),     FnMap::template("(new {0}())"));
+        b.insert("delete".into(),  FnMap::template("delete {0}"));
+        b.insert("make".into(),    FnMap::template("/* make({0}) */"));
+        b.insert("append".into(),  FnMap::template("/* append({0}) */"));
+        b.insert("copy".into(),    FnMap::template("memcpy({0},{1},sizeof({0}))"));
     }
 
     fn init_fmt(&mut self) {
@@ -179,38 +268,38 @@ impl Runtime {
         // or replace fmt.Printf float args with dtostrf() calls in your Go source.
         self.reg("fmt", PkgMap::new(None)
             // Go (PascalCase)
-            .fun("Print",    FnMap::Template("Serial.print({0})".into()))
-            .fun("Println",  FnMap::Template("Serial.println({0})".into()))
-            .fun("Printf",   FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
-            .fun("Fprintf",  FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
-            .fun("Sprintf",  FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
-            .fun("Errorf",   FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
+            .fun("Print",    FnMap::template("Serial.print({0})"))
+            .fun("Println",  FnMap::template("Serial.println({0})"))
+            .fun("Printf",   FnMap::variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)"))
+            .fun("Fprintf",  FnMap::variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)"))
+            .fun("Sprintf",  FnMap::variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()"))
+            .fun("Errorf",   FnMap::variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()"))
             // Python (snake_case) aliases
-            .fun("print",    FnMap::Template("Serial.print({0})".into()))
-            .fun("println",  FnMap::Template("Serial.println({0})".into()))
-            .fun("printf",   FnMap::Variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)".into()))
-            .fun("sprintf",  FnMap::Variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()".into()))
+            .fun("print",    FnMap::template("Serial.print({0})"))
+            .fun("println",  FnMap::template("Serial.println({0})"))
+            .fun("printf",   FnMap::variadic("do { char _pb[128]; snprintf(_pb, sizeof(_pb), {args}); Serial.print(_pb); } while(0)"))
+            .fun("sprintf",  FnMap::variadic("([&](){ char _buf[128]; snprintf(_buf, sizeof(_buf), {args}); return String(_buf); })()"))
         );
     }
 
     fn init_time(&mut self) {
         self.reg("time", PkgMap::new(None)
             // ── Go (PascalCase) — nanosecond-based, Go time.Duration convention ──
-            .fun("Sleep",  FnMap::Template("delay(({0})/1000000UL)".into()))
+            .fun("Sleep",  FnMap::template("delay(({0})/1000000UL)"))
             .fun("Now",    FnMap::Direct("millis()".into()))
-            .fun("Since",  FnMap::Template("(millis()-{0})".into()))
+            .fun("Since",  FnMap::template("(millis()-{0})"))
             // ── Python (snake_case) ───────────────────────────────────────────
             // time.sleep(n)    → delay(n/1e6)         n is nanoseconds (same as Go Sleep)
             //                    time.sleep(500 * time.Millisecond) → delay(500)
             // time.sleep_ms(n) → delay(n)             explicit ms alias: sleep_ms(500) → delay(500)
             // time.sleep_us(n) → delayMicroseconds(n) explicit µs alias
             // time.sleep_ns(n) → delay((n)/1000000UL) explicit ns alias (same as sleep)
-            .fun("sleep",    FnMap::Template("delay(({0})/1000000UL)".into()))
-            .fun("sleep_ms", FnMap::Template("delay({0})".into()))
-            .fun("sleep_us", FnMap::Template("delayMicroseconds({0})".into()))
-            .fun("sleep_ns", FnMap::Template("delay(({0})/1000000UL)".into()))
+            .fun("sleep",    FnMap::template("delay(({0})/1000000UL)"))
+            .fun("sleep_ms", FnMap::template("delay({0})"))
+            .fun("sleep_us", FnMap::template("delayMicroseconds({0})"))
+            .fun("sleep_ns", FnMap::template("delay(({0})/1000000UL)"))
             .fun("now",      FnMap::Direct("millis()".into()))
-            .fun("since",    FnMap::Template("(millis()-{0})".into()))
+            .fun("since",    FnMap::template("(millis()-{0})"))
             .fun("millis",   FnMap::Direct("millis()".into()))
             .fun("micros",   FnMap::Direct("micros()".into()))
             // ── Constants (nanosecond values — Go convention kept for Go source) ─
@@ -251,121 +340,121 @@ impl Runtime {
             .cst("SmallestNonzeroFloat64", "DBL_TRUE_MIN")
             .fun("Inf",     FnMap::Direct("INFINITY".into()))
             .fun("NaN",     FnMap::Direct("NAN".into()))
-            .fun("IsNaN",   FnMap::Template("isnan({0})".into()))
-            .fun("IsInf",   FnMap::Template("isinf({0})".into()));
+            .fun("IsNaN",   FnMap::template("isnan({0})"))
+            .fun("IsInf",   FnMap::template("isinf({0})"));
         for (go_fn, cpp_fn) in fns {
-            m = m.fun(go_fn, FnMap::Template(format!("{}({{0}})", cpp_fn)));
+            m = m.fun(go_fn, FnMap::template(&format!("{}({{0}})", cpp_fn)));
             // Python: also register lowercase alias (e.g. "sqrt" alongside "Sqrt")
             let py_fn = go_fn.to_lowercase();
             if py_fn != *go_fn {
-                m = m.fun(&py_fn, FnMap::Template(format!("{}({{0}})", cpp_fn)));
+                m = m.fun(&py_fn, FnMap::template(&format!("{}({{0}})", cpp_fn)));
             }
         }
         // Extra two-arg python aliases
-        m = m.fun("atan2",       FnMap::Template("atan2({0},{1})".into()));
-        m = m.fun("pow",         FnMap::Template("pow({0},{1})".into()));
-        m = m.fun("fmod",        FnMap::Template("fmod({0},{1})".into()));
-        m = m.fun("is_nan",      FnMap::Template("isnan({0})".into()));
-        m = m.fun("is_inf",      FnMap::Template("isinf({0})".into()));
+        m = m.fun("atan2",       FnMap::template("atan2({0},{1})"));
+        m = m.fun("pow",         FnMap::template("pow({0},{1})"));
+        m = m.fun("fmod",        FnMap::template("fmod({0},{1})"));
+        m = m.fun("is_nan",      FnMap::template("isnan({0})"));
+        m = m.fun("is_inf",      FnMap::template("isinf({0})"));
         self.reg("math", m);
     }
 
     fn init_strconv(&mut self) {
         self.reg("strconv", PkgMap::new(None)
             // Go (PascalCase)
-            .fun("Itoa",        FnMap::Template("String({0})".into()))
-            .fun("Atoi",        FnMap::Template("({0}).toInt()".into()))
-            .fun("FormatInt",   FnMap::Template("String({0},{1})".into()))
-            .fun("FormatFloat", FnMap::Template("String({0})".into()))
-            .fun("ParseFloat",  FnMap::Template("({0}).toFloat()".into()))
-            .fun("ParseInt",    FnMap::Template("({0}).toInt()".into()))
-            .fun("ParseBool",   FnMap::Template("({0} == \"true\")".into()))
-            .fun("FormatBool",  FnMap::Template("({0} ? \"true\" : \"false\")".into()))
+            .fun("Itoa",        FnMap::template("String({0})"))
+            .fun("Atoi",        FnMap::template("({0}).toInt()"))
+            .fun("FormatInt",   FnMap::template("String({0},{1})"))
+            .fun("FormatFloat", FnMap::template("String({0})"))
+            .fun("ParseFloat",  FnMap::template("({0}).toFloat()"))
+            .fun("ParseInt",    FnMap::template("({0}).toInt()"))
+            .fun("ParseBool",   FnMap::template("({0} == \"true\")"))
+            .fun("FormatBool",  FnMap::template("({0} ? \"true\" : \"false\")"))
             // Python (snake_case) aliases
-            .fun("itoa",         FnMap::Template("String({0})".into()))
-            .fun("atoi",         FnMap::Template("({0}).toInt()".into()))
-            .fun("format_int",   FnMap::Template("String({0},{1})".into()))
-            .fun("format_float", FnMap::Template("String({0})".into()))
-            .fun("parse_float",  FnMap::Template("({0}).toFloat()".into()))
-            .fun("parse_int",    FnMap::Template("({0}).toInt()".into()))
-            .fun("parse_bool",   FnMap::Template("({0} == \"true\")".into()))
-            .fun("format_bool",  FnMap::Template("({0} ? \"true\" : \"false\")".into()))
+            .fun("itoa",         FnMap::template("String({0})"))
+            .fun("atoi",         FnMap::template("({0}).toInt()"))
+            .fun("format_int",   FnMap::template("String({0},{1})"))
+            .fun("format_float", FnMap::template("String({0})"))
+            .fun("parse_float",  FnMap::template("({0}).toFloat()"))
+            .fun("parse_int",    FnMap::template("({0}).toInt()"))
+            .fun("parse_bool",   FnMap::template("({0} == \"true\")"))
+            .fun("format_bool",  FnMap::template("({0} ? \"true\" : \"false\")"))
         );
     }
 
     fn init_arduino(&mut self) {
         self.reg("arduino", PkgMap::new(Some("Arduino.h"))
             // ── Digital / analog I/O (camelCase + PascalCase aliases) ────────
-            .fun("pinMode",           FnMap::Template("pinMode({0}, {1})".into()))
-            .fun("PinMode",           FnMap::Template("pinMode({0}, {1})".into()))
-            .fun("digitalWrite",      FnMap::Template("digitalWrite({0}, {1})".into()))
-            .fun("DigitalWrite",      FnMap::Template("digitalWrite({0}, {1})".into()))
-            .fun("digitalRead",       FnMap::Template("digitalRead({0})".into()))
-            .fun("DigitalRead",       FnMap::Template("digitalRead({0})".into()))
-            .fun("analogRead",        FnMap::Template("analogRead({0})".into()))
-            .fun("AnalogRead",        FnMap::Template("analogRead({0})".into()))
-            .fun("analogWrite",       FnMap::Template("analogWrite({0}, {1})".into()))
-            .fun("AnalogWrite",       FnMap::Template("analogWrite({0}, {1})".into()))
-            .fun("analogReference",   FnMap::Template("analogReference({0})".into()))
-            .fun("AnalogReference",   FnMap::Template("analogReference({0})".into()))
+            .fun("pinMode",           FnMap::template("pinMode({0}, {1})"))
+            .fun("PinMode",           FnMap::template("pinMode({0}, {1})"))
+            .fun("digitalWrite",      FnMap::template("digitalWrite({0}, {1})"))
+            .fun("DigitalWrite",      FnMap::template("digitalWrite({0}, {1})"))
+            .fun("digitalRead",       FnMap::template("digitalRead({0})"))
+            .fun("DigitalRead",       FnMap::template("digitalRead({0})"))
+            .fun("analogRead",        FnMap::template("analogRead({0})"))
+            .fun("AnalogRead",        FnMap::template("analogRead({0})"))
+            .fun("analogWrite",       FnMap::template("analogWrite({0}, {1})"))
+            .fun("AnalogWrite",       FnMap::template("analogWrite({0}, {1})"))
+            .fun("analogReference",   FnMap::template("analogReference({0})"))
+            .fun("AnalogReference",   FnMap::template("analogReference({0})"))
             // ── Timing ────────────────────────────────────────────────────────
-            .fun("delay",             FnMap::Template("delay({0})".into()))
-            .fun("Delay",             FnMap::Template("delay({0})".into()))
-            .fun("delayMicroseconds", FnMap::Template("delayMicroseconds({0})".into()))
-            .fun("DelayMicroseconds", FnMap::Template("delayMicroseconds({0})".into()))
+            .fun("delay",             FnMap::template("delay({0})"))
+            .fun("Delay",             FnMap::template("delay({0})"))
+            .fun("delayMicroseconds", FnMap::template("delayMicroseconds({0})"))
+            .fun("DelayMicroseconds", FnMap::template("delayMicroseconds({0})"))
             .fun("millis",            FnMap::Direct("millis()".into()))
             .fun("Millis",            FnMap::Direct("millis()".into()))
             .fun("micros",            FnMap::Direct("micros()".into()))
             .fun("Micros",            FnMap::Direct("micros()".into()))
             // ── Math helpers ──────────────────────────────────────────────────
-            .fun("map",       FnMap::Template("map({0}, {1}, {2}, {3}, {4})".into()))
-            .fun("Map",       FnMap::Template("map({0}, {1}, {2}, {3}, {4})".into()))
-            .fun("constrain", FnMap::Template("constrain({0}, {1}, {2})".into()))
-            .fun("Constrain", FnMap::Template("constrain({0}, {1}, {2})".into()))
-            .fun("abs",       FnMap::Template("abs({0})".into()))
-            .fun("Abs",       FnMap::Template("abs({0})".into()))
-            .fun("min",       FnMap::Template("min({0}, {1})".into()))
-            .fun("Min",       FnMap::Template("min({0}, {1})".into()))
-            .fun("max",       FnMap::Template("max({0}, {1})".into()))
-            .fun("Max",       FnMap::Template("max({0}, {1})".into()))
-            .fun("sqrt",      FnMap::Template("sqrt({0})".into()))
-            .fun("Sqrt",      FnMap::Template("sqrt({0})".into()))
-            .fun("pow",       FnMap::Template("pow({0}, {1})".into()))
-            .fun("Pow",       FnMap::Template("pow({0}, {1})".into()))
-            .fun("random",    FnMap::Template("random({0})".into()))
-            .fun("Random",    FnMap::Template("random({0})".into()))
-            .fun("randomSeed", FnMap::Template("randomSeed({0})".into()))
-            .fun("RandomSeed", FnMap::Template("randomSeed({0})".into()))
+            .fun("map",       FnMap::template("map({0}, {1}, {2}, {3}, {4})"))
+            .fun("Map",       FnMap::template("map({0}, {1}, {2}, {3}, {4})"))
+            .fun("constrain", FnMap::template("constrain({0}, {1}, {2})"))
+            .fun("Constrain", FnMap::template("constrain({0}, {1}, {2})"))
+            .fun("abs",       FnMap::template("abs({0})"))
+            .fun("Abs",       FnMap::template("abs({0})"))
+            .fun("min",       FnMap::template("min({0}, {1})"))
+            .fun("Min",       FnMap::template("min({0}, {1})"))
+            .fun("max",       FnMap::template("max({0}, {1})"))
+            .fun("Max",       FnMap::template("max({0}, {1})"))
+            .fun("sqrt",      FnMap::template("sqrt({0})"))
+            .fun("Sqrt",      FnMap::template("sqrt({0})"))
+            .fun("pow",       FnMap::template("pow({0}, {1})"))
+            .fun("Pow",       FnMap::template("pow({0}, {1})"))
+            .fun("random",    FnMap::template("random({0})"))
+            .fun("Random",    FnMap::template("random({0})"))
+            .fun("randomSeed", FnMap::template("randomSeed({0})"))
+            .fun("RandomSeed", FnMap::template("randomSeed({0})"))
             // ── Tone / pulse ──────────────────────────────────────────────────
-            .fun("tone",       FnMap::Template("tone({0}, {1})".into()))
-            .fun("Tone",       FnMap::Template("tone({0}, {1})".into()))
-            .fun("noTone",     FnMap::Template("noTone({0})".into()))
-            .fun("NoTone",     FnMap::Template("noTone({0})".into()))
-            .fun("pulseIn",    FnMap::Template("pulseIn({0}, {1})".into()))
-            .fun("PulseIn",    FnMap::Template("pulseIn({0}, {1})".into()))
-            .fun("pulseInLong",FnMap::Template("pulseInLong({0}, {1})".into()))
-            .fun("PulseInLong",FnMap::Template("pulseInLong({0}, {1})".into()))
-            .fun("shiftOut",   FnMap::Template("shiftOut({0}, {1}, {2}, {3})".into()))
-            .fun("ShiftOut",   FnMap::Template("shiftOut({0}, {1}, {2}, {3})".into()))
-            .fun("shiftIn",    FnMap::Template("shiftIn({0}, {1}, {2})".into()))
-            .fun("ShiftIn",    FnMap::Template("shiftIn({0}, {1}, {2})".into()))
+            .fun("tone",       FnMap::template("tone({0}, {1})"))
+            .fun("Tone",       FnMap::template("tone({0}, {1})"))
+            .fun("noTone",     FnMap::template("noTone({0})"))
+            .fun("NoTone",     FnMap::template("noTone({0})"))
+            .fun("pulseIn",    FnMap::template("pulseIn({0}, {1})"))
+            .fun("PulseIn",    FnMap::template("pulseIn({0}, {1})"))
+            .fun("pulseInLong",FnMap::template("pulseInLong({0}, {1})"))
+            .fun("PulseInLong",FnMap::template("pulseInLong({0}, {1})"))
+            .fun("shiftOut",   FnMap::template("shiftOut({0}, {1}, {2}, {3})"))
+            .fun("ShiftOut",   FnMap::template("shiftOut({0}, {1}, {2}, {3})"))
+            .fun("shiftIn",    FnMap::template("shiftIn({0}, {1}, {2})"))
+            .fun("ShiftIn",    FnMap::template("shiftIn({0}, {1}, {2})"))
             // ── Interrupts ────────────────────────────────────────────────────
-            .fun("attachInterrupt",   FnMap::Template("attachInterrupt({0}, {1}, {2})".into()))
-            .fun("AttachInterrupt",   FnMap::Template("attachInterrupt({0}, {1}, {2})".into()))
-            .fun("detachInterrupt",   FnMap::Template("detachInterrupt({0})".into()))
-            .fun("DetachInterrupt",   FnMap::Template("detachInterrupt({0})".into()))
+            .fun("attachInterrupt",   FnMap::template("attachInterrupt({0}, {1}, {2})"))
+            .fun("AttachInterrupt",   FnMap::template("attachInterrupt({0}, {1}, {2})"))
+            .fun("detachInterrupt",   FnMap::template("detachInterrupt({0})"))
+            .fun("DetachInterrupt",   FnMap::template("detachInterrupt({0})"))
             .fun("interrupts",        FnMap::Direct("interrupts()".into()))
             .fun("Interrupts",        FnMap::Direct("interrupts()".into()))
             .fun("noInterrupts",      FnMap::Direct("noInterrupts()".into()))
             .fun("NoInterrupts",      FnMap::Direct("noInterrupts()".into()))
             // ── Serial (convenience wrappers on arduino package) ─────────────
-            .fun("SerialBegin",       FnMap::Template("Serial.begin({0})".into()))
-            .fun("serialBegin",       FnMap::Template("Serial.begin({0})".into()))
+            .fun("SerialBegin",       FnMap::template("Serial.begin({0})"))
+            .fun("serialBegin",       FnMap::template("Serial.begin({0})"))
             .fun("SerialEnd",         FnMap::Direct("Serial.end()".into()))
-            .fun("SerialPrint",       FnMap::Template("Serial.print({0})".into()))
-            .fun("serialPrint",       FnMap::Template("Serial.print({0})".into()))
-            .fun("SerialPrintln",     FnMap::Template("Serial.println({0})".into()))
-            .fun("serialPrintln",     FnMap::Template("Serial.println({0})".into()))
+            .fun("SerialPrint",       FnMap::template("Serial.print({0})"))
+            .fun("serialPrint",       FnMap::template("Serial.print({0})"))
+            .fun("SerialPrintln",     FnMap::template("Serial.println({0})"))
+            .fun("serialPrintln",     FnMap::template("Serial.println({0})"))
             .fun("SerialAvailable",   FnMap::Direct("Serial.available()".into()))
             .fun("SerialRead",        FnMap::Direct("Serial.read()".into()))
             .fun("SerialReadString",  FnMap::Direct("Serial.readString()".into()))
@@ -374,11 +463,11 @@ impl Runtime {
             // Python source uses `arduino.Serial.begin(9600)`.
             // emit_call splits at the FIRST dot → mod_name="arduino", fn_name="Serial.begin"
             // so we register these compound names in the arduino PkgMap.
-            .fun("Serial.begin",      FnMap::Template("Serial.begin({0})".into()))
+            .fun("Serial.begin",      FnMap::template("Serial.begin({0})"))
             .fun("Serial.end",        FnMap::Direct(  "Serial.end()".into()))
-            .fun("Serial.print",      FnMap::Template("Serial.print({0})".into()))
-            .fun("Serial.println",    FnMap::Template("Serial.println({0})".into()))
-            .fun("Serial.write",      FnMap::Template("Serial.write({0})".into()))
+            .fun("Serial.print",      FnMap::template("Serial.print({0})"))
+            .fun("Serial.println",    FnMap::template("Serial.println({0})"))
+            .fun("Serial.write",      FnMap::template("Serial.write({0})"))
             .fun("Serial.available",  FnMap::Direct(  "Serial.available()".into()))
             .fun("Serial.read",       FnMap::Direct(  "Serial.read()".into()))
             .fun("Serial.readString", FnMap::Direct(  "Serial.readString()".into()))
@@ -403,15 +492,15 @@ impl Runtime {
     fn init_wire(&mut self) {
         let m = PkgMap::new(Some("Wire.h"))
             .fun("Begin",             FnMap::Direct("Wire.begin()".into()))
-            .fun("BeginTransmission", FnMap::Template("Wire.beginTransmission({0})".into()))
+            .fun("BeginTransmission", FnMap::template("Wire.beginTransmission({0})"))
             .fun("EndTransmission",   FnMap::Direct("Wire.endTransmission()".into()))
-            .fun("RequestFrom",       FnMap::Template("Wire.requestFrom({0},{1})".into()))
-            .fun("Write",             FnMap::Template("Wire.write({0})".into()))
+            .fun("RequestFrom",       FnMap::template("Wire.requestFrom({0},{1})"))
+            .fun("Write",             FnMap::template("Wire.write({0})"))
             .fun("Read",              FnMap::Direct("Wire.read()".into()))
             .fun("Available",         FnMap::Direct("Wire.available()".into()))
-            .fun("SetClock",          FnMap::Template("Wire.setClock({0})".into()))
-            .fun("OnReceive",         FnMap::Template("Wire.onReceive({0})".into()))
-            .fun("OnRequest",         FnMap::Template("Wire.onRequest({0})".into()));
+            .fun("SetClock",          FnMap::template("Wire.setClock({0})"))
+            .fun("OnReceive",         FnMap::template("Wire.onReceive({0})"))
+            .fun("OnRequest",         FnMap::template("Wire.onRequest({0})"));
         self.reg("wire", m.clone());
         self.reg("Wire", m);
     }
@@ -420,63 +509,63 @@ impl Runtime {
         let m = PkgMap::new(Some("SPI.h"))
             .fun("Begin",           FnMap::Direct("SPI.begin()".into()))
             .fun("End",             FnMap::Direct("SPI.end()".into()))
-            .fun("Transfer",        FnMap::Template("SPI.transfer({0})".into()))
-            .fun("Transfer16",      FnMap::Template("SPI.transfer16({0})".into()))
-            .fun("BeginTransaction",FnMap::Template("SPI.beginTransaction({0})".into()))
+            .fun("Transfer",        FnMap::template("SPI.transfer({0})"))
+            .fun("Transfer16",      FnMap::template("SPI.transfer16({0})"))
+            .fun("BeginTransaction",FnMap::template("SPI.beginTransaction({0})"))
             .fun("EndTransaction",  FnMap::Direct("SPI.endTransaction()".into()))
-            .fun("SetBitOrder",     FnMap::Template("SPI.setBitOrder({0})".into()))
-            .fun("SetDataMode",     FnMap::Template("SPI.setDataMode({0})".into()))
-            .fun("SetClockDivider", FnMap::Template("SPI.setClockDivider({0})".into()));
+            .fun("SetBitOrder",     FnMap::template("SPI.setBitOrder({0})"))
+            .fun("SetDataMode",     FnMap::template("SPI.setDataMode({0})"))
+            .fun("SetClockDivider", FnMap::template("SPI.setClockDivider({0})"));
         self.reg("spi", m.clone());
         self.reg("SPI", m);
     }
 
     fn init_serial(&mut self) {
         let m = PkgMap::new(None)
-            .fun("Begin",     FnMap::Template("Serial.begin({0})".into()))
+            .fun("Begin",     FnMap::template("Serial.begin({0})"))
             .fun("End",       FnMap::Direct("Serial.end()".into()))
-            .fun("Print",     FnMap::Template("Serial.print({0})".into()))
-            .fun("Println",   FnMap::Template("Serial.println({0})".into()))
-            .fun("Write",     FnMap::Template("Serial.write({0})".into()))
+            .fun("Print",     FnMap::template("Serial.print({0})"))
+            .fun("Println",   FnMap::template("Serial.println({0})"))
+            .fun("Write",     FnMap::template("Serial.write({0})"))
             .fun("Read",      FnMap::Direct("Serial.read()".into()))
             .fun("Peek",      FnMap::Direct("Serial.peek()".into()))
             .fun("Available", FnMap::Direct("Serial.available()".into()))
             .fun("Flush",     FnMap::Direct("Serial.flush()".into()))
             .fun("ParseInt",  FnMap::Direct("Serial.parseInt()".into()))
             .fun("ParseFloat",FnMap::Direct("Serial.parseFloat()".into()))
-            .fun("ReadString",FnMap::Template("Serial.readString()".into()))
-            .fun("Find",      FnMap::Template("Serial.find({0})".into()));
+            .fun("ReadString",FnMap::template("Serial.readString()"))
+            .fun("Find",      FnMap::template("Serial.find({0})"));
         self.reg("serial", m.clone());
         self.reg("Serial", m);
     }
 
     fn init_servo(&mut self) {
         let m = PkgMap::new(Some("Servo.h"))
-            .fun("Attach",   FnMap::Template("{0}.attach({1})".into()))
-            .fun("Write",    FnMap::Template("{0}.write({1})".into()))
-            .fun("WriteMicroseconds", FnMap::Template("{0}.writeMicroseconds({1})".into()))
-            .fun("Read",     FnMap::Template("{0}.read()".into()))
-            .fun("Attached", FnMap::Template("{0}.attached()".into()))
-            .fun("Detach",   FnMap::Template("{0}.detach()".into()));
+            .fun("Attach",   FnMap::template("{0}.attach({1})"))
+            .fun("Write",    FnMap::template("{0}.write({1})"))
+            .fun("WriteMicroseconds", FnMap::template("{0}.writeMicroseconds({1})"))
+            .fun("Read",     FnMap::template("{0}.read()"))
+            .fun("Attached", FnMap::template("{0}.attached()"))
+            .fun("Detach",   FnMap::template("{0}.detach()"));
         self.reg("servo", m.clone());
         self.reg("Servo", m);
     }
 
     fn init_liquidcrystal(&mut self) {
         let m = PkgMap::new(Some("LiquidCrystal.h"))
-            .fun("Begin",   FnMap::Template("{0}.begin({1}, {2})".into()))
-            .fun("Clear",   FnMap::Template("{0}.clear()".into()))
-            .fun("Home",    FnMap::Template("{0}.home()".into()))
-            .fun("Print",   FnMap::Template("{0}.print({1})".into()))
-            .fun("SetCursor",FnMap::Template("{0}.setCursor({1}, {2})".into()))
-            .fun("Blink",   FnMap::Template("{0}.blink()".into()))
-            .fun("NoBlink", FnMap::Template("{0}.noBlink()".into()))
-            .fun("Cursor",  FnMap::Template("{0}.cursor()".into()))
-            .fun("NoCursor",FnMap::Template("{0}.noCursor()".into()))
-            .fun("Display", FnMap::Template("{0}.display()".into()))
-            .fun("NoDisplay",FnMap::Template("{0}.noDisplay()".into()))
-            .fun("ScrollDisplayLeft", FnMap::Template("{0}.scrollDisplayLeft()".into()))
-            .fun("ScrollDisplayRight",FnMap::Template("{0}.scrollDisplayRight()".into()));
+            .fun("Begin",   FnMap::template("{0}.begin({1}, {2})"))
+            .fun("Clear",   FnMap::template("{0}.clear()"))
+            .fun("Home",    FnMap::template("{0}.home()"))
+            .fun("Print",   FnMap::template("{0}.print({1})"))
+            .fun("SetCursor",FnMap::template("{0}.setCursor({1}, {2})"))
+            .fun("Blink",   FnMap::template("{0}.blink()"))
+            .fun("NoBlink", FnMap::template("{0}.noBlink()"))
+            .fun("Cursor",  FnMap::template("{0}.cursor()"))
+            .fun("NoCursor",FnMap::template("{0}.noCursor()"))
+            .fun("Display", FnMap::template("{0}.display()"))
+            .fun("NoDisplay",FnMap::template("{0}.noDisplay()"))
+            .fun("ScrollDisplayLeft", FnMap::template("{0}.scrollDisplayLeft()"))
+            .fun("ScrollDisplayRight",FnMap::template("{0}.scrollDisplayRight()"));
         self.reg("lcd",          m.clone());
         self.reg("LiquidCrystal",m);
     }
@@ -495,13 +584,13 @@ impl Runtime {
             .fun("ApiInit",   FnMap::Direct("TsukiWebApp()".into()))
             .fun("WebInit",   FnMap::Direct("TsukiWebApp()".into()))
             // app.setup() / app.tick() — pass-through method calls
-            .fun("Setup",     FnMap::Template("{0}.setup()".into()))
-            .fun("Tick",      FnMap::Template("{0}.tick()".into()))
+            .fun("Setup",     FnMap::template("{0}.setup()"))
+            .fun("Tick",      FnMap::template("{0}.tick()"))
             // Serial bridge
-            .fun("SerialWrite",    FnMap::Template("{0}.wsBroadcast({1})".into()))
+            .fun("SerialWrite",    FnMap::template("{0}.wsBroadcast({1})"))
             // Json helpers (map to ArduinoJson or String)
-            .fun("JsonStringify",  FnMap::Template("String({0})".into()))
-            .fun("JsonParse",      FnMap::Template("String({0})".into()));
+            .fun("JsonStringify",  FnMap::template("String({0})"))
+            .fun("JsonParse",      FnMap::template("String({0})"));
 
         self.reg("tsuki-webkit", m.clone());
         self.reg("webkit",       m.clone());

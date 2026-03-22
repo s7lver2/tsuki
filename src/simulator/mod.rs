@@ -41,13 +41,12 @@ impl Value {
     }
     fn to_display(&self) -> String {
         match self {
-            Value::Int(n)   => n.to_string(),
+            Value::Int(n)   => itoa_fast(*n),
             Value::Float(f) => {
-                // Avoid ".0" for whole numbers (matches Arduino Serial.print behaviour)
                 if f.fract() == 0.0 && f.abs() < 1e15 { format!("{:.0}", f) }
                 else { format!("{}", f) }
             }
-            Value::Bool(b)  => if *b { "1".into() } else { "0".into() },
+            Value::Bool(b)  => if *b { "1".to_owned() } else { "0".to_owned() },
             Value::Str(s)   => s.clone(),
             Value::Nil      => String::new(),
         }
@@ -163,10 +162,26 @@ pub struct Simulator {
     tone_pins:  HashMap<usize, u32>,
 }
 
+
+// ── Fast integer-to-string without heap alloc for common values ───────────────
+
+#[inline]
+fn itoa_fast(n: i64) -> String {
+    // Lookup table for common small integers avoids heap allocation entirely
+    match n {
+        0  => "0".to_owned(),  1  => "1".to_owned(),  2  => "2".to_owned(),
+        3  => "3".to_owned(),  4  => "4".to_owned(),  5  => "5".to_owned(),
+        6  => "6".to_owned(),  7  => "7".to_owned(),  8  => "8".to_owned(),
+        9  => "9".to_owned(),  10 => "10".to_owned(), 13 => "13".to_owned(),
+        255 => "255".to_owned(), 1023 => "1023".to_owned(),
+        _ => n.to_string(),
+    }
+}
+
 impl Simulator {
     /// Build a Simulator from a parsed Program.
     pub fn new(prog: &Program) -> Result<Self, String> {
-        let mut globals: HashMap<String, Value> = HashMap::new();
+        let mut globals: HashMap<String, Value> = HashMap::with_capacity(32);
 
         // ── Arduino built-in constants ────────────────────────────────────────
         let builtins = [
@@ -182,7 +197,7 @@ impl Simulator {
         ];
         for (k, v) in builtins { globals.insert(k.into(), v); }
 
-        let mut functions: HashMap<String, (Vec<String>, Block)> = HashMap::new();
+        let mut functions: HashMap<String, (Vec<String>, Block)> = HashMap::with_capacity(8);
         // Servo variable names detected from type annotations (pre-populated before any call)
         let mut servo_vars: Vec<String> = Vec::new();
 
@@ -220,7 +235,7 @@ impl Simulator {
 
         // Pre-populate servo_pins for all detected Servo.Servo variables.
         // usize::MAX means "declared but not yet attached to a pin".
-        let mut servo_pins_init: HashMap<String, usize> = HashMap::new();
+        let mut servo_pins_init: HashMap<String, usize> = HashMap::with_capacity(4);
         for var_name in servo_vars {
             servo_pins_init.insert(var_name, usize::MAX);
         }
@@ -232,14 +247,14 @@ impl Simulator {
             virtual_ms: 0.0,
             setup_done: false,
             servo_pins: servo_pins_init,
-            tone_pins:  HashMap::new(),
+            tone_pins:  HashMap::with_capacity(4),
         })
     }
 
     /// Run one simulation step: setup() if first call, then loop() once.
     pub fn step(&mut self) -> StepResult {
-        let mut events = Vec::new();
-        let mut serial = Vec::new();
+        let mut events = Vec::with_capacity(16);
+        let mut serial  = Vec::with_capacity(4);
 
         if !self.setup_done {
             let flow = self.call_named("setup", vec![], &mut events, &mut serial);
@@ -258,8 +273,17 @@ impl Simulator {
     }
 
     fn pin_map(&self) -> HashMap<String, u16> {
-        let mut m = HashMap::new();
-        for i in 0..20usize { m.insert(i.to_string(), self.pins.get_value(i)); }
+        // Pre-sized, keys are always "0".."19" — use with_capacity to avoid rehash
+        let mut m = HashMap::with_capacity(20);
+        for i in 0..20usize {
+            // Avoid format!/to_string() allocation for small integers
+            let key: &str = match i {
+                0=>"0",1=>"1",2=>"2",3=>"3",4=>"4",5=>"5",6=>"6",7=>"7",8=>"8",9=>"9",
+                10=>"10",11=>"11",12=>"12",13=>"13",14=>"14",15=>"15",16=>"16",
+                17=>"17",18=>"18",19=>"19",_=>"0",
+            };
+            m.insert(key.to_owned(), self.pins.get_value(i));
+        }
         m
     }
 
@@ -269,7 +293,7 @@ impl Simulator {
                   events: &mut Vec<SimEvent>, serial: &mut Vec<String>) -> Flow {
         let decl = self.functions.get(name).cloned();
         if let Some((params, body)) = decl {
-            let mut locals: HashMap<String, Value> = HashMap::new();
+            let mut locals: HashMap<String, Value> = HashMap::with_capacity(params.len().max(4));
             for (p, v) in params.iter().zip(args) { locals.insert(p.clone(), v); }
             match self.exec_block(&body, &mut locals, events, serial) {
                 Flow::Return(_) | Flow::Continue => Flow::Continue,
@@ -386,24 +410,17 @@ impl Simulator {
         if is_pkg_servo || is_sub_servo || is_known_servo_var {
             // Variable name: for pkg-style it is encoded in args[0] name (unknown here),
             // so we use pkg as key when pkg!="Servo", otherwise use sub.
-            let var_name = if is_pkg_servo && !is_sub_servo {
-                // Package-style: Servo.Attach(myServo, pin)
-                // We don't know the actual variable name from here, use a canonical key.
-                // If sub is empty this is top-level Servo.X(var, ...) — use "Servo" as key.
-                if sub.is_empty() { "Servo".to_string() } else { sub.to_string() }
-            } else if is_sub_servo {
-                // Double-select: s.Servo.Attach — pkg is the var name
-                pkg.to_string()
+            let var_name: &str = if is_pkg_servo && !is_sub_servo {
+                if sub.is_empty() { "Servo" } else { sub }
             } else {
-                // Method-style: s.Attach — pkg is the var name
-                pkg.to_string()
+                pkg  // both is_sub_servo and method-style cases use pkg
             };
             // Arg offset: package-style (pkg=="Servo") passes the servo instance as args[0]
             let ao: usize = if is_pkg_servo { 1 } else { 0 };
             match m {
                 "attach" => {
                     let pin = args.get(ao).map(|v| v.as_int() as usize).unwrap_or(0);
-                    self.servo_pins.insert(var_name, pin);
+                    self.servo_pins.insert(var_name.to_owned(), pin);
                     return Value::Nil;
                 }
                 "write" => {
@@ -451,7 +468,10 @@ impl Simulator {
         // Unknown — try as user function
         if !pkg.is_empty() && sub.is_empty() {
             // Could be a user-defined function named `method` in package `pkg`
-            let qualified = format!("{}.{}", pkg, method);
+            let mut qualified = String::with_capacity(pkg.len() + 1 + method.len());
+            qualified.push_str(pkg);
+            qualified.push('.');
+            qualified.push_str(method);
             let flow = self.call_named(&qualified, args.clone(), events, serial);
             if let Flow::Return(v) = flow { return v; }
         }

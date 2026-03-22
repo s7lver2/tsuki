@@ -28,8 +28,7 @@ const BOARDS = [
 ]
 
 const EXPERIMENTAL_BOARDS: Record<string, string> = {
-  xiao_rp2040: 'El soporte para Seeed XIAO RP2040 es experimental. La compilación puede fallar si el SDK de RP2040 no está instalado en arduino-cli. Instálalo con: arduino-cli core install rp2040:rp2040 --additional-urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json',
-  pico:        'El soporte para Raspberry Pi Pico (RP2040) es experimental. Requiere el core earlephilhower instalado en arduino-cli.',
+  pico: 'El soporte para Raspberry Pi Pico (RP2040) es experimental. Requiere el core earlephilhower instalado en arduino-cli.',
 }
 
 // ── Workstation pages ─────────────────────────────────────────────────────────
@@ -107,9 +106,8 @@ export default function IdeScreen() {
     dispatchCommand(tsuki, makeArgs('build', '--compile'), cwd, makeArgs('upload'))
   }
   function handleMonitor() {
-    const args = makeArgs('monitor')
-    if (settings.defaultBaud && settings.defaultBaud !== '9600') args.push('--baud', settings.defaultBaud)
-    dispatch(args)
+    // Switch to the built-in serial monitor tab instead of spawning a CLI process
+    setBottomTab('monitor')
   }
 
   useEffect(() => {

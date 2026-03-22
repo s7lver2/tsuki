@@ -197,7 +197,81 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         });
     }
 
-    // ── Step 3: Link elf ──────────────────────────────────────────────────
+    // ── Step 3: Compile & archive user libraries (lib_source_dirs) ─────────
+    //
+    // `augment_lib_includes` has already collected every directory that
+    // contains .cpp/.c sources from installed tsukilib packages.  We now
+    // compile those sources into object files and archive them into libs.a.
+    // Without this step the linker sees the headers (so the sketch compiles)
+    // but never sees the implementations — producing "undefined reference to
+    // DHT::begin" and similar errors.
+    let libs_a = req.build_dir.join("libs.a");
+    let lib_obj_dir = req.build_dir.join("lib_objs");
+    std::fs::create_dir_all(&lib_obj_dir)?;
+
+    let mut lib_obj_files: Vec<PathBuf> = Vec::new();
+    for src_dir in &req.lib_source_dirs {
+        // Collect .cpp and .c files at depth-1 only (skip examples/, test/, …)
+        let lib_sources: Vec<PathBuf> = std::fs::read_dir(src_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .filter(|e| {
+                e.path().extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| matches!(x, "cpp" | "c"))
+                    .unwrap_or(false)
+            })
+            .map(|e| e.path())
+            .collect();
+
+        for src in lib_sources {
+            let obj = obj_path(&lib_obj_dir, &src);
+            let is_c = src.extension().and_then(|e| e.to_str()) == Some("c");
+            let compiler = if is_c { &cc } else { &cxx };
+
+            let mut cmd = Command::new(compiler);
+            with_toolchain_path(&mut cmd, &sdk.toolchain_bin);
+            cmd.args(&includes);
+            if is_c { cmd.args(&cflags); } else { cmd.args(&cxxflags); }
+            cmd.arg("-c").arg(&src).arg("-o").arg(&obj);
+
+            if req.verbose {
+                eprintln!("  [lib] {}", src.display());
+            }
+
+            let out = cmd.output().expect("failed to spawn compiler for library");
+            if out.status.success() {
+                lib_obj_files.push(obj);
+            } else {
+                // Non-fatal: some library .cpp files may fail to compile in
+                // isolation (missing platform headers, etc.).  Log and skip
+                // rather than aborting the whole build.
+                if req.verbose {
+                    let msg = String::from_utf8_lossy(&out.stderr);
+                    eprintln!("  [lib warn] {}: {}", src.display(), msg.trim());
+                }
+            }
+        }
+    }
+
+    // Archive all successfully compiled library objects into libs.a
+    if !lib_obj_files.is_empty() {
+        let mut ar_cmd = Command::new(&ar);
+        with_toolchain_path(&mut ar_cmd, &sdk.toolchain_bin);
+        ar_cmd.args(["rcs", libs_a.to_str().unwrap()]);
+        for obj in &lib_obj_files {
+            ar_cmd.arg(obj);
+        }
+        let ar_out = ar_cmd.output()?;
+        if !ar_out.status.success() && req.verbose {
+            let msg = String::from_utf8_lossy(&ar_out.stderr);
+            eprintln!("  [lib warn] ar failed: {}", msg.trim());
+        }
+    }
+
+    // ── Step 5: Link elf ──────────────────────────────────────────────────
     let elf_path = req.build_dir.join(format!("{}.elf", req.project_name));
 
     let mut link_cmd = Command::new(&cc);
@@ -220,9 +294,13 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         link_cmd.arg(obj);
     }
     // Wrap archives in --start-group/--end-group so the linker resolves
-    // circular references between sketch objects and core.a correctly.
+    // circular references between sketch objects, core.a, and libs.a.
     link_cmd.arg("-Wl,--start-group");
     link_cmd.arg(&core_a);
+    // Link user library archive only if it was actually produced.
+    if libs_a.exists() {
+        link_cmd.arg(&libs_a);
+    }
     link_cmd.arg("-lm");
     link_cmd.arg("-Wl,--end-group");
     link_cmd.args(["-L", req.build_dir.to_str().unwrap()]);
@@ -240,7 +318,13 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         // (built with -flto bitcode that the linker can't read without the plugin,
         // or missing main.cpp).  Delete the sentinel so it is rebuilt on next run,
         // and surface a clear diagnostic instead of the raw linker message.
-        if combined.contains("undefined reference to") && combined.contains("main") {
+        // Only treat this as a stale-core.a situation when the linker truly
+        // cannot find the `main` symbol — NOT when the error mentions a path
+        // like "main.cpp:(.text.setup+0x1c)" which also contains "main".
+        // Match the exact backtick form avr-ld uses: undefined reference to `main'
+        let missing_main = combined.contains("undefined reference to `main'")
+            || combined.contains("undefined reference to \"main\"");
+        if missing_main {
             let sentinel = core_dir.join(".core_sig");
             let _ = std::fs::remove_file(&sentinel);
             let _ = std::fs::remove_file(&core_a);
@@ -256,7 +340,7 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         return Err(FlashError::LinkFailed { output: combined });
     }
 
-    // ── Step 4: Generate .hex ─────────────────────────────────────────────
+    // ── Step 6: Generate .hex ─────────────────────────────────────────────
     let hex_path = req.build_dir.join(format!("{}.hex", req.project_name));
     let with_bl  = req.build_dir.join(format!("{}.with_bootloader.hex", req.project_name));
 
@@ -271,12 +355,13 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
     // with_bootloader = same as .hex for standard upload flow
     std::fs::copy(&hex_path, &with_bl)?;
 
-    // ── Step 5: Size report ───────────────────────────────────────────────
+    // ── Step 7: Size report ───────────────────────────────────────────────
     let size_info = firmware_size(&sdk.toolchain_bin, &elf_path, board);
 
     Ok(CompileResult {
         hex_path: Some(hex_path),
         bin_path: None,
+        uf2_path: None,           // AVR produces .hex; UF2 is RP2040-only
         elf_path: Some(elf_path),
         size_info,
     })
@@ -465,6 +550,7 @@ fn probe_lto_plugin(_toolchain_bin: &Path) -> bool {
 //  On Linux/macOS this is a no-op because shared libraries are found via rpath.
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[allow(unused_variables)]
 fn with_toolchain_path(cmd: &mut Command, toolchain_bin: &Path) {
     if toolchain_bin.as_os_str().is_empty() { return; }
 

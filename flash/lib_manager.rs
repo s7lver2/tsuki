@@ -27,7 +27,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use colored::Colorize;
+use tsuki_ux::{bold, C_WARN, C_INFO, C_SUCCESS, C_MUTED, C_ACCENT};
+use tsuki_ux::color::Style;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{FlashError, Result};
@@ -128,9 +129,9 @@ fn install_inner(
                 println!(
                     "{}{}  {} {} already installed",
                     indent,
-                    "•".dimmed(),
-                    entry.name.bold(),
-                    entry.version.dimmed()
+                    C_MUTED.paint("•"),
+                    bold(&entry.name),
+                    C_MUTED.paint(&entry.version)
                 );
             }
             return Ok(());
@@ -140,9 +141,9 @@ fn install_inner(
             println!(
                 "{}Upgrading {} {} → {}",
                 indent,
-                entry.name.bold(),
-                installed.version.dimmed(),
-                entry.version.cyan()
+                bold(&entry.name),
+                C_MUTED.paint(&installed.version),
+                C_INFO.paint(&entry.version)
             );
         }
     }
@@ -151,9 +152,9 @@ fn install_inner(
     println!(
         "{}{}  Downloading {} {}…",
         indent,
-        "↓".cyan().bold(),
-        entry.name.bold(),
-        entry.version.dimmed()
+        C_ACCENT.paint("↓"),
+        bold(&entry.name),
+        C_MUTED.paint(&entry.version)
     );
 
     let zip_bytes = download_zip(&entry.url, entry.checksum.as_deref(), verbose)?;
@@ -162,8 +163,8 @@ fn install_inner(
     println!(
         "{}{}  Installing {}…",
         indent,
-        "→".cyan(),
-        entry.name.bold()
+        C_INFO.paint("→"),
+        bold(&entry.name)
     );
 
     extract_zip(&zip_bytes, &install_dir)?;
@@ -174,15 +175,15 @@ fn install_inner(
     println!(
         "{}{}  {} {}",
         indent,
-        "✓".green().bold(),
-        entry.name.bold(),
-        entry.version.dimmed()
+        C_SUCCESS.paint("✓"),
+        bold(&entry.name),
+        C_MUTED.paint(&entry.version)
     );
 
     // ── Recurse into dependencies ─────────────────────────────────────────
     if let Some(deps) = &entry.dependencies {
         if !deps.is_empty() {
-            println!("{}  {} dependencies:", indent, "↳".dimmed());
+            println!("{}  {} dependencies:", indent, C_MUTED.paint("↳"));
         }
         for dep in deps {
             install_inner(
@@ -226,25 +227,25 @@ pub fn search(query: &str, verbose: bool) -> Result<()> {
     }
 
     if hits.is_empty() {
-        println!("{} No libraries found matching '{}'", "!".yellow(), query);
+        println!("{} No libraries found matching '{}'", C_WARN.paint("!"), query);
         return Ok(());
     }
 
     println!(
         "{:<40} {:<10}  {}",
-        "NAME".bold().underline(),
-        "VERSION".bold().underline(),
-        "DESCRIPTION".bold().underline()
+        Style::new().bold().underline().paint("NAME"),
+        Style::new().bold().underline().paint("VERSION"),
+        Style::new().bold().underline().paint("DESCRIPTION")
     );
-    println!("{}", "─".repeat(90).dimmed());
+    println!("{}", C_MUTED.paint(&"─".repeat(90)));
 
     for lib in &hits {
         let desc = lib.sentence.as_deref().unwrap_or("—");
         let desc_short = if desc.len() > 60 { &desc[..57] } else { desc };
         println!(
             "{:<40} {:<10}  {}",
-            lib.name.cyan(),
-            lib.version.dimmed(),
+            C_INFO.paint(&lib.name),
+            C_MUTED.paint(&lib.version),
             desc_short
         );
     }
@@ -258,10 +259,10 @@ pub fn list() -> Result<()> {
     let libs_root = libs_root()?;
 
     if !libs_root.exists() {
-        println!("{} No libraries installed yet.", "!".yellow());
+        println!("{} No libraries installed yet.", C_WARN.paint("!"));
         println!(
             "  Install one with: {}",
-            "tsuki-flash lib install <name>".bold()
+            bold("tsuki-flash lib install <n>")
         );
         return Ok(());
     }
@@ -284,21 +285,21 @@ pub fn list() -> Result<()> {
     }
 
     if entries.is_empty() {
-        println!("{} No libraries installed.", "!".yellow());
+        println!("{} No libraries installed.", C_WARN.paint("!"));
         return Ok(());
     }
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    println!("{:<40}  {}", "LIBRARY".bold().underline(), "VERSION".bold().underline());
-    println!("{}", "─".repeat(55).dimmed());
+    println!("{:<40}  {}", Style::new().bold().underline().paint("LIBRARY"), Style::new().bold().underline().paint("VERSION"));
+    println!("{}", C_MUTED.paint(&"─".repeat(55)));
 
     for (name, version) in &entries {
-        println!("{:<40}  {}", name.cyan(), version.dimmed());
+        println!("{:<40}  {}", C_INFO.paint(name.as_str()), C_MUTED.paint(version.as_str()));
     }
 
     println!("\n  {} installed", entries.len());
-    println!("  path: {}", libs_root.display().to_string().dimmed());
+    println!("  path: {}", C_MUTED.paint(&libs_root.display().to_string()));
     Ok(())
 }
 
@@ -311,19 +312,19 @@ pub fn info(name: &str, verbose: bool) -> Result<()> {
     let installed = read_manifest(&libs_root.join(&entry.name));
 
     println!();
-    println!("  {}  {}", entry.name.bold().cyan(), entry.version.dimmed());
+    println!("  {}  {}", C_INFO.paint(&bold(&entry.name)), C_MUTED.paint(&entry.version));
     println!();
 
     if let Some(s) = &entry.sentence {
         println!("  {}", s);
     }
     if let Some(p) = &entry.paragraph {
-        println!("  {}", p.dimmed());
+        println!("  {}", C_MUTED.paint(p.as_str()));
     }
     println!();
 
     let key_val = |k: &str, v: &str| {
-        println!("  {:<16} {}", format!("{}:", k).dimmed(), v);
+        println!("  {:<16} {}", C_MUTED.paint(&format!("{}:", k)), v);
     };
 
     key_val("category",    entry.category.as_deref().unwrap_or("—"));
@@ -350,13 +351,13 @@ pub fn info(name: &str, verbose: bool) -> Result<()> {
 
     match installed {
         Some(m) => {
-            println!("  {}  installed at {}", "✓".green().bold(), m.version.bold());
+            println!("  {}  installed at {}", C_SUCCESS.paint("✓"), bold(&m.version));
         }
         None => {
             println!(
                 "  {}  not installed  →  {}",
-                "○".dimmed(),
-                format!("tsuki-flash lib install \"{}\"", entry.name).bold()
+                C_MUTED.paint("○"),
+                bold(&format!("tsuki-flash lib install \"{}\"", entry.name))
             );
         }
     }
@@ -384,7 +385,7 @@ fn load_index(verbose: bool) -> Result<LibraryIndex> {
     }
 
     // (Re-)download the index.
-    println!("{} Fetching Arduino library index…", "→".cyan());
+    println!("{} Fetching Arduino library index…", C_INFO.paint("→"));
 
     let resp = ureq::get(REGISTRY_URL)
         .call()

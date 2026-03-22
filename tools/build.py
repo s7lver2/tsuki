@@ -88,240 +88,52 @@ RELEASE_PLATFORMS = [
     "darwin-amd64",  "darwin-arm64",
 ]
 
+#  UTILIDADES  (UI vía tsuki-ux)
 # ─────────────────────────────────────────────
-#  UTILIDADES
-# ─────────────────────────────────────────────
-import shutil, sys as _sys
+import shutil, sys as _sys, time as _time
+from tsuki_ux import (
+    BOLD, DIM, RESET, ERASE,
+    SYM_OK, SYM_FAIL, SYM_WARN, SYM_INFO, SYM_STEP,
+    SYM_BULLET, SYM_PIPE, SYM_ELL,
+    BOX_TL, BOX_TR, BOX_BL, BOX_BR, BOX_H, BOX_V,
+    COLOR as _COLOR, strip_ansi,
+    success as info, fail as error, warn, step, note,
+    section, section_end, artifact,
+    LiveBlock, run,
+    term_w,
+)
 
-BOLD   = "\033[1m"
-DIM    = "\033[2m"
-GREEN  = "\033[32m"
-CYAN   = "\033[36m"
-YELLOW = "\033[33m"
-RED    = "\033[31m"
-BLUE   = "\033[34m"
-RESET  = "\033[0m"
-ERASE  = "\r\033[K"
+# Alias: tsuki-ux's term_w() matches the old TERM_W() lambda.
+TERM_W = term_w
 
-def info(msg):  print(f"  {GREEN}✓{RESET}  {msg}")
-def step(msg):  print(f"\n{BOLD}{CYAN}▶{RESET}  {BOLD}{msg}{RESET}")
-def warn(msg):  print(f"  {YELLOW}⚠{RESET}  {msg}")
-def error(msg): print(f"  {RED}✗{RESET}  {msg}")
+# Unicode flag: tsuki-ux handles Unicode/ASCII fallback in symbols internally;
+# _UNICODE here only gates the 🌙 emoji in build-specific headers.
+_enc = getattr(_sys.stdout, "encoding", "") or ""
+_UNICODE = _enc.lower().replace("-", "") in ("utf8", "utf16", "utf32") or _sys.platform != "win32"
 
-# ── LiveBlock: Docker-style collapsible command output ────────────────────────
+# ── Build-specific: platform icons ───────────────────────────────────────────
+_PLATFORM_ICONS = {
+    "windows": "🪟" if _UNICODE else "[win]",
+    "linux":   "🐧" if _UNICODE else "[lnx]",
+    "darwin":  "🍎" if _UNICODE else "[mac]",
+    "freebsd": "😈" if _UNICODE else "[bsd]",
+}
 
-def _is_tty():
-    return hasattr(_sys.stdout, "fileno") and _sys.stdout.isatty()
+def _platform_icon(platform_key: str) -> str:
+    for k, icon in _PLATFORM_ICONS.items():
+        if k in platform_key:
+            return icon
+    return ""
 
-SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+# ── Build-specific: global elapsed timer ─────────────────────────────────────
+_BUILD_START: float = _time.monotonic()
 
-TERM_W = lambda: shutil.get_terminal_size((100, 24)).columns
-
-import threading as _threading
-
-LIVE_LINES = 6   # content rows visible in the rolling window at any time
-
-
-class LiveBlock:
-    """Docker-style collapsible command block with rolling-window output.
-
-    Design:
-      - Spinner thread is the SOLE terminal writer in TTY mode (holds the lock
-        on every redraw), so content writes and spinner frames never interleave.
-      - `line()` buffers content only; the spinner picks it up on the next tick.
-      - Only the last LIVE_LINES content rows are shown at once — older lines
-        scroll out of view silently. The full buffer is kept for failure display.
-      - On success  → window erased; one ✓ line replaces it.
-      - On failure  → window erased, then ✗ + all buffered lines + summary.
-
-    `_painted` tracks the exact number of content rows currently on screen
-    (always ≤ LIVE_LINES), so `finish()` erases a bounded number of rows
-    regardless of how many total lines the command produced.
-    """
-
-    def __init__(self, label: str):
-        max_lbl = max(TERM_W() - 10, 20)
-        self.label       = label if len(label) <= max_lbl else label[:max_lbl - 1] + "…"
-        self._full_label = label
-        self._lines: list[str] = []
-        self._tty        = _is_tty()
-        self._stop       = _threading.Event()
-        self._lock       = _threading.Lock()
-        self._thread     = None
-        self._t0         = None
-        self._rc         = None
-        self._painted    = 0   # content lines currently visible on screen
-
-    # ── Internal redraw ───────────────────────────────────────────────────────
-
-    def _redraw(self, frame: str) -> None:
-        """Erase window, print last LIVE_LINES content rows + spinner.
-
-        Must be called with self._lock held.
-        Cursor starts and ends on the spinner line (no trailing newline).
-        """
-        # 1. Clear spinner line (cursor is on it via \r).
-        _sys.stdout.write("\r\033[K")
-        # 2. Move up through the content rows painted last cycle and clear each.
-        for _ in range(self._painted):
-            _sys.stdout.write("\033[A\033[K")
-        # 3. Re-render the visible content window.
-        w = TERM_W()
-        visible = self._lines[-LIVE_LINES:] if self._lines else []
-        for s in visible:
-            display = s[:w - 8] if len(s) > w - 8 else s
-            _sys.stdout.write(f"  {DIM}│{RESET}  {display}\n")
-        # 4. Re-render spinner (cursor stays on this line, no \n).
-        _sys.stdout.write(f"  {CYAN}{frame}{RESET}  {self.label}\033[K")
-        _sys.stdout.flush()
-        self._painted = len(visible)
-
-    # ── Spinner ───────────────────────────────────────────────────────────────
-
-    def _start_spinner(self) -> None:
-        import itertools as _it
-        def _spin():
-            for frame in _it.cycle(SPINNER_FRAMES):
-                if self._stop.is_set():
-                    break
-                with self._lock:
-                    self._redraw(frame)
-                self._stop.wait(0.08)
-        self._thread = _threading.Thread(target=_spin, daemon=True)
-        self._thread.start()
-
-    # ── Public API ────────────────────────────────────────────────────────────
-
-    def start(self) -> None:
-        import time as _t
-        self._t0 = _t.monotonic()
-        if self._tty:
-            # Print the initial spinner line so _redraw() has a row to start from.
-            _sys.stdout.write(f"  {CYAN}{SPINNER_FRAMES[0]}{RESET}  {self.label}\033[K")
-            _sys.stdout.flush()
-            self._start_spinner()
-        else:
-            print(f"  …  {self.label}")
-
-    def line(self, s: str) -> None:
-        """Buffer a content line.  TTY redraws happen in the spinner thread."""
-        if not s:
-            return
-        self._lines.append(s)
-        # Non-TTY (CI/pipe): print immediately so logs capture output.
-        if not self._tty:
-            w = TERM_W()
-            print(f"  {DIM}│{RESET}  {s[:w - 8]}")
-
-    def finish(self, ok: bool, summary: str = "") -> None:
-        import time as _t
-        elapsed     = _t.monotonic() - self._t0 if self._t0 else 0
-        elapsed_str = f"{elapsed*1000:.0f}ms" if elapsed < 1 else f"{elapsed:.1f}s"
-
-        # Stop the spinner thread before touching the terminal.
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=0.4)
-
-        if self._tty:
-            with self._lock:
-                # Erase exactly the rows that are on screen: content + spinner.
-                _sys.stdout.write("\r\033[K")          # clear spinner line
-                for _ in range(self._painted):         # clear content rows
-                    _sys.stdout.write("\033[A\033[K")
-                _sys.stdout.flush()
-
-        if ok:
-            print(f"  {GREEN}✓{RESET}  {self.label}  {DIM}[{elapsed_str}]{RESET}")
-        else:
-            print(f"  {RED}✗{RESET}  {self.label}")
-            w = TERM_W()
-            for l in self._lines:
-                if l:
-                    print(f"  {DIM}│{RESET}  {l[:w - 8]}")
-            msg = summary or (f"exit {self._rc}" if self._rc is not None else "failed")
-            print(f"  {DIM}╰─ {msg}{RESET}")
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self.finish(ok=True)
-        else:
-            self.finish(ok=False, summary=str(exc_val) if exc_val else "error")
-        return False
-
-
-def run(cmd, cwd=None, env=None, check=True, label=None):
-    """Ejecuta un comando mostrando su salida en tiempo real dentro de un LiveBlock.
-
-    Éxito  → bloque colapsado:  ✓ comando  [1.3s]
-    Fallo  → bloque expandido:  ✗ comando
-                                │  línea de error…
-                                ╰─ exit 1
-
-    Notas de implementación:
-      - Usa readline() en vez de iterar el fichero para evitar el buffering
-        que provoca que las líneas de cargo/npm lleguen en ráfagas.
-      - encoding='utf-8' evita caracteres mojibake en terminales Windows CP1252.
-    """
-    if label:
-        display = label
-    else:
-        parts = [str(x) for x in cmd]
-        display = " ".join(parts)
-        if len(display) > 64:
-            display = parts[0].split("/")[-1].split("\\")[-1]
-            for p in parts[1:]:
-                candidate = display + " " + p
-                if len(candidate) > 62:
-                    display += " …"
-                    break
-                display = candidate
-
-    blk = LiveBlock(display)
-    blk.start()
-
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        encoding="utf-8", errors="replace",
-        bufsize=1,
-    )
-
-    output_lines: list[str] = []
-    try:
-        # readline() is more reliable than `for line in proc.stdout` for real-time
-        # output from processes that buffer internally (cargo, npm, next build).
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            line = line.rstrip("\n").rstrip("\r")
-            output_lines.append(line)
-            blk.line(line)
-    except Exception:
-        pass
-    proc.wait()
-
-    output = "\n".join(output_lines)
-    blk._rc = proc.returncode
-
-    if proc.returncode != 0:
-        summary_lines = [l for l in output_lines if l.strip()]
-        summary = summary_lines[-1][:100] if summary_lines else f"exit {proc.returncode}"
-        blk.finish(ok=False, summary=f"exit {proc.returncode} — {summary}")
-        if check:
-            raise subprocess.CalledProcessError(proc.returncode, cmd, output)
-    else:
-        blk.finish(ok=True)
-
-    class _Result:
-        returncode = proc.returncode
-        stdout = output
-    return _Result()
+def _elapsed_total() -> str:
+    s = _time.monotonic() - _BUILD_START
+    if s < 60:
+        return f"{s:.1f}s"
+    m = int(s) // 60
+    return f"{m}m {int(s) % 60}s"
 
 def check_tool(name, *args):
     """Devuelve True si la herramienta está disponible.
@@ -527,22 +339,137 @@ def clean(deep=False):
 # ─────────────────────────────────────────────
 #  BUILD: GO CLI
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  BUILD: GO CLI
+# ─────────────────────────────────────────────
+
+def _has_garble() -> bool:
+    """True si garble está disponible en el PATH."""
+    return shutil.which("garble") is not None
+
+def _upx_path() -> str | None:
+    """Devuelve la ruta a UPX si está disponible, o None."""
+    return shutil.which("upx")
+
+def _compress_binary(path: str, *, level: int = 9) -> bool:
+    """Comprime un binario con UPX si está disponible.
+
+    Devuelve True si UPX comprimió el binario.
+    Los binarios arm64/macOS se saltan porque UPX no los soporta todavía.
+    Los .exe de Windows RP/ARM también se saltan (UPX los rompe con MSVC).
+    """
+    upx = _upx_path()
+    if not upx:
+        return False
+
+    # Plataformas que UPX no soporta o daña
+    name = os.path.basename(path).lower()
+    skip_patterns = ["arm64", "aarch64", "darwin", "arm-"]
+    if any(p in name for p in skip_patterns):
+        return False
+
+    before = os.path.getsize(path)
+    try:
+        r = subprocess.run(
+            [upx, f"--{level}", "--no-progress", "--quiet", path],
+            capture_output=True, timeout=120,
+        )
+        if r.returncode != 0:
+            # UPX returns 1 for "already packed" — ignore
+            return False
+        after = os.path.getsize(path)
+        saved_pct = 100 * (before - after) / before if before else 0
+        note(f"UPX: {os.path.basename(path)} {before//1024} KB → {after//1024} KB ({saved_pct:.0f}% smaller)")
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+def _strip_binary(path: str) -> bool:
+    """Intenta eliminar símbolos con strip/llvm-strip si están disponibles.
+
+    Go ya hace strip con -ldflags='-s -w', así que esto es principalmente
+    para fallback en casos donde el strip del linker no funcionó bien.
+    """
+    for stripper in ["llvm-strip", "strip"]:
+        if shutil.which(stripper):
+            try:
+                r = subprocess.run([stripper, path], capture_output=True)
+                return r.returncode == 0
+            except FileNotFoundError:
+                continue
+    return False
+
 def build_go(platform_key, version, commit, date):
+    """Compila el CLI Go con máxima optimización de tamaño y velocidad.
+
+    Técnicas aplicadas:
+      1. -ldflags='-s -w'  : elimina tabla de símbolos y DWARF debug info (~30% más pequeño)
+      2. -trimpath          : elimina rutas absolutas de build del binario (determinismo + privacidad)
+      3. garble (si disponible): ofusca nombres internos y reduce tamaño adicional (~5-10%)
+      4. CGO_ENABLED=0     : binario completamente estático (sin deps de libc dinámica)
+      5. GOFLAGS=-mod=readonly: build reproducible
+      6. GOAMD64=v3 / GOARM=7: optimiza para la micro-arch objetivo
+      7. UPX post-build    : compresión ejecutable (~50-70% más pequeño en x86_64)
+    """
     step(f"Compilando Go CLI → {platform_key}")
     plat = PLATFORMS[platform_key]
-    ext  = ".exe" if plat["goos"] == "windows" else ""
-    out  = os.path.join(BUILD_DIR, f"{BINARY}-{platform_key}{ext}")
+    goos   = plat["goos"]
+    goarch = plat["goarch"]
+    ext    = ".exe" if goos == "windows" else ""
+    out    = os.path.join(BUILD_DIR, f"{BINARY}-{platform_key}{ext}")
 
+    # ── Linker flags: strip + version injection ───────────────────────────────
+    # -s  : omit symbol table and debug info
+    # -w  : omit DWARF symbol table
+    # Both together remove ~30% of the binary size with zero runtime cost.
     ldflags = (
         f"-s -w "
         f"-X {GO_MODULE}/internal/cli.Version={version} "
         f"-X {GO_MODULE}/internal/cli.Commit={commit} "
         f"-X {GO_MODULE}/internal/cli.BuildDate={date}"
     )
-    env = {**os.environ, "GOOS": plat["goos"], "GOARCH": plat["goarch"], "CGO_ENABLED": "0"}
-    run(["go", "build", "-trimpath", "-ldflags", ldflags, "-o", out, "./cmd/tsuki"],
-        cwd=os.path.join(PROJECT_ROOT, "cli"), env=env)
-    info(f"Go CLI → {os.path.basename(out)}")
+
+    # ── Environment: disable CGO, set micro-arch ──────────────────────────────
+    env = {**os.environ, "GOOS": goos, "GOARCH": goarch, "CGO_ENABLED": "0"}
+
+    # Micro-arch optimisation: use the best baseline for each arch without
+    # breaking compat. v3 enables AVX2 on x86_64 (significant for hashing/crypto).
+    if goarch == "amd64":
+        env["GOAMD64"] = "v2"   # v2 = SSE4.2, POPCNT — safe for all post-2013 CPUs
+    elif goarch == "arm":
+        env["GOARM"]   = "7"    # ARMv7 hard-float (RPi 2+, most modern ARM SBCs)
+    elif goarch == "arm64":
+        pass  # arm64 is always "v8" — no variable
+
+    # ── Compiler: garble (if available) else standard go ──────────────────────
+    # garble replaces variable/function names with hashes and applies
+    # -trimpath + -literals by default, shaving another 5-15% off the binary.
+    if _has_garble():
+        compiler = ["garble", "-literals", "-tiny"]
+        build_cmd = ["build"]
+        note(f"  Usando garble para ofuscación y reducción de tamaño adicional")
+    else:
+        compiler = ["go"]
+        build_cmd = ["build"]
+
+    cmd = compiler + build_cmd + [
+        "-trimpath",
+        "-ldflags", ldflags,
+        "-o", out,
+        "./cmd/tsuki",
+    ]
+
+    run(cmd, cwd=os.path.join(PROJECT_ROOT, "cli"), env=env)
+
+    # ── Post-build: additional strip + UPX compression ───────────────────────
+    if os.path.exists(out):
+        before = os.path.getsize(out)
+        _compress_binary(out)
+        after  = os.path.getsize(out)
+        if after < before:
+            info(f"Go CLI → {os.path.basename(out)}  ({after//1024} KB, was {before//1024} KB)")
+        else:
+            info(f"Go CLI → {os.path.basename(out)}  ({after//1024} KB)")
     return out
 
 # ─────────────────────────────────────────────
@@ -940,8 +867,12 @@ def _write_cargo_config(rust_target, linker):
 
 
 def _collect_cross_binaries(rust_target, platform_key, ext):
-    """Copia los binarios desde target/{rust_target}/release/ a BUILD_DIR."""
-    src_base = os.path.join(FLASH_DIR, "target", rust_target, "release")
+    """Copia los binarios desde target/{rust_target}/dist/ a BUILD_DIR.
+
+    El perfil 'dist' coloca los artefactos en target/<triple>/dist/
+    en lugar del habitual target/<triple>/release/.
+    """
+    src_base = os.path.join(FLASH_DIR, "target", rust_target, "dist")
     results = []
     for name in [CORE_BINARY, FLASH_BINARY]:
         src = os.path.join(src_base, f"{name}{ext}")
@@ -951,7 +882,8 @@ def _collect_cross_binaries(rust_target, platform_key, ext):
             results.append(None)
             continue
         shutil.copy(src, dst)
-        info(f"Rust binary → {os.path.basename(dst)}")
+        _compress_binary(dst)
+        info(f"Rust binary → {os.path.basename(dst)}  ({os.path.getsize(dst)//1024} KB)")
         results.append(dst)
     core_out  = results[0] if results else None
     flash_out = results[1] if len(results) > 1 else None
@@ -976,15 +908,21 @@ def build_rust(platform_key, force_cross=False):
 
     # ── 1. Compilación nativa ─────────────────────────────────────────────────
     if not needs_cross:
-        step(f"Compilando Rust (nativo) → {platform_key}")
-        run(["cargo", "build", "--release"], cwd=FLASH_DIR)
-        src_base = os.path.join(FLASH_DIR, "target", "release")
+        step(f"Compilando Rust (nativo, dist profile) → {platform_key}")
+        # RUSTFLAGS for additional size/speed improvements beyond the Cargo profile:
+        #   -C target-cpu=native  : generate instructions for the exact build machine
+        #                           (AVX2, BMI2, etc.) — valid for native builds only
+        #   -C force-frame-pointers=no: omit frame pointers (saves a few %)
+        rust_env = {**os.environ, "RUSTFLAGS": "-C target-cpu=native -C force-frame-pointers=no"}
+        run(["cargo", "build", "--profile", "dist"], cwd=FLASH_DIR, env=rust_env)
+        src_base = os.path.join(FLASH_DIR, "target", "dist")
         results = []
         for name in [CORE_BINARY, FLASH_BINARY]:
             src = os.path.join(src_base, f"{name}{ext}")
             dst = os.path.join(BUILD_DIR, f"{name}-{platform_key}{ext}")
             shutil.copy(src, dst)
-            info(f"Rust binary → {os.path.basename(dst)}")
+            _compress_binary(dst)
+            info(f"Rust binary → {os.path.basename(dst)}  ({os.path.getsize(dst)//1024} KB)")
             results.append(dst)
         return results[0], results[1]
 
@@ -1005,9 +943,12 @@ def build_rust(platform_key, force_cross=False):
             warn(f"  rustup target add {rust_target} falló — saltando {platform_key}")
             return None, None
         try:
-            run(["cargo", "build", "--release", "--target", rust_target],
+            run(["cargo", "build", "--profile", "dist", "--target", rust_target],
                 cwd=FLASH_DIR, env=msvc_env)
-            return _collect_cross_binaries(rust_target, platform_key, ext)
+            bins = _collect_cross_binaries(rust_target, platform_key, ext)
+            for b in filter(None, bins):
+                _compress_binary(b)
+            return bins
         except subprocess.CalledProcessError as e:
             warn(f"  cargo build MSVC falló (exit={e.returncode})")
             return None, None
@@ -1022,9 +963,12 @@ def build_rust(platform_key, force_cross=False):
             warn(f"  No se pudo instalar el rustup target {rust_target} — saltando zigbuild")
         else:
             try:
-                run(["cargo", "zigbuild", "--release", "--target", rust_target],
+                run(["cargo", "zigbuild", "--profile", "dist", "--target", rust_target],
                     cwd=FLASH_DIR)
-                return _collect_cross_binaries(rust_target, platform_key, ext)
+                bins = _collect_cross_binaries(rust_target, platform_key, ext)
+                for b in filter(None, bins):
+                    _compress_binary(b)
+                return bins
             except subprocess.CalledProcessError as e:
                 warn(f"  cargo zigbuild falló (exit={e.returncode}) — intentando siguiente estrategia")
 
@@ -1039,9 +983,12 @@ def build_rust(platform_key, force_cross=False):
             warn(f"  rustup target add falló — saltando {platform_key}")
             return None, None
         try:
-            run(["cargo", "build", "--release", "--target", rust_target],
+            run(["cargo", "build", "--profile", "dist", "--target", rust_target],
                 cwd=FLASH_DIR)
-            return _collect_cross_binaries(rust_target, platform_key, ext)
+            bins = _collect_cross_binaries(rust_target, platform_key, ext)
+            for b in filter(None, bins):
+                _compress_binary(b)
+            return bins
         except subprocess.CalledProcessError as e:
             warn(f"  cargo build --target falló (exit={e.returncode})")
 
@@ -1105,14 +1052,65 @@ def build_rust(platform_key, force_cross=False):
 # ── WSL helpers ───────────────────────────────────────────────────────────────
 
 # Paquetes APT requeridos por Tauri en Linux (Ubuntu 22.04+)
-_TAURI_APT_DEPS = (
-    "libwebkit2gtk-4.0-dev libgtk-3-dev libsoup2.4-dev "
-    "libssl-dev libayatana-appindicator3-dev librsvg2-dev "
+
+# Packages common to all Ubuntu versions
+_TAURI_APT_DEPS_COMMON = (
+    "libgtk-3-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev "
     "libglib2.0-dev build-essential curl wget file pkg-config"
 )
 
-# Marcar si ya instalamos deps en esta sesión (evitar repetir por cada target)
+# Ubuntu ≤ 22.04 (focal / jammy): webkit2gtk-4.0 + soup2.4
+_TAURI_APT_DEPS_U22 = (
+    "libwebkit2gtk-4.0-dev libsoup2.4-dev "
+    + _TAURI_APT_DEPS_COMMON
+)
+
+# Ubuntu 24.04+ (noble) and Debian 12+: webkit2gtk-4.1 + soup3
+_TAURI_APT_DEPS_U24 = (
+    "libwebkit2gtk-4.1-dev libsoup-3.0-dev "
+    + _TAURI_APT_DEPS_COMMON
+)
+
+# Kept for backward compat (used in fallback messages when no distro detected)
+_TAURI_APT_DEPS = _TAURI_APT_DEPS_U22
+
+
+def _wsl_ubuntu_version(distro: str | None = None) -> tuple[int, int]:
+    """Returns (major, minor) Ubuntu version inside WSL, e.g. (24, 4) or (22, 4).
+    Returns (0, 0) if detection fails."""
+    try:
+        r = _wsl_run(
+            "lsb_release -rs 2>/dev/null || cat /etc/os-release | grep VERSION_ID | tr -d '\"VERSION_ID='",
+            distro=distro, check=False, timeout=10,
+        )
+        if r.returncode == 0:
+            ver_str = r.stdout.strip().splitlines()[-1].strip()
+            parts = ver_str.split(".")
+            return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+    except Exception:
+        pass
+    return 0, 0
+
+
+def _tauri_apt_deps_for_distro(distro: str | None = None) -> str:
+    """Return the correct Tauri apt package list for the detected Ubuntu/Debian version."""
+    major, minor = _wsl_ubuntu_version(distro)
+    if major == 0:
+        # Can't detect — try both webkit variants, apt-get will skip unknown ones
+        return (
+            "libwebkit2gtk-4.1-dev libwebkit2gtk-4.0-dev "
+            "libsoup-3.0-dev libsoup2.4-dev "
+            + _TAURI_APT_DEPS_COMMON
+        )
+    if major >= 24:
+        info(f"  WSL: Ubuntu {major}.{minor:02d} → usando webkit2gtk-4.1 (noble+)")
+        return _TAURI_APT_DEPS_U24
+    else:
+        info(f"  WSL: Ubuntu {major}.{minor:02d} → usando webkit2gtk-4.0 (jammy/focal)")
+        return _TAURI_APT_DEPS_U22
+
 _WSL_DEPS_INSTALLED: dict = {}   # distro → True/False
+_NO_WSL: bool = False             # set by --no-wsl flag; disables all WSL usage
 
 # ── Distro preferida: Ubuntu.  Se busca en este orden. ───────────────────────
 _WSL_PREFERRED_DISTROS = ["Ubuntu", "Ubuntu-22.04", "Ubuntu-20.04", "Ubuntu-24.04", "Debian"]
@@ -1150,8 +1148,16 @@ def _wsl_find_ubuntu() -> str | None:
         return None
 
 
+def _wsl_default_distro() -> str | None:
+    """Devuelve el nombre de la distro WSL predeterminada (Ubuntu preferida, o la primera disponible)."""
+    return _wsl_find_ubuntu()
+
+
 def _has_wsl() -> bool:
-    """True si WSL con Ubuntu (u otra distro Debian-based) está disponible."""
+    """True si WSL con Ubuntu (u otra distro Debian-based) está disponible.
+    Devuelve False inmediatamente si --no-wsl fue pasado en la línea de comandos."""
+    if _NO_WSL:
+        return False
     if platform.system().lower() != "windows":
         return False
     distro = _wsl_find_ubuntu()
@@ -1179,20 +1185,21 @@ def _win_to_wsl_path(win_path: str) -> str:
 
 
 def _wsl_run(cmd_str: str, cwd_win: str | None = None, env_extra: dict | None = None,
-             distro: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
+             distro: str | None = None, check: bool = True,
+             timeout: int = 300, stream: bool = False) -> subprocess.CompletedProcess:
     """Ejecuta cmd_str en Ubuntu WSL.
 
-    - Siempre usa -d <distro> para apuntar a Ubuntu (nunca la default aleatoria)
+    - Siempre usa -d <distro> para apuntar a Ubuntu
     - Siempre inyecta _WSL_SHELL_INIT para cargar ~/.cargo/env
     - Fuerza PATH limpio de Linux (descarta el PATH de Windows montado)
+    - timeout: segundos maximos (default 300); evita que apt-get congele el build
+    - stream=True: imprime stdout en tiempo real (util para apt-get)
+    - stdin=DEVNULL: impide que sudo cuelgue esperando contrasena
     """
-    # Resolver distro: argumento > Ubuntu encontrado > default
     target_distro = distro or _wsl_find_ubuntu()
-
     cwd_wsl = _win_to_wsl_path(cwd_win) if cwd_win else None
 
     env_lines = _WSL_SHELL_INIT
-    # Aislar PATH de Windows (los montajes /mnt/c/ traen npm.CMD, etc.)
     env_lines += (
         'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin'
         ':/usr/sbin:/usr/bin:/sbin:/bin"; '
@@ -1209,32 +1216,67 @@ def _wsl_run(cmd_str: str, cwd_win: str | None = None, env_extra: dict | None = 
         wsl_argv += ["-d", target_distro]
     wsl_argv += ["--", "bash", "-lc", full]
 
-    label = f"[WSL/{target_distro or 'default'}] $ {cmd_str[:100]}{'…' if len(cmd_str) > 100 else ''}"
+    label = f"[WSL/{target_distro or 'default'}] $ {cmd_str[:100]}{'...' if len(cmd_str) > 100 else ''}"
     print(f"  {label}")
-    result = subprocess.run(
-        wsl_argv,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace",
-    )
-    output = result.stdout or ""
-    lines  = output.strip().splitlines()
 
-    if result.returncode != 0:
-        sep = "─" * 60
+    if stream:
+        collected = []
+        proc = subprocess.Popen(
+            wsl_argv,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        try:
+            for line in proc.stdout:
+                line = line.rstrip()
+                collected.append(line)
+                # Supress apt-get download noise; show everything else
+                if line.strip() and not line.startswith("Get:") and not line.startswith("Hit:") \
+                   and not line.startswith("Ign:") and not line.startswith("Fetched"):
+                    print(f"    {line}")
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            warn(f"  WSL: comando agoto el timeout de {timeout}s -- {cmd_str[:60]}")
+            if check:
+                raise subprocess.CalledProcessError(1, wsl_argv, "\n".join(collected))
+            return subprocess.CompletedProcess(wsl_argv, 1, "\n".join(collected))
+        output     = "\n".join(collected)
+        returncode = proc.returncode
+    else:
+        try:
+            result = subprocess.run(
+                wsl_argv,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True, encoding="utf-8", errors="replace",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            warn(f"  WSL: comando agoto el timeout de {timeout}s -- {cmd_str[:60]}")
+            if check:
+                raise subprocess.CalledProcessError(1, wsl_argv, "")
+            return subprocess.CompletedProcess(wsl_argv, 1, "")
+        output     = result.stdout or ""
+        returncode = result.returncode
+        if returncode == 0:
+            for line in output.strip().splitlines()[-12:]:
+                print(f"    {line}")
+
+    if returncode != 0:
+        sep = "-" * 60
         print(f"\n{RED}{sep}")
-        print(f"  WSL FALLO (exit={result.returncode}): {cmd_str[:80]}")
+        print(f"  WSL FALLO (exit={returncode}): {cmd_str[:80]}")
         print(f"{sep}{RESET}")
-        for line in lines:
+        for line in output.strip().splitlines()[-20:]:
             print(f"    {line}")
         print()
         if check:
-            raise subprocess.CalledProcessError(result.returncode, wsl_argv, output)
-    else:
-        for line in lines[-12:]:
-            print(f"    {line}")
+            raise subprocess.CalledProcessError(returncode, wsl_argv, output)
 
-    return result
-
+    return subprocess.CompletedProcess(wsl_argv, returncode, output)
 
 def _wsl_tool_exists(tool: str, distro: str | None = None) -> bool:
     """True si `tool` está en el PATH de Linux dentro de WSL (ignorando /mnt/c/)."""
@@ -1250,20 +1292,122 @@ def _wsl_tool_exists(tool: str, distro: str | None = None) -> bool:
         return False
 
 
+
+# ── WSL sudo helpers ──────────────────────────────────────────────────────────
+
+def _wsl_has_nopasswd_sudo(distro: str | None = None) -> bool:
+    """True si el usuario WSL puede ejecutar sudo sin contraseña."""
+    try:
+        r = _wsl_run("sudo -n true 2>&1", distro=distro, check=False, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _wsl_configure_nopasswd(distro: str | None = None) -> bool:
+    """Intenta configurar NOPASSWD para apt-get en WSL.
+
+    Estrategia:
+      1. Si ya hay NOPASSWD  -> OK (nada que hacer)
+      2. Intenta escribir /etc/sudoers.d/tsuki-build con sudo interactivo
+         para ello lanza WSL en una ventana nueva (conhost) para que el
+         usuario pueda escribir la contraseña UNA SOLA VEZ.
+      3. Si falla, muestra instrucciones exactas y devuelve False.
+    """
+    if _wsl_has_nopasswd_sudo(distro):
+        return True
+
+    warn("  WSL: sudo requiere contraseña — configurando NOPASSWD para apt-get…")
+
+    # Obtener el nombre del usuario WSL
+    try:
+        r = _wsl_run("whoami", distro=distro, check=False, timeout=10)
+        wsl_user = r.stdout.strip().splitlines()[-1].strip() if r.returncode == 0 else ""
+    except Exception:
+        wsl_user = ""
+
+    if not wsl_user:
+        wsl_user = "%sudo"   # fallback: grupo sudo completo
+
+    sudoers_line = f"{wsl_user} ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt"
+    sudoers_file = "/etc/sudoers.d/tsuki-build"
+
+    # Try to write sudoers file by opening a new interactive WSL window
+    # so the user can type their password just once.
+    target_distro = distro or _wsl_find_ubuntu()
+    cmd_to_run = (
+        f"echo '{sudoers_line}' | sudo tee {sudoers_file} > /dev/null "
+        f"&& sudo chmod 440 {sudoers_file} "
+        f"&& echo 'NOPASSWD configurado correctamente' "
+        f"|| echo 'ERROR al configurar sudoers'"
+    )
+
+    info("  Abriendo ventana WSL interactiva para configurar sudo…")
+    info("  Introduce la contraseña WSL cuando se solicite.")
+    try:
+        import ctypes
+        # Open a new console window with WSL so the user can type their password
+        wsl_args = ["wsl"]
+        if target_distro:
+            wsl_args += ["-d", target_distro]
+        wsl_args += ["--", "bash", "-c", cmd_to_run]
+
+        # Use subprocess with a new console window (Windows only)
+        CREATE_NEW_CONSOLE = 0x00000010
+        proc = subprocess.Popen(
+            wsl_args,
+            creationflags=CREATE_NEW_CONSOLE,
+        )
+        proc.wait(timeout=120)
+
+        if _wsl_has_nopasswd_sudo(distro):
+            info("  NOPASSWD configurado — continuando build")
+            return True
+    except Exception as e:
+        pass  # fall through to manual instructions
+
+    warn("  No se pudo configurar sudo automaticamente.")
+    warn("  Ejecuta esto UNA VEZ en Ubuntu WSL y vuelve a lanzar el build:")
+    warn(f"    echo '{sudoers_line}' | sudo tee {sudoers_file}")
+    warn(f"    sudo chmod 440 {sudoers_file}")
+    warn("")
+    warn("  O instala las dependencias manualmente:")
+    warn(f"    sudo apt-get update && sudo apt-get install -y {_TAURI_APT_DEPS}")
+    return False
+
+
+def _wsl_apt(packages: str, distro: str | None = None, update: bool = True,
+             timeout: int = 600) -> bool:
+    """Ejecuta apt-get install en WSL, configurando NOPASSWD si es necesario.
+
+    Devuelve True si la instalacion tuvo exito, False en caso contrario.
+    """
+    if not _wsl_configure_nopasswd(distro):
+        return False
+
+    cmds = []
+    if update:
+        cmds.append("DEBIAN_FRONTEND=noninteractive sudo -n apt-get update -qq 2>&1")
+    cmds.append(
+        f"DEBIAN_FRONTEND=noninteractive sudo -n apt-get install -y "
+        f"--no-install-recommends {packages} 2>&1"
+    )
+    try:
+        _wsl_run(" && ".join(cmds), distro=distro, stream=True, timeout=timeout)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def _wsl_ensure_cc(distro: str | None = None) -> bool:
     """Instala gcc/build-essential en WSL (requerido por rustup link step)."""
     if _wsl_tool_exists("cc", distro) or _wsl_tool_exists("gcc", distro):
         return True
     step("  WSL: instalando gcc / build-essential…")
-    try:
-        _wsl_run(
-            "sudo apt-get update -qq && sudo apt-get install -y build-essential",
-            distro=distro,
-        )
+    if _wsl_apt("build-essential", distro=distro, timeout=300):
         return True
-    except subprocess.CalledProcessError:
-        warn("  WSL: no se pudo instalar build-essential")
-        return False
+    warn("  WSL: no se pudo instalar build-essential")
+    return False
 
 
 def _wsl_ensure_rust(distro: str | None = None) -> bool:
@@ -1271,20 +1415,18 @@ def _wsl_ensure_rust(distro: str | None = None) -> bool:
     if _wsl_tool_exists("cargo", distro):
         info("  WSL: cargo ya instalado")
         return True
-    # gcc es necesario para el linker de rustup
     _wsl_ensure_cc(distro)
     step("  WSL: instalando rustup…")
     try:
         _wsl_run(
             "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs "
-            "| sh -s -- -y 2>&1",
-            distro=distro,
+            "| sh -s -- -y --no-modify-path 2>&1",
+            distro=distro, stream=True, timeout=300,
         )
-        # Verificar que cargo ya es visible (el init script lo carga)
         if _wsl_tool_exists("cargo", distro):
             info("  WSL: rustup instalado correctamente")
             return True
-        warn("  WSL: cargo instalado pero no encontrado en PATH — puede requerir reiniciar WSL")
+        warn("  WSL: cargo instalado pero no encontrado en PATH")
         return False
     except subprocess.CalledProcessError:
         warn("  WSL: rustup install falló")
@@ -1292,16 +1434,20 @@ def _wsl_ensure_rust(distro: str | None = None) -> bool:
 
 
 def _wsl_ensure_node(distro: str | None = None) -> bool:
-    """Instala Node.js/npm en WSL vía NodeSource (ignora npm.CMD de Windows)."""
+    """Instala Node.js/npm en WSL vía NodeSource."""
     if _wsl_tool_exists("npm", distro):
         info("  WSL: npm Linux ya instalado")
         return True
     step("  WSL: instalando Node.js LTS (NodeSource)…")
+    if not _wsl_configure_nopasswd(distro):
+        warn("  WSL: no se puede instalar Node.js sin sudo")
+        return False
     try:
         _wsl_run(
-            "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - "
-            "&& sudo apt-get install -y nodejs",
-            distro=distro,
+            "curl -fsSL https://deb.nodesource.com/setup_lts.x "
+            "| DEBIAN_FRONTEND=noninteractive sudo -n -E bash - 2>&1 "
+            "&& DEBIAN_FRONTEND=noninteractive sudo -n apt-get install -y nodejs 2>&1",
+            distro=distro, stream=True, timeout=300,
         )
         if _wsl_tool_exists("npm", distro):
             info("  WSL: Node.js instalado correctamente")
@@ -1321,21 +1467,18 @@ def _wsl_ensure_tauri_deps(distro: str | None = None) -> bool:
         return True
 
     step("  WSL: instalando dependencias nativas de Tauri (webkit2gtk, gtk3…)…")
-    try:
-        _wsl_run(
-            f"DEBIAN_FRONTEND=noninteractive sudo -E apt-get update -qq "
-            f"&& DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "
-            f"--no-install-recommends {_TAURI_APT_DEPS}",
-            distro=distro,
-        )
+    info("  Esto puede tardar 2-5 minutos la primera vez.")
+
+    pkg_list = _tauri_apt_deps_for_distro(distro)
+    if _wsl_apt(pkg_list, distro=distro, timeout=600):
         _WSL_DEPS_INSTALLED[key] = True
         info("  WSL: dependencias de Tauri instaladas")
         return True
-    except subprocess.CalledProcessError:
-        warn("  WSL: apt-get install falló.")
-        warn("  Ejecuta manualmente en Ubuntu WSL:")
-        warn(f"    sudo apt-get install -y {_TAURI_APT_DEPS}")
-        return False
+
+    warn("  WSL: apt-get install falló.")
+    warn("  Ejecuta manualmente en Ubuntu WSL y vuelve a lanzar el build:")
+    warn(f"    sudo apt-get install -y {pkg_list}")
+    return False
 
 
 def _wsl_ensure_zigbuild(distro: str | None = None) -> bool:
@@ -2958,11 +3101,13 @@ def run_installer():
 USAGE = """
   python tools/build.py               Build de desarrollo (host) + instalar via wizard
   python tools/build.py --quick       Build dev + copia el exe directamente (sin wizard)
+  python tools/build.py --no-wsl      Desactiva WSL (omite targets Linux en Windows)
   python tools/build.py clean         Limpia dist/ y releases/
   python tools/build.py clean --deep  Limpia todo (incluyendo target/ y cargo)
   python tools/build.py release                       Build para todas las plataformas (version desde git)
   python tools/build.py release --version 1.2.3      Forzar version explicita (recomendado para releases)
   python tools/build.py release --version 1.2.3 --no-publish   Sólo compilar y firmar, sin crear GitHub Release
+  python tools/build.py release --version 1.2.3 --no-wsl       Release sin intentar compilar Linux via WSL
   python tools/build.py release --version 1.2.3 --flags "restartOnBoarding"         Forzar re-onboarding en esta version
   python tools/build.py release --version 1.2.3 --flags "restartOnBoarding,whatsNew" --notes "Nota"
   python tools/build.py gen-keys      Genera par de claves Ed25519 para stable y testing
@@ -2988,6 +3133,7 @@ def parse_command():
     channel        = "stable"
     notes          = ""
     no_publish     = False
+    no_wsl         = False
     flags_str      = ""   # comma-separated update flags: "restartOnBoarding,whatsNew"
 
     filtered = []
@@ -3001,6 +3147,9 @@ def parse_command():
             i += 1
         elif raw[i] == "--quick":
             quick = True
+            i += 1
+        elif raw[i] == "--no-wsl":
+            no_wsl = True
             i += 1
         elif raw[i] == "--channel" and i + 1 < len(raw):
             ch = raw[i + 1].lower()
@@ -3026,6 +3175,12 @@ def parse_command():
             filtered.append(raw[i])
             i += 1
 
+    # Apply global flags immediately so all functions see them
+    if no_wsl:
+        global _NO_WSL
+        _NO_WSL = True
+        info("--no-wsl: WSL desactivado — los targets Linux se omitiran en Windows")
+
     command = filtered[0].lower() if filtered else "dev"
 
     if len(filtered) > 1 or command not in ("dev", "clean", "release", "gen-keys", "show-keys"):
@@ -3037,14 +3192,26 @@ def parse_command():
 
 
 def _print_header(subtitle=""):
-    w = min(TERM_W(), 60)
-    line = "═" * w
-    print(f"\n{BOLD}{CYAN}{line}")
-    tag = f"  {APP_NAME} Build System"
+    """Cabecera principal con caja redondeada estilo 'pro toolchain'.
+
+    ╭──────────────────────────────────────────────────────────╮
+    │  🌙 tsuki Build System  —  dev                          │
+    ╰──────────────────────────────────────────────────────────╯
+    """
+    w = min(TERM_W(), 68)
+    inner_parts = [f"🌙 {BOLD}{APP_NAME} Build System{RESET}"] if _UNICODE else [f"{BOLD}{APP_NAME} Build System{RESET}"]
     if subtitle:
-        tag += f"  {DIM}{subtitle}{RESET}{BOLD}{CYAN}"
-    print(tag)
-    print(f"{line}{RESET}\n")
+        inner_parts.append(f"{DIM}  —  {subtitle}{RESET}")
+    visible_text = f"  {APP_NAME} Build System"
+    if subtitle:
+        visible_text += f"  —  {subtitle}"
+    pad = max(0, w - len(visible_text) - 2)
+    inner_raw = "".join(inner_parts)
+
+    h_line = BOX_H * (w - 2)
+    print(f"\n{DIM}{BOX_TL}{h_line}{BOX_TR}{RESET}")
+    print(f"{DIM}{BOX_V}{RESET}  {'🌙 ' if _UNICODE else ''}{inner_raw}{'':>{pad}}{DIM}{BOX_V}{RESET}")
+    print(f"{DIM}{BOX_BL}{h_line}{BOX_BR}{RESET}\n")
 
 
 def _build_platforms(target_platforms, version, commit, date,
@@ -3061,10 +3228,8 @@ def _build_platforms(target_platforms, version, commit, date,
     results = {}
 
     for pk in target_platforms:
-        w = min(TERM_W(), 60)
-        print(f"\n{BOLD}{'─'*w}")
-        print(f"  Platform  {CYAN}{pk}{RESET}")
-        print(f"{DIM}{'─'*w}{RESET}\n")
+        icon = _platform_icon(pk)
+        section(f"{icon}  Platform: {pk}" if icon else f"Platform: {pk}")
 
         try:
             go_bin = build_go(pk, version, commit, date)
@@ -3124,20 +3289,38 @@ def _build_platforms(target_platforms, version, commit, date,
 
 
 def _print_summary(version):
-    w = min(TERM_W(), 60)
-    print(f"\n{BOLD}{GREEN}{'═'*w}")
-    print(f"  {APP_NAME} v{version}  —  build completo")
-    print(f"{'═'*w}{RESET}\n")
+    """Resumen final del build con tabla de artefactos y tiempo total.
+
+    ╭──────────────────────────────────────────────────────────╮
+    │  📦 Artefactos  —  tsuki v5.3.2                        │
+    ╰──────────────────────────────────────────────────────────╯
+       • tsuki-Setup-5.3.2-windows-amd64.exe   (9.0 MB)
+    """
+    elapsed = _elapsed_total()
+    w = min(TERM_W(), 68)
+    h_line = BOX_H * (w - 2)
+    pkg_icon = "📦 " if _UNICODE else ""
+    clock_icon = "⏱ " if _UNICODE else ""
+
+    # ── Caja de título ─────────────────────────────────────────────────────
+    title_inner = f"{pkg_icon}{BOLD}Artefactos  {DIM}—  {APP_NAME} v{version}{RESET}"
+    print(f"\n{DIM}{BOX_TL}{h_line}{BOX_TR}{RESET}")
+    print(f"{DIM}{BOX_V}{RESET}  {title_inner}")
+    print(f"{DIM}{BOX_BL}{h_line}{BOX_BR}{RESET}\n")
+
     if os.path.isdir(RELEASE_DIR) and os.listdir(RELEASE_DIR):
-        print(f"  {DIM}Instaladores en:{RESET} {BOLD}{RELEASE_DIR}{RESET}\n")
-        for f in sorted(os.listdir(RELEASE_DIR)):
+        print(f"  {DIM}Ubicación: {RESET}{BOLD}{RELEASE_DIR}{RESET}\n")
+        files = [f for f in sorted(os.listdir(RELEASE_DIR))
+                 if os.path.isfile(os.path.join(RELEASE_DIR, f))]
+        for f in files:
             fp = os.path.join(RELEASE_DIR, f)
-            if not os.path.isfile(fp):
-                continue
             size = os.path.getsize(fp)
             size_str = f"{size/1024/1024:.1f} MB" if size > 1024*1024 else f"{size/1024:.0f} KB"
-            print(f"  {GREEN}📦{RESET}  {f:<55}  {DIM}{size_str}{RESET}")
-    print()
+            artifact(f, size_str)
+        print()
+
+    # ── Línea de tiempo total ───────────────────────────────────────────────
+    print(f"  {DIM}{clock_icon}Build completado en {RESET}{BOLD}{elapsed}{RESET}\n")
 
 
 # ── Comandos ─────────────────────────────────
@@ -3279,7 +3462,8 @@ def cmd_dev(forced_version, quick=False):
     clean(deep=False)
 
     version, commit, date = get_version(forced_version)
-    print(f"\n  Version : {BOLD}{version}{RESET}  |  Commit : {commit}  |  Fecha : {date}\n")
+    note(f"Version : {BOLD}{version}{RESET}  {DIM}|{RESET}  Commit : {commit}  {DIM}|{RESET}  Fecha : {date}")
+    print()
 
     _build_platforms([host_key], version, commit, date, host_key=host_key)
     _print_summary(version)

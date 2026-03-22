@@ -61,16 +61,45 @@ impl Parser {
     }
 
     fn expect_ident(&mut self) -> Result<String> {
-        match self.peek_kind().clone() {
-            TokenKind::Ident(s) => { self.advance(); Ok(s) }
-            _ => Err(TsukiError::parse(
-                self.span(),
-                format!("expected identifier, found `{:?}`", self.peek_kind()),
-            )),
+        // Clone only the string, not the entire TokenKind
+        if let TokenKind::Ident(s) = self.peek_kind() {
+            let s = s.clone();
+            self.advance();
+            return Ok(s);
         }
+        Err(TsukiError::parse(
+            self.span(),
+            format!("expected identifier, found `{:?}`", self.peek_kind()),
+        ))
     }
 
     fn eof(&self) -> bool { self.peek_kind() == &TokenKind::EOF }
+
+    /// If the current token is an identifier, return a reference to its string.
+    #[allow(dead_code)]
+    #[inline]
+    fn peek_ident(&self) -> Option<&str> {
+        if let TokenKind::Ident(s) = self.peek_kind() { Some(s.as_str()) } else { None }
+    }
+
+    /// If the current token is a string literal, return a reference to its content.
+    #[allow(dead_code)]
+    #[inline]
+    fn peek_string(&self) -> Option<&str> {
+        if let TokenKind::LitString(s) = self.peek_kind() { Some(s.as_str()) } else { None }
+    }
+
+    /// Advance past current token and return its raw string without cloning the enum.
+    #[allow(dead_code)]
+    fn take_ident(&mut self) -> Option<String> {
+        if let TokenKind::Ident(s) = self.peek_kind() {
+            let s = s.clone();
+            self.advance();
+            Some(s)
+        } else {
+            None
+        }
+    }
 
     // lookahead: is token at offset `off` a type-start?
     fn is_type_start_at(&self, off: usize) -> bool {
@@ -90,12 +119,12 @@ impl Parser {
         self.expect(&TokenKind::KwPackage)?;
         let package = self.expect_ident()?;
 
-        let mut imports = Vec::new();
+        let mut imports = Vec::with_capacity(8);
         while self.at(&TokenKind::KwImport) {
             imports.extend(self.parse_imports()?);
         }
 
-        let mut decls = Vec::new();
+        let mut decls = Vec::with_capacity(16);
         while !self.eof() {
             decls.push(self.parse_top_decl()?);
         }
@@ -335,7 +364,11 @@ impl Parser {
                 // qualified: pkg.Type
                 if self.eat(&TokenKind::Dot) {
                     let sub = self.expect_ident()?;
-                    return Ok(Type::Named(format!("{}.{}", name, sub)));
+                    let mut qualified = String::with_capacity(name.len() + 1 + sub.len());
+                    qualified.push_str(&name);
+                    qualified.push('.');
+                    qualified.push_str(&sub);
+                    return Ok(Type::Named(qualified));
                 }
                 Ok(builtin_type(&name))
             }
@@ -352,7 +385,7 @@ impl Parser {
     fn parse_block(&mut self) -> Result<Block> {
         let span = self.span();
         self.expect(&TokenKind::LBrace)?;
-        let mut stmts = Vec::new();
+        let mut stmts = Vec::with_capacity(8);
         while !self.at(&TokenKind::RBrace) && !self.eof() {
             // Eat stray semicolons between statements
             while self.eat(&TokenKind::Semicolon) {}
@@ -406,7 +439,7 @@ impl Parser {
     fn parse_return(&mut self) -> Result<Stmt> {
         let span = self.span();
         self.expect(&TokenKind::KwReturn)?;
-        let mut vals = Vec::new();
+        let mut vals = Vec::with_capacity(4);
         if !self.at(&TokenKind::RBrace) && !self.eof() {
             vals.push(self.parse_expr(0)?);
             while self.eat(&TokenKind::Comma) { vals.push(self.parse_expr(0)?); }
@@ -630,7 +663,7 @@ impl Parser {
                 // call
                 TokenKind::LParen => {
                     self.advance();
-                    let mut args = Vec::new();
+                    let mut args = Vec::with_capacity(4);
                     while !self.at(&TokenKind::RParen) && !self.eof() {
                         self.eat(&TokenKind::Ellipsis);
                         args.push(self.parse_expr(0)?);
@@ -721,7 +754,7 @@ impl Parser {
 
     fn parse_composite(&mut self, ty: Type, span: Span) -> Result<Expr> {
         self.expect(&TokenKind::LBrace)?;
-        let mut elems = Vec::new();
+        let mut elems = Vec::with_capacity(4);
         while !self.at(&TokenKind::RBrace) && !self.eof() {
             let first = self.parse_expr(0)?;
             let (key, val) = if self.eat(&TokenKind::Colon) {

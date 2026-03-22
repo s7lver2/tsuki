@@ -63,7 +63,12 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         let mut f = vec![
             format!("-DF_CPU={}L", board.f_cpu()),
             "-DARDUINO=10819".into(),
-            "-Os".into(), "-w".into(),
+            // ESP8266 xtensa-lx106-elf-g++ (bundled with core 3.x) has a
+            // known ICE in bot_manip/cp/tree.c when -Os is combined with
+            // constexpr template instantiation in core_esp8266_version.h.
+            // -O2 avoids the buggy shrink-wrap path; size difference is minimal.
+            if is_esp32 { "-Os".to_string() } else { "-O2".to_string() },
+            "-w".into(),
             "-ffunction-sections".into(), "-fdata-sections".into(),
             "-Wno-error=narrowing".into(),
             "-MMD".into(),
@@ -92,10 +97,23 @@ pub fn run(req: &CompileRequest, board: &Board, sdk: &SdkPaths) -> Result<Compil
         f
     };
 
-    let cxxflags = [
-        "-fpermissive", "-fno-exceptions", "-fno-threadsafe-statics",
-        &format!("-std=gnu++{}", req.cpp_std.trim_start_matches("c++")),
-    ];
+    // -fno-tree-vrp: disables Value Range Propagation, which triggers the
+    // Xtensa GCC ICE (bot_manip at cp/tree.c:3055) on ESP8266 core 3.1.x.
+    // Not needed for ESP32 (different GCC build, no ICE).
+    let no_vrp_flag;
+    let cxxflags: Vec<&str> = {
+        let mut flags = vec![
+            "-fpermissive", "-fno-exceptions", "-fno-threadsafe-statics",
+        ];
+        let std_flag = format!("-std=gnu++{}", req.cpp_std.trim_start_matches("c++"));
+        // We need to store the formatted string before borrowing it
+        no_vrp_flag = std_flag;
+        flags.push(no_vrp_flag.as_str());
+        if !is_esp32 {
+            flags.push("-fno-tree-vrp");
+        }
+        flags
+    };
 
     let flags_sig = hash_str(&format!("{:?}{:?}", common_flags, cxxflags));
     let sketch_obj_dir = req.build_dir.join("sketch");

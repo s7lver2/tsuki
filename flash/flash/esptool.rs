@@ -19,14 +19,15 @@ pub fn flash(firmware: &Path, port: &str, board: &Board, baud: u32, verbose: boo
         _ => return Err(FlashError::Other("Not an ESP board".into())),
     };
 
-    // Determine file format and flash offset
-    let (write_cmd, offset) = if firmware.extension()
-        .and_then(|e| e.to_str()) == Some("bin")
-    {
-        ("write_flash", "0x1000")
-    } else {
-        ("write_flash", "0x0000")
+    // Flash offsets differ between chips:
+    //   ESP32:   app binary lives at 0x10000 (bootloader=0x1000, partition=0x8000)
+    //   ESP8266: app binary lives at 0x0000
+    // Using 0x1000 for ESP32 overwrites the bootloader — hard brick.
+    let offset = match &board.toolchain {
+        Toolchain::Esp32 { .. } => "0x10000",
+        _                       => "0x0000",
     };
+    let write_cmd = "write_flash";
 
     let mut cmd = Command::new(&esptool);
     cmd.args([

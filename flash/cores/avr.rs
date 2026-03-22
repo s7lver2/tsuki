@@ -36,7 +36,6 @@
 
 use std::path::PathBuf;
 #[allow(unused_imports)]
-use colored::Colorize;
 
 use crate::error::{FlashError, Result};
 use crate::sdk::SdkPaths;

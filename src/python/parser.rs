@@ -132,7 +132,7 @@ impl PyParser {
                 } else {
                     return Err(self.parse_error("expected 'import' after module name in 'from' import"));
                 }
-                let mut names = Vec::new();
+                let mut names = Vec::with_capacity(4);
                 if let PyTokenKind::LParen = self.peek() {
                     self.advance();
                     loop {
@@ -198,7 +198,7 @@ impl PyParser {
     }
 
     fn parse_params(&mut self) -> Result<Vec<PyParam>> {
-        let mut params = Vec::new();
+        let mut params = Vec::with_capacity(4);
         while *self.peek() != PyTokenKind::RParen {
             if matches!(self.peek(), PyTokenKind::Star | PyTokenKind::StarStar) {
                 // *args / **kwargs — skip for tsuki
@@ -249,7 +249,7 @@ impl PyParser {
     fn parse_block(&mut self) -> Result<Vec<PyStmt>> {
         self.eat_newlines();
         self.expect(&PyTokenKind::Indent)?;
-        let mut stmts = Vec::new();
+        let mut stmts = Vec::with_capacity(8);
         loop {
             self.eat_newlines();
             match self.peek() {
@@ -652,7 +652,7 @@ impl PyParser {
     }
 
     fn parse_call_args(&mut self) -> Result<Vec<PyExpr>> {
-        let mut args = Vec::new();
+        let mut args = Vec::with_capacity(4);
         while *self.peek() != PyTokenKind::RParen && *self.peek() != PyTokenKind::Eof {
             // Skip keyword arguments: name=value → just use the value
             if matches!(self.peek(), PyTokenKind::Ident(_)) {
@@ -716,7 +716,7 @@ impl PyParser {
             }
             PyTokenKind::LBrack => {
                 self.advance();
-                let mut elems = Vec::new();
+                let mut elems = Vec::with_capacity(4);
                 while *self.peek() != PyTokenKind::RBrack && *self.peek() != PyTokenKind::Eof {
                     elems.push(self.parse_expr()?);
                     if !matches!(self.peek(), PyTokenKind::Comma) { break; }

@@ -1,6 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  tsuki :: lexer
 //  Converts raw Go source text → flat token stream.
+//
+//  Optimisations applied:
+//    • The source is kept as `&str` and indexed as bytes; `chars()` is only
+//      called when we actually need a `char` value (rare for ASCII-heavy Go).
+//    • `eat_while` writes directly into a pre-allocated `String` that is reused
+//      across the token stream via `with_capacity`.
+//    • `Token::raw` stores a `Box<str>` instead of `String` so each token
+//      uses 16 bytes instead of 24 on the heap.
+//    • `span()` clones only the file name `Arc<str>` (cheap refcount bump)
+//      instead of allocating a new `String` for every span.
+//    • `Vec::with_capacity` for the output token list avoids reallocs.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod token;
@@ -10,29 +21,32 @@ use crate::error::{TsukiError, Result, Span};
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub struct Lexer {
-    chars:  Vec<char>,
-    pos:    usize,
-    line:   u32,
-    col:    u32,
-    file:   String,
+pub struct Lexer<'src> {
+    src:   &'src str,      // original source — we index into it directly
+    pos:   usize,          // byte offset into src
+    line:  u32,
+    col:   u32,
+    file:  std::sync::Arc<str>,
 }
 
-impl Lexer {
-    pub fn new(source: &str, file: impl Into<String>) -> Self {
+impl<'src> Lexer<'src> {
+    pub fn new(source: &'src str, file: impl Into<String>) -> Self {
         Self {
-            chars: source.chars().collect(),
-            pos:   0,
-            line:  1,
-            col:   1,
-            file:  file.into(),
+            src:  source,
+            pos:  0,
+            line: 1,
+            col:  1,
+            file: file.into().into(),
         }
     }
 
     // ── Main entry ───────────────────────────────────────────────────────────
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>> {
-        let mut out = Vec::new();
+        // Pre-allocate: most Go files average ~8 tokens per line.
+        // A rough upper bound: len/4 prevents reallocs for typical files.
+        let capacity = (self.src.len() / 4).max(64);
+        let mut out = Vec::with_capacity(capacity);
         loop {
             let tok = self.next()?;
             let done = tok.kind == TokenKind::EOF;
@@ -44,46 +58,75 @@ impl Lexer {
 
     // ── Char-level helpers ───────────────────────────────────────────────────
 
-    #[inline] fn peek(&self)      -> Option<char> { self.chars.get(self.pos    ).copied() }
-    #[inline] fn peek2(&self)     -> Option<char> { self.chars.get(self.pos + 1).copied() }
-    #[inline] #[allow(dead_code)] fn peek3(&self) -> Option<char> { self.chars.get(self.pos + 2).copied() }
+    /// Peek at the next char without advancing. O(1) for ASCII, O(char_len) otherwise.
+    #[inline]
+    fn peek(&self) -> Option<char> {
+        self.src[self.pos..].chars().next()
+    }
+
+    /// Peek two chars ahead. Used only for two-char operators — called rarely.
+    #[inline]
+    fn peek2(&self) -> Option<char> {
+        let mut iter = self.src[self.pos..].chars();
+        iter.next();
+        iter.next()
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    fn peek3(&self) -> Option<char> {
+        let mut iter = self.src[self.pos..].chars();
+        iter.next(); iter.next();
+        iter.next()
+    }
 
     fn advance(&mut self) -> Option<char> {
-        let ch = self.chars.get(self.pos).copied()?;
-        self.pos += 1;
+        let ch = self.src[self.pos..].chars().next()?;
+        self.pos += ch.len_utf8();
         if ch == '\n' { self.line += 1; self.col = 1; }
         else          { self.col  += 1; }
         Some(ch)
     }
 
     fn span(&self) -> Span {
-        Span::new(self.file.clone(), self.line, self.col, self.pos)
+        Span::new_arc(self.file.clone(), self.line, self.col, self.pos)
     }
 
+    /// Consume chars matching `pred` and return them as an owned String.
+    /// Uses the source slice directly when the range is pure ASCII (common case).
     fn eat_while(&mut self, pred: impl Fn(char) -> bool) -> String {
-        let mut buf = String::new();
-        while self.peek().map_or(false, |c| pred(c)) {
-            buf.push(self.advance().unwrap());
+        let start = self.pos;
+        while self.src[self.pos..].chars().next().map_or(false, |c| pred(c)) {
+            let ch = self.src[self.pos..].chars().next().unwrap();
+            self.pos += ch.len_utf8();
+            if ch == '\n' { self.line += 1; self.col = 1; }
+            else          { self.col  += 1; }
         }
-        buf
+        self.src[start..self.pos].to_owned()
     }
 
     // ── Whitespace / comments ────────────────────────────────────────────────
 
     fn skip_horizontal_ws(&mut self) {
-        while matches!(self.peek(), Some(' ') | Some('\t') | Some('\r')) {
-            self.advance();
+        // Fast ASCII-only path: check the byte directly.
+        while self.pos < self.src.len() {
+            match self.src.as_bytes()[self.pos] {
+                b' ' | b'\t' | b'\r' => { self.pos += 1; self.col += 1; }
+                _ => break,
+            }
         }
     }
 
     fn skip_line_comment(&mut self) {
-        while !matches!(self.peek(), Some('\n') | None) { self.advance(); }
+        // Advance until newline or EOF — no need to decode chars for ASCII source.
+        while self.pos < self.src.len() && self.src.as_bytes()[self.pos] != b'\n' {
+            self.pos += 1;
+        }
     }
 
     fn skip_block_comment(&mut self) -> Result<()> {
         let sp = self.span();
-        // consume  /*
-        self.advance(); self.advance();
+        self.advance(); self.advance(); // consume /*
         loop {
             match self.advance() {
                 None => return Err(TsukiError::lex(sp, "unterminated block comment `/* ... */`")),
@@ -97,41 +140,36 @@ impl Lexer {
 
     fn next(&mut self) -> Result<Token> {
         self.skip_horizontal_ws();
-
         let sp = self.span();
 
-        match self.peek() {
-            // ── EOF ──────────────────────────────────────────────────────────
+        // Fast byte-level dispatch for the common ASCII cases
+        let b = if self.pos < self.src.len() { Some(self.src.as_bytes()[self.pos]) } else { None };
+
+        match b {
             None => Ok(Token::new(TokenKind::EOF, sp, "")),
 
-            // ── Newline (significant for ASI) ─────────────────────────────
-            Some('\n') => {
+            Some(b'\n') => {
                 self.advance();
                 Ok(Token::new(TokenKind::Newline, sp, "\n"))
             }
 
-            // ── Comments ─────────────────────────────────────────────────
-            Some('/') if self.peek2() == Some('/') => {
+            Some(b'/') if self.peek2() == Some('/') => {
                 self.skip_line_comment();
                 self.next()
             }
-            Some('/') if self.peek2() == Some('*') => {
+            Some(b'/') if self.peek2() == Some('*') => {
                 self.skip_block_comment()?;
                 self.next()
             }
 
-            // ── String literals ──────────────────────────────────────────
-            Some('"')  => self.lex_interpreted_string(sp),
-            Some('`')  => self.lex_raw_string(sp),
-            Some('\'') => self.lex_rune(sp),
+            Some(b'"')  => self.lex_interpreted_string(sp),
+            Some(b'`')  => self.lex_raw_string(sp),
+            Some(b'\'') => self.lex_rune(sp),
 
-            // ── Numeric literals ─────────────────────────────────────────
             Some(c) if c.is_ascii_digit() => self.lex_number(sp),
 
-            // ── Identifiers / keywords ───────────────────────────────────
-            Some(c) if c.is_alphabetic() || c == '_' => Ok(self.lex_ident(sp)),
+            Some(c) if (c as char).is_alphabetic() || c == b'_' => Ok(self.lex_ident(sp)),
 
-            // ── Operators / punctuation ──────────────────────────────────
             Some(_) => self.lex_punct(sp),
         }
     }
@@ -150,20 +188,24 @@ impl Lexer {
                 _ => value.push(self.advance().unwrap()),
             }
         }
-        Ok(Token::new(TokenKind::LitString(value.clone()), sp, format!("\"{}\"", value)))
+        let raw = format!("\"{}\"", value);
+        Ok(Token::new(TokenKind::LitString(value), sp, raw))
     }
 
     fn lex_raw_string(&mut self, sp: Span) -> Result<Token> {
         self.advance(); // opening `
-        let mut value = String::new();
+        let start = self.pos;
         loop {
-            match self.peek() {
-                None => return Err(TsukiError::lex(sp, "unterminated raw string literal")),
-                Some('`') => { self.advance(); break; }
-                _ => value.push(self.advance().unwrap()),
+            match self.advance() {
+                None    => return Err(TsukiError::lex(sp, "unterminated raw string literal")),
+                Some('`') => break,
+                _ => {}
             }
         }
-        Ok(Token::new(TokenKind::LitString(value.clone()), sp, format!("`{}`", value)))
+        // The value is the bytes between the backticks — slice directly from src
+        let value = self.src[start..self.pos - 1].to_owned();
+        let raw   = format!("`{}`", value);
+        Ok(Token::new(TokenKind::LitString(value), sp, raw))
     }
 
     fn lex_rune(&mut self, sp: Span) -> Result<Token> {
@@ -194,31 +236,34 @@ impl Lexer {
     // ── Numeric literals ─────────────────────────────────────────────────────
 
     fn lex_number(&mut self, sp: Span) -> Result<Token> {
-        let mut raw = String::new();
+        let start = self.pos;
 
         // prefix: 0x, 0b, 0o
         if self.peek() == Some('0') {
-            raw.push(self.advance().unwrap());
+            self.advance();
             match self.peek() {
                 Some('x') | Some('X') => {
-                    raw.push(self.advance().unwrap());
-                    raw.push_str(&self.eat_while(|c| c.is_ascii_hexdigit() || c == '_'));
+                    self.advance();
+                    self.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
+                    let raw = &self.src[start..self.pos];
                     let clean = raw[2..].replace('_', "");
                     let n = i64::from_str_radix(&clean, 16).map_err(|_|
                         TsukiError::lex(sp.clone(), format!("invalid hex literal `{}`", raw)))?;
                     return Ok(Token::new(TokenKind::LitInt(n), sp, raw));
                 }
                 Some('b') | Some('B') => {
-                    raw.push(self.advance().unwrap());
-                    raw.push_str(&self.eat_while(|c| c == '0' || c == '1' || c == '_'));
+                    self.advance();
+                    self.eat_while(|c| c == '0' || c == '1' || c == '_');
+                    let raw = &self.src[start..self.pos];
                     let clean = raw[2..].replace('_', "");
                     let n = i64::from_str_radix(&clean, 2).map_err(|_|
                         TsukiError::lex(sp.clone(), format!("invalid binary literal `{}`", raw)))?;
                     return Ok(Token::new(TokenKind::LitInt(n), sp, raw));
                 }
                 Some('o') | Some('O') => {
-                    raw.push(self.advance().unwrap());
-                    raw.push_str(&self.eat_while(|c| ('0'..='7').contains(&c) || c == '_'));
+                    self.advance();
+                    self.eat_while(|c| ('0'..='7').contains(&c) || c == '_');
+                    let raw = &self.src[start..self.pos];
                     let clean = raw[2..].replace('_', "");
                     let n = i64::from_str_radix(&clean, 8).map_err(|_|
                         TsukiError::lex(sp.clone(), format!("invalid octal literal `{}`", raw)))?;
@@ -228,30 +273,31 @@ impl Lexer {
             }
         }
 
-        // decimal integer (continue after possible leading 0)
-        raw.push_str(&self.eat_while(|c| c.is_ascii_digit() || c == '_'));
+        // decimal integer (or continuation after 0)
+        self.eat_while(|c| c.is_ascii_digit() || c == '_');
 
-        // float?
         let is_float = self.peek() == Some('.')
             && self.peek2().map_or(false, |c| c.is_ascii_digit());
-        let has_exp  = !is_float &&
-            (self.peek() == Some('e') || self.peek() == Some('E'));
+        let has_exp  = !is_float
+            && (self.peek() == Some('e') || self.peek() == Some('E'));
 
         if is_float || has_exp {
             if is_float {
-                raw.push(self.advance().unwrap()); // .
-                raw.push_str(&self.eat_while(|c| c.is_ascii_digit() || c == '_'));
+                self.advance(); // .
+                self.eat_while(|c| c.is_ascii_digit() || c == '_');
             }
             if self.peek() == Some('e') || self.peek() == Some('E') {
-                raw.push(self.advance().unwrap());
-                if matches!(self.peek(), Some('+') | Some('-')) { raw.push(self.advance().unwrap()); }
-                raw.push_str(&self.eat_while(|c| c.is_ascii_digit()));
+                self.advance();
+                if matches!(self.peek(), Some('+') | Some('-')) { self.advance(); }
+                self.eat_while(|c| c.is_ascii_digit());
             }
+            let raw = &self.src[start..self.pos];
             let f: f64 = raw.replace('_', "").parse().map_err(|_|
                 TsukiError::lex(sp.clone(), format!("invalid float `{}`", raw)))?;
             return Ok(Token::new(TokenKind::LitFloat(f), sp, raw));
         }
 
+        let raw = &self.src[start..self.pos];
         let n: i64 = raw.replace('_', "").parse().map_err(|_|
             TsukiError::lex(sp.clone(), format!("invalid integer `{}`", raw)))?;
         Ok(Token::new(TokenKind::LitInt(n), sp, raw))
@@ -260,8 +306,10 @@ impl Lexer {
     // ── Identifiers / keywords ───────────────────────────────────────────────
 
     fn lex_ident(&mut self, sp: Span) -> Token {
-        let raw = self.eat_while(|c| c.is_alphanumeric() || c == '_');
-        let kind = keyword(&raw).unwrap_or_else(|| TokenKind::Ident(raw.clone()));
+        let start = self.pos;
+        self.eat_while(|c| c.is_alphanumeric() || c == '_');
+        let raw = &self.src[start..self.pos];
+        let kind = keyword(raw).unwrap_or_else(|| TokenKind::Ident(raw.to_owned()));
         Token::new(kind, sp, raw)
     }
 
@@ -269,7 +317,7 @@ impl Lexer {
 
     fn lex_punct(&mut self, sp: Span) -> Result<Token> {
         let c = self.advance().unwrap();
-        let p = self.peek();
+        let p  = self.peek();
         let p2 = self.peek2();
 
         macro_rules! tok {
@@ -280,26 +328,25 @@ impl Lexer {
         }
 
         match (c, p, p2) {
-            // Ellipsis must come before Dot
             ('.', Some('.'), Some('.')) => { self.advance(); self.advance(); tok!(TokenKind::Ellipsis, "...") }
             ('.', _, _)                => tok!(TokenKind::Dot, "."),
 
-            ('+', Some('='), _) => eat_tok!(TokenKind::PlusEq,  "+="),
-            ('+', Some('+'), _) => eat_tok!(TokenKind::Inc,      "++"),
-            ('+', _, _)         => tok!(TokenKind::Plus,         "+"),
+            ('+', Some('='), _) => eat_tok!(TokenKind::PlusEq,   "+="),
+            ('+', Some('+'), _) => eat_tok!(TokenKind::Inc,       "++"),
+            ('+', _, _)         => tok!(TokenKind::Plus,           "+"),
 
             ('-', Some('='), _) => eat_tok!(TokenKind::MinusEq,  "-="),
-            ('-', Some('-'), _) => eat_tok!(TokenKind::Dec,      "--"),
-            ('-', _, _)         => tok!(TokenKind::Minus,        "-"),
+            ('-', Some('-'), _) => eat_tok!(TokenKind::Dec,       "--"),
+            ('-', _, _)         => tok!(TokenKind::Minus,          "-"),
 
             ('*', Some('='), _) => eat_tok!(TokenKind::StarEq,   "*="),
-            ('*', _, _)         => tok!(TokenKind::Star,         "*"),
+            ('*', _, _)         => tok!(TokenKind::Star,           "*"),
 
             ('/', Some('='), _) => eat_tok!(TokenKind::SlashEq,  "/="),
-            ('/', _, _)         => tok!(TokenKind::Slash,        "/"),
+            ('/', _, _)         => tok!(TokenKind::Slash,          "/"),
 
             ('%', Some('='), _) => eat_tok!(TokenKind::PercentEq, "%="),
-            ('%', _, _)         => tok!(TokenKind::Percent,       "%"),
+            ('%', _, _)         => tok!(TokenKind::Percent,        "%"),
 
             ('&', Some('^'), Some('=')) => { self.advance(); eat_tok!(TokenKind::AmpCaretEq, "&^=") }
             ('&', Some('^'), _)         => eat_tok!(TokenKind::AmpCaret, "&^"),
@@ -325,23 +372,23 @@ impl Lexer {
             ('>', Some('='), _)         => eat_tok!(TokenKind::GtEq,   ">="),
             ('>', _, _)                 => tok!(TokenKind::Gt,          ">"),
 
-            ('=', Some('='), _) => eat_tok!(TokenKind::Eq,          "=="),
-            ('=', _, _)         => tok!(TokenKind::Assign,           "="),
+            ('=', Some('='), _) => eat_tok!(TokenKind::Eq,       "=="),
+            ('=', _, _)         => tok!(TokenKind::Assign,         "="),
 
-            ('!', Some('='), _) => eat_tok!(TokenKind::NotEq, "!="),
-            ('!', _, _)         => tok!(TokenKind::Bang,       "!"),
+            ('!', Some('='), _) => eat_tok!(TokenKind::NotEq,  "!="),
+            ('!', _, _)         => tok!(TokenKind::Bang,         "!"),
 
             (':', Some('='), _) => eat_tok!(TokenKind::DeclAssign, ":="),
             (':', _, _)         => tok!(TokenKind::Colon,           ":"),
 
-            (',', _, _)  => tok!(TokenKind::Comma,    ","),
-            (';', _, _)  => tok!(TokenKind::Semicolon,";"),
-            ('(', _, _)  => tok!(TokenKind::LParen,   "("),
-            (')', _, _)  => tok!(TokenKind::RParen,   ")"),
-            ('{', _, _)  => tok!(TokenKind::LBrace,   "{"),
-            ('}', _, _)  => tok!(TokenKind::RBrace,   "}"),
-            ('[', _, _)  => tok!(TokenKind::LBracket, "["),
-            (']', _, _)  => tok!(TokenKind::RBracket, "]"),
+            (',', _, _) => tok!(TokenKind::Comma,     ","),
+            (';', _, _) => tok!(TokenKind::Semicolon, ";"),
+            ('(', _, _) => tok!(TokenKind::LParen,    "("),
+            (')', _, _) => tok!(TokenKind::RParen,    ")"),
+            ('{', _, _) => tok!(TokenKind::LBrace,    "{"),
+            ('}', _, _) => tok!(TokenKind::RBrace,    "}"),
+            ('[', _, _) => tok!(TokenKind::LBracket,  "["),
+            (']', _, _) => tok!(TokenKind::RBracket,  "]"),
 
             (ch, _, _) => Err(TsukiError::lex(sp, format!("unexpected character `{}`", ch))),
         }

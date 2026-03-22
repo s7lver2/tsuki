@@ -76,6 +76,7 @@ func init() {
 		newPkgCmd(),
 		newSimulateCmd(),
 		newWebkitCmd(),
+		newMonitorCmd(),
 	)
 }
 

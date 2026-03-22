@@ -1711,6 +1711,9 @@ function EditorTab() {
       <SettingsField name="Save on focus loss" desc="Auto-save when the editor loses focus">
         <Toggle on={settings.saveOnFocusLoss} onToggle={() => updateSetting('saveOnFocusLoss', !settings.saveOnFocusLoss)} />
       </SettingsField>
+      <SettingsField name="Allow editing build files" desc="Unlock files inside build/ for editing (changes will be overwritten on next build)">
+        <Toggle on={settings.allowEditBuildFiles ?? false} onToggle={() => updateSetting('allowEditBuildFiles', !settings.allowEditBuildFiles)} />
+      </SettingsField>
 
       <GroupHeader title="Intelligence" />
       <SettingsField name="Auto-close brackets" desc="Automatically insert matching brackets and quotes">
