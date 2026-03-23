@@ -35,6 +35,7 @@ APP_NAME       = "tsuki"
 BINARY         = "tsuki"          # CLI principal
 CORE_BINARY    = "tsuki-core"
 FLASH_BINARY   = "tsuki-flash"
+DK_BINARY      = "tsuki-dk"
 GO_MODULE      = "github.com/tsuki/cli"
 BUILD_DIR      = os.path.join(PROJECT_ROOT, "dist")
 # RELEASE_DIR can be overridden via env var to avoid antivirus interference.
@@ -471,6 +472,58 @@ def build_go(platform_key, version, commit, date):
         else:
             info(f"Go CLI → {os.path.basename(out)}  ({after//1024} KB)")
     return out
+
+# ─────────────────────────────────────────────
+#  BUILD: tsuki-dk
+# ─────────────────────────────────────────────
+def build_dk(platform_key, version, commit, date):
+    """Compila el binario tsuki-dk (Development Kit).
+
+    Mismas optimizaciones que build_go: -s -w, -trimpath, CGO_ENABLED=0.
+    No usa garble — tsuki-dk es una herramienta de desarrollo interna,
+    la ofuscación no aporta valor y hace más difícil el debugging.
+    """
+    step(f"Compilando tsuki-dk → {platform_key}")
+    plat = PLATFORMS[platform_key]
+    goos   = plat["goos"]
+    goarch = plat["goarch"]
+    ext    = ".exe" if goos == "windows" else ""
+    out    = os.path.join(BUILD_DIR, f"{DK_BINARY}-{platform_key}{ext}")
+
+    ldflags = (
+        f"-s -w "
+        f"-X {GO_MODULE}/internal/cli.Version={version} "
+        f"-X {GO_MODULE}/internal/cli.Commit={commit} "
+        f"-X {GO_MODULE}/internal/cli.BuildDate={date}"
+    )
+
+    env = {**os.environ, "GOOS": goos, "GOARCH": goarch, "CGO_ENABLED": "0"}
+
+    if goarch == "amd64":
+        env["GOAMD64"] = "v2"
+    elif goarch == "arm":
+        env["GOARM"]   = "7"
+
+    cmd = ["go", "build",
+        "-trimpath",
+        "-ldflags", ldflags,
+        "-o", out,
+        "./cmd/tsuki-dk",
+    ]
+
+    try:
+        run(cmd, cwd=os.path.join(PROJECT_ROOT, "cli"), env=env)
+    except subprocess.CalledProcessError as e:
+        warn(f"tsuki-dk build falló para {platform_key}: {e}")
+        return None
+
+    if os.path.exists(out):
+        before = os.path.getsize(out)
+        _compress_binary(out)
+        after  = os.path.getsize(out)
+        info(f"tsuki-dk → {os.path.basename(out)}  ({after//1024} KB)")
+    return out
+
 
 # ─────────────────────────────────────────────
 #  BUILD: RUST (core + flash)
@@ -2038,7 +2091,9 @@ $SUDO mkdir -p "$BINDIR"
 $SUDO cp "$BINARY"        "$BINDIR/$BINARY"
 $SUDO cp "$CORE_BINARY"   "$BINDIR/$CORE_BINARY"
 $SUDO cp "$FLASH_BINARY"  "$BINDIR/$FLASH_BINARY"
+[ -f "@@dk_binary@@" ] && $SUDO cp "@@dk_binary@@" "$BINDIR/@@dk_binary@@"
 $SUDO chmod +x "$BINDIR/$BINARY" "$BINDIR/$CORE_BINARY" "$BINDIR/$FLASH_BINARY"
+[ -f "$BINDIR/@@dk_binary@@" ] && $SUDO chmod +x "$BINDIR/@@dk_binary@@"
 ok "Binarios instalados"
 
 # ── Datos y configuración ─────────────────────────────────────────
@@ -2296,6 +2351,7 @@ Name: "{localappdata}\\@@app_name@@\\config"; Flags: uninsalwaysuninstall
 Source: "@@go_bin@@";      DestDir: "{app}\\bin"; DestName: "@@binary@@.exe";        Components: cli; Flags: ignoreversion
 Source: "@@core_bin@@";    DestDir: "{app}\\bin"; DestName: "@@core_binary@@.exe";   Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 Source: "@@flash_bin@@";   DestDir: "{app}\\bin"; DestName: "@@flash_binary@@.exe";  Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+Source: "@@dk_bin@@";      DestDir: "{app}\\bin"; DestName: "@@dk_binary@@.exe";     Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Paquetes locales ───────────────────────────────────────────────
 Source: "@@pkg_dir@@\\*"; DestDir: "{app}\\pkg"; Components: cli; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -2597,7 +2653,7 @@ end;
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR LINUX / MACOS
 # ─────────────────────────────────────────────
-def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
+def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version, dk_bin=None):
     step(f"Creando instalador CLI → {platform_key}")
     plat_dir = os.path.join(RELEASE_DIR, f"{APP_NAME}-{version}-{platform_key}")
     os.makedirs(plat_dir, exist_ok=True)
@@ -2609,6 +2665,8 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
         shutil.copy(core_bin,  os.path.join(plat_dir, CORE_BINARY))
     if flash_bin:
         shutil.copy(flash_bin, os.path.join(plat_dir, FLASH_BINARY))
+    if dk_bin:
+        shutil.copy(dk_bin, os.path.join(plat_dir, DK_BINARY))
     # Copiar paquetes
     pkg_src = os.path.join(PROJECT_ROOT, "pkg")
     if os.path.exists(pkg_src):
@@ -2623,6 +2681,7 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
         '@@flash_binary@@': FLASH_BINARY,
         '@@registry_url@@': REGISTRY_URL,
         '@@platform_key@@': platform_key,
+        '@@dk_binary@@':    DK_BINARY,
     }
     install_content = INSTALL_SH
     for k, v in sh_subs.items():
@@ -2683,7 +2742,7 @@ def create_unix_installer(platform_key, go_bin, core_bin, flash_bin, version):
 # ─────────────────────────────────────────────
 #  CREAR INSTALADOR WINDOWS (Inno Setup)
 # ─────────────────────────────────────────────
-def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64"):
+def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_dir, ide_exe_name, numeric_version, platform_key="windows-amd64", dk_bin=None):
     step("Creando instalador GUI Windows (Inno Setup)")
 
     # Buscar ícono
@@ -2725,6 +2784,8 @@ def create_windows_installer(go_bin, core_bin, flash_bin, version, ide_bundle_di
         "@@cores_avr_dir@@": _w(cores_avr),
         "@@release_dir@@":  _w(RELEASE_DIR),
         "@@registry_url@@": REGISTRY_URL,
+        "@@dk_bin@@":       _w(dk_bin) if dk_bin else "",
+        "@@dk_binary@@":    DK_BINARY,
         "@@ide_exe_name@@": ide_exe_name or f"{APP_NAME}.exe",
         "@@platform_key@@": platform_key,
         "@@ide_dir_entry@@": 'Name: "{app}\\ide"' if ide_bundle else "",
@@ -3237,8 +3298,9 @@ def _build_platforms(target_platforms, version, commit, date,
             error(f"Go build fallo para {pk}: {e}")
             continue
 
+        dk_bin = build_dk(pk, version, commit, date)
         core_bin, flash_bin = build_rust(pk)
-        results[pk] = {"go": go_bin, "core": core_bin, "flash": flash_bin}
+        results[pk] = {"go": go_bin, "dk": dk_bin, "core": core_bin, "flash": flash_bin}
 
         # Tauri: compilar si es el host O si es el mismo OS con distinta arch
         ide_bundle = ide_exe_name = None
@@ -3269,6 +3331,7 @@ def _build_platforms(target_platforms, version, commit, date,
             else:
                 create_windows_installer(
                     go_bin=r["go"],
+                    dk_bin=r.get("dk"),
                     core_bin=r["core"],
                     flash_bin=r["flash"],
                     version=version,
@@ -3280,6 +3343,7 @@ def _build_platforms(target_platforms, version, commit, date,
         else:
             create_unix_installer(pk,
                 go_bin=r["go"],
+                dk_bin=r.get("dk"),
                 core_bin=r["core"],
                 flash_bin=r["flash"],
                 version=version,

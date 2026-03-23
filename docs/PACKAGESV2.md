@@ -4,56 +4,49 @@
 
 Los paquetes v2.0 expanden el concepto de "librería Arduino" a cualquier cosa que pueda extender tsuki: parches del IDE, placas nuevas, librerías de transpilación, binarios del toolchain, o aplicaciones completas. El ecosistema gira alrededor de tres piezas: el formato de paquete, el gestor de paquetes del CLI, y la herramienta de desarrollo `tsuki-dk`.
 
-**El punto clave del diseño:** `tsuki-core` y `tsuki-flash` son ellos mismos paquetes de tipo `app` dentro de este sistema. El propio CLI de tsuki se actualiza a través del mismo gestor que usa para instalar librerías. Tsuki no depende de sí mismo para existir — solo necesita el CLI mínimo (`tsuki` binary) para bootstrapear el resto.
+**Punto clave:** `tsuki-core` y `tsuki-flash` son ellos mismos paquetes de tipo `app`. El propio CLI se actualiza a través del mismo gestor que usa para instalar librerías. Tsuki no depende de sí mismo para existir — solo necesita el CLI mínimo para bootstrapear el resto.
 
 ---
 
 ## 1. Tipos de paquete
 
 ```
-app          — binario ejecutable instalable (tsuki-core, tsuki-flash, tsuki-dk, etc.)
-library      — librería transpilable (el formato actual v1.0, compatible)
-board-pack   — una o más definiciones de placa
-ide-plugin   — parche o extensión del IDE Tauri
-sdk-patch    — modificación del compilador/transpiler aplicada sobre un app existente
+app          — binario ejecutable (tsuki-core, tsuki-flash, tsuki-dk…)
+library      — librería transpilable (compatible con v1.0)
+board-pack   — definiciones de placa
+ide-plugin   — extensión o parche del IDE Tauri
+sdk-patch    — parche sobre un app existente (tsuki-core, tsuki-flash)
 ```
-
-Cada tipo comparte el mismo sistema de distribución pero se instala en rutas distintas y tiene campos TOML propios.
 
 ### Jerarquía de dependencias
 
 ```
-tsuki (CLI mínimo, bootstrapper)
+tsuki  (CLI mínimo, bootstrapper)
   └── instala vía packages v2.0:
-        ├── tsuki-team/tsuki-core   [app]   — transpiler Go→C++, Python→C++
-        ├── tsuki-team/tsuki-flash  [app]   — compilador/flasher Arduino
-        ├── tsuki-team/tsuki-ide    [app]   — IDE Tauri
-        ├── tsuki-team/tsuki-dk     [app]   — development kit
+        ├── tsuki-team/tsuki-core   [app]
+        ├── tsuki-team/tsuki-flash  [app]
+        ├── tsuki-team/tsuki-ide    [app]
+        ├── tsuki-team/tsuki-dk     [app]
         ├── tsuki-team/dht          [library]
         ├── tsuki-team/rp2040-pack  [board-pack]
         └── ...
 ```
 
-El CLI mínimo solo sabe resolver sources, verificar firmas, y ejecutar binarios. Todo lo demás llega como paquetes.
-
 ---
 
 ## 2. Manifiesto `tsuki.toml`
 
-Todos los paquetes usan el mismo archivo raíz:
-
 ```toml
 [package]
-name        = "tsuki-flash"
-version     = "6.0.0"
-type        = "app"               # app | library | board-pack | ide-plugin | sdk-patch
-description = "Arduino compile & flash toolchain — no arduino-cli required"
-author      = "tsuki-team"
+name        = "my-sensor"
+version     = "0.1.0"
+type        = "library"       # app | library | board-pack | ide-plugin | sdk-patch
+description = "DHT sensor library"
+author      = "s7lver"
 license     = "MIT"
-repository  = "https://github.com/tsuki-team/tsuki"
 
 [package.signing]
-key = "tsuki-team"                # nombre de la clave en tsuki-keys.json del source
+key = "s7lver"                # nombre en tsuki-keys.json del source
 
 [dependencies]
 "tsuki-team/tsuki-core" = ">=6.0"
@@ -63,286 +56,652 @@ key = "tsuki-team"                # nombre de la clave en tsuki-keys.json del so
 
 # ── Solo para type = "app" ──────────────────────────────────────────
 [app]
-# Binarios precompilados por plataforma. El gestor descarga solo el de la plataforma actual.
-[app.binaries]
-"x86_64-windows"  = "https://github.com/tsuki-team/tsuki/releases/download/v6.0.0/tsuki-flash-windows-amd64.exe"
-"x86_64-linux"    = "https://github.com/tsuki-team/tsuki/releases/download/v6.0.0/tsuki-flash-linux-amd64"
-"aarch64-linux"   = "https://github.com/tsuki-team/tsuki/releases/download/v6.0.0/tsuki-flash-linux-arm64"
-"x86_64-macos"    = "https://github.com/tsuki-team/tsuki/releases/download/v6.0.0/tsuki-flash-darwin-amd64"
-"aarch64-macos"   = "https://github.com/tsuki-team/tsuki/releases/download/v6.0.0/tsuki-flash-darwin-arm64"
+install_as = "my-tool"
 
-# Nombre con el que queda disponible en ~/.tsuki/bin/
-install_as = "tsuki-flash"
+[app.binaries]
+"x86_64-windows" = "https://github.com/.../my-tool-windows-amd64.exe"
+"x86_64-linux"   = "https://github.com/.../my-tool-linux-amd64"
+"aarch64-linux"  = "https://github.com/.../my-tool-linux-arm64"
+"x86_64-macos"   = "https://github.com/.../my-tool-darwin-amd64"
+"aarch64-macos"  = "https://github.com/.../my-tool-darwin-arm64"
 
 # ── Solo para type = "library" ──────────────────────────────────────
 [library]
-cpp_header  = "DHT.h"
-cpp_class   = "DHT"
-arduino_lib = "DHT sensor library"
+cpp_header  = "MySensor.h"
+arduino_lib = "MySensor Arduino Library"
 
 # ── Solo para type = "board-pack" ───────────────────────────────────
 [board-pack]
 architecture = "rp2040"
-# Boards definidos en boards/*.toml dentro del paquete
 
 # ── Solo para type = "ide-plugin" ───────────────────────────────────
 [ide-plugin]
 entry       = "plugin/index.js"
 permissions = ["fs:read", "shell:execute"]
-patches     = ["ide/BottomPanel.patch", "ide/Settings.patch"]
+patches     = ["ide/BottomPanel.patch"]
 
 # ── Solo para type = "sdk-patch" ────────────────────────────────────
 [sdk-patch]
 target       = "tsuki-team/tsuki-core"
-target_range = ">=6.0,<7.0"
+target_range = ">=6.0,<8.0"
 apply_order  = 10
 ```
 
 ---
 
-## 3. Sistema de sources y repositorios
+## 3. Sistema de sources
 
-Un **source** es una URL que apunta a un repositorio que expone:
+Un **source** es una URL base que expone dos archivos:
 
 ```
-<source-url>/tsuki-keys.json      — claves públicas de los publicadores
-<source-url>/packages.json        — índice de paquetes disponibles
+<url>/packages.json     — índice de paquetes
+<url>/tsuki-keys.json   — claves públicas de los publicadores
 ```
 
-### `tsuki-keys.json`
+### Formatos de `packages.json` soportados
 
+El gestor detecta automáticamente el formato por el primer carácter del valor de `packages`:
+
+**v2 (nativo):**
+```json
+{"packages": [{"name": "dht", "owner": "tsuki-team", "type": "library", "versions": [...]}]}
+```
+
+**Legacy object-map** (formato actual del registry en producción):
 ```json
 {
-  "keys": {
-    "tsuki-team": "ed25519:<base64-pubkey>",
-    "s7lver":     "ed25519:<base64-pubkey>"
+  "packages": {
+    "dht": {
+      "description": "...", "author": "godotino-team",
+      "latest": "1.0.0", "versions": {"1.0.0": "<url>"}
+    }
   }
 }
 ```
 
-### `packages.json`
-
+**v1 array plano:**
 ```json
-{
-  "packages": [
-    {
-      "name":    "tsuki-flash",
-      "owner":   "tsuki-team",
-      "type":    "app",
-      "versions": [
-        {
-          "version": "6.0.0",
-          "binaries": {
-            "x86_64-windows": {
-              "url":       "https://...tsuki-flash-windows-amd64.exe",
-              "checksum":  "sha256:<hex>",
-              "signature": "<ed25519-base64>"
-            },
-            "x86_64-linux": {
-              "url":       "https://...tsuki-flash-linux-amd64",
-              "checksum":  "sha256:<hex>",
-              "signature": "<ed25519-base64>"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name":    "tsuki-dht",
-      "owner":   "tsuki-team",
-      "type":    "library",
-      "versions": [
-        {
-          "version":   "2.0.0",
-          "url":       "https://...tsuki-dht-2.0.0.tar.gz",
-          "checksum":  "sha256:<hex>",
-          "signature": "<ed25519-base64>"
-        }
-      ]
-    }
-  ]
-}
+[{"name": "dht", "version": "1.0.0", "url": "..."}]
 ```
 
-La firma `signature` es Ed25519 sobre el checksum SHA-256 del artefacto, firmada con la clave privada del publicador. El CLI verifica contra `tsuki-keys.json` antes de instalar.
+Los tres formatos se convierten internamente al modelo v2. Si la URL del source termina en `.json`, se trata como URL directa al archivo en vez de directorio base.
+
+### Verificación de firma
+
+Cada artefacto lleva `checksum: "sha256:<hex>"` y `signature: "<ed25519-base64>"`. El gestor verifica el SHA-256 y la firma Ed25519 contra `tsuki-keys.json` antes de extraer.
+
+**Excepción:** paquetes del sandbox local (`signature: "local-dev-*"`) saltan toda verificación — solo se sirven en `127.0.0.1`.
 
 ---
 
-## 4. CLI: Gestor de paquetes v2.0
+## 4. CLI: Comandos
 
-### Sintaxis de instalación
-
-```bash
-tsuki install tsuki-flash                       # latest del source primario
-tsuki install tsuki-team/tsuki-flash            # owner explícito
-tsuki install tsuki-team/tsuki-flash@v6.0.0    # versión pinned
-tsuki install tsuki-team/tsuki-flash@>=5.0     # rango semver
-```
-
-El CLI detecta el tipo del paquete automáticamente:
-- `app` → descarga el binario de la plataforma actual a `~/.tsuki/bin/`
-- `library` → extrae a `~/.tsuki/libs/<name>/`
-- `board-pack` → extrae a `~/.tsuki/boards/<name>/`
-- `ide-plugin` → extrae a `~/.tsuki/plugins/<name>/`, registra en el IDE
-- `sdk-patch` → extrae y aplica sobre el `app` target instalado
-
-### Comandos
+### Instalación
 
 ```bash
-tsuki install <pkg>          # instala / actualiza
-tsuki remove  <pkg>          # desinstala
-tsuki update                 # actualiza todos los paquetes instalados
-tsuki search  <query>        # busca en todos los sources configurados
-tsuki info    <pkg>          # detalles de un paquete
-tsuki list                   # lista paquetes instalados
-tsuki publish                # publica el paquete actual (requiere tsuki-dk)
-tsuki source add <url>       # añade un source
-tsuki source remove <url>    # elimina un source
-tsuki source list            # lista sources configurados
+tsuki install tsuki-flash                       # latest
+tsuki install tsuki-team/tsuki-flash            # owner/name
+tsuki install tsuki-team/tsuki-flash@v6.0.0    # versión exacta
+tsuki install tsuki-team/tsuki-flash@>=5.0      # rango semver (>=, <=, ~, ^, combos)
 ```
 
-### Auto-actualización
-
-Dado que `tsuki-core` y `tsuki-flash` son paquetes `app`, se actualizan igual que cualquier otra cosa:
+### Comandos disponibles
 
 ```bash
-tsuki update tsuki-core      # actualiza el transpiler
-tsuki update tsuki-flash     # actualiza el compilador/flasher
-tsuki update                 # actualiza todo, incluyendo apps
+tsuki install <pkg>            # instala
+tsuki update  [pkg]            # actualiza todo o uno solo
+tsuki pkg install  <pkg>
+tsuki pkg remove   <pkg>
+tsuki pkg list
+tsuki pkg search   [query]
+tsuki pkg info     <pkg>
+tsuki pkg source add    <url>
+tsuki pkg source remove <url>
+tsuki pkg source list
+tsuki pkg source update        # invalida caché y re-fetcha
 ```
 
-### `~/.tsuki/config.toml`
+### Rutas de instalación
 
-```toml
-[sources]
-urls = [
-  "https://raw.githubusercontent.com/tsuki-team/registry/main",
-  "https://raw.githubusercontent.com/s7lver2/my-packages/main",
-]
-
-[cache]
-ttl_secs = 86400
-
-[installed]
-# El gestor mantiene este bloque automáticamente
-"tsuki-team/tsuki-core"  = "6.0.0"
-"tsuki-team/tsuki-flash" = "6.0.0"
-"tsuki-team/dht"         = "2.0.0"
-```
+| Tipo | Ruta |
+|---|---|
+| `app` | `~/.tsuki/bin/<n>[.exe]` |
+| `library` | `~/.tsuki/libs/<owner>/<n>/<version>/` |
+| `board-pack` | `~/.tsuki/boards/<owner>/<n>/<version>/` |
+| `ide-plugin` | `~/.tsuki/plugins/<owner>/<n>/<version>/` |
 
 ---
 
 ## 5. `tsuki-dk` — Development Kit
 
-`tsuki-dk` es un binario Go independiente (`app`) distribuido a través del mismo gestor de paquetes. Se instala con:
-
-```bash
-tsuki install tsuki-team/tsuki-dk
-```
+Binario Go instalable con `tsuki install tsuki-team/tsuki-dk`.
 
 ### Comandos
 
 ```bash
-tsuki-dk new app       <n>     # crea proyecto de binario (como tsuki-core)
-tsuki-dk new library   <n>     # crea proyecto de librería
-tsuki-dk new board     <n>     # crea proyecto de placa
-tsuki-dk new ide-plugin <n>    # crea proyecto de plugin IDE
-tsuki-dk new sdk-patch <n>     # crea proyecto de parche SDK
+# Crear paquete — wizard interactivo con flechas ↑↓
+tsuki-dk new
+tsuki-dk new library   my-sensor
+tsuki-dk new app       my-tool
+tsuki-dk new board-pack my-boards
+tsuki-dk new ide-plugin dark-theme
+tsuki-dk new sdk-patch  fix-rp2040
 
-tsuki-dk build                    # compila el paquete
-tsuki-dk test                     # ejecuta tests
-tsuki-dk sandbox                  # lanza versión sandboxeada de tsuki para probar
+# Compilar y testear
+tsuki-dk build              # valida tsukilib.toml + go vet en ejemplos
+tsuki-dk test               # go test ./... dentro de tests/ (con go.mod propio)
 
-tsuki-dk publish                  # empaqueta, firma y publica
+# Instalar dependencias del tsuki.toml
+tsuki-dk install
+tsuki-dk install --no-dev   # omite [dev-dependencies]
+
+# Sandbox
+tsuki-dk sandbox            # shell interactiva aislada + servidor registry local
+tsuki-dk sandbox --clean    # borrar y recrear sandbox
+
+# Publicar
+tsuki-dk publish
 tsuki-dk publish --dry-run
-tsuki-dk publish --bump patch|minor|major
+tsuki-dk publish --bump minor
 
-tsuki-dk registry init <url>      # inicializa un repositorio de packages
-tsuki-dk registry add             # añade el paquete actual al packages.json local
-tsuki-dk registry remove <pkg>
-tsuki-dk registry sync            # sube packages.json y tsuki-keys.json al repo
+# Claves Ed25519
+tsuki-dk key generate <n>
+tsuki-dk key export   <n>
+tsuki-dk key list
+
+# Registry local
+tsuki-dk registry init   [dir]
+tsuki-dk registry add
+tsuki-dk registry remove <owner/name>
+tsuki-dk registry sync
+tsuki-dk registry status
 ```
 
-### Estructura de un proyecto `app` (ej: tsuki-flash)
+### Wizard interactivo (`tsuki-dk new`)
 
-```
-tsuki-flash/
-├── tsuki.toml              # manifiesto del paquete
-├── src/                    # fuente Rust/Go del binario
-├── tests/
-└── .tsuki-dk/
-    ├── sandbox/            # instalación sandboxeada de tsuki para tests
-    └── build/              # artefactos de build y binarios por plataforma
-```
+Si se omiten tipo y nombre, un wizard con selección por flechas pregunta:
+
+1. **Tipo** — ↑↓ entre los 5 tipos
+2. **Nombre** — texto libre
+3. **Author** — default desde `git config user.name`
+4. **Descripción**
+5. **Campos específicos por tipo:**
+   - `library` → header C++ + librería Arduino (opcional)
+   - `board-pack` → arquitectura target
+   - `sdk-patch` → app objetivo (tsuki-core / tsuki-flash)
+6. **¿Inicializar git?**
 
 ### Estructura de un proyecto `library`
 
 ```
-tsuki-dht/
+my-sensor/
 ├── tsuki.toml
 ├── lib/
-│   ├── dht.go
-│   └── tsukilib.toml       # compatible con v1.0
-├── examples/
-└── tests/
+│   ├── tsukilib.toml       # funciones/constantes/constructor → C++
+│   └── my-sensor.go        # stubs Go para type-checking
+├── examples/basic/main.go
+├── tests/
+│   ├── go.mod              # generado automáticamente
+│   └── transpile_test.go
+├── .tsuki-dk/
+│   ├── sandbox/            # tsuki aislado
+│   └── build/
+└── README.md
 ```
 
 ### Sandbox
 
-`tsuki-dk sandbox` descarga una copia limpia de tsuki-core y tsuki-flash en `.tsuki-dk/sandbox/`, aplica los patches/plugins del paquete actual sobre ella, y lanza el IDE apuntando a ese sandbox. Los paquetes `app` se sandboxean copiando el binario resultado del build en lugar del binario del sistema.
+`tsuki-dk sandbox` lanza una shell interactiva completamente aislada:
 
-### Publicación
+1. Localiza los binarios de tsuki: PATH → directorio del propio tsuki-dk → `dist/` relativo al cwd
+2. Para tipos no-app: levanta un **servidor HTTP local** en `127.0.0.1:<puerto-libre>`
+3. El servidor sirve el paquete actual como registry efímero (`/packages.json`, `/tsuki-keys.json`, `/download.tar.gz`)
+4. Inyecta el servidor como source de prioridad máxima en el sandbox
+5. Lanza `cmd.exe` / `$SHELL` con el prompt modificado
 
-El flujo de `tsuki-dk publish`:
+```
+[sandbox:my-sensor] E:\GoDotIno\my-sensor>
+```
 
-1. Verifica `tsuki.toml` y que la versión no exista ya en el índice
-2. Ejecuta `tsuki-dk build` y `tsuki-dk test`
-3. Para `app`: compila binarios para todas las plataformas target, calcula checksum de cada uno
-4. Para otros tipos: crea tarball, calcula checksum
-5. Firma cada checksum con la clave privada en `~/.tsuki/keys/<key-name>.pem`
-6. Sube artefactos a la URL de release configurada (GitHub Releases por defecto)
-7. Actualiza `packages.json` del source con la nueva entrada
-8. Sube `packages.json` y `tsuki-keys.json` actualizados
+Dentro se puede usar tsuki normalmente — ve el paquete local:
 
-### Gestión de versiones
+```bash
+[sandbox:my-sensor]> tsuki pkg search
+  s7lver/my-sensor   library   0.1.0
 
-`tsuki-dk` mantiene la versión en `tsuki.toml` con bump semver automático, sincronizable con el tag de git.
+[sandbox:my-sensor]> tsuki install my-sensor
+  ✔ Installed s7lver/my-sensor@0.1.0
+```
+
+El servidor se apaga al salir de la shell.
+
+### `tsuki-dk install`
+
+Lee `[dependencies]` y `[dev-dependencies]` del `tsuki.toml` e instala cada uno vía pkgmgr v2.
+
+### Flujo de publicación
+
+```
+1. build  +  test
+2. Tarball (library/plugin/patch)  ó  binarios por plataforma (app)
+3. SHA-256 de cada artefacto
+4. Firma Ed25519 con ~/.tsuki/keys/<key>.pem
+5. Upload a GitHub Releases (requiere gh CLI)
+6. Actualizar packages.json del source
+7. registry sync → git push
+```
 
 ---
 
-## 6. Compatibilidad con v1.0
+## 6. Modularidad del IDE (plugins)
 
-Los paquetes v1.0 (`godotinolib.toml`) siguen funcionando sin cambios. El runtime detecta el formato por la presencia de `godotinolib.toml` vs `tsuki.toml` y usa el loader correspondiente. Al instalar un paquete v1.0 desde el nuevo gestor, se envuelve automáticamente en un `tsuki.toml` con `type = "library"`.
+### Arquitectura
+
+El IDE Tauri soporta plugins instalados como paquetes `ide-plugin` en `~/.tsuki/plugins/`. El sistema tiene dos capas:
+
+**Rust (`plugin_loader.rs`):**
+- `list_ide_plugins` — escanea `~/.tsuki/plugins/<owner>/<n>/<version>/` y devuelve metadatos
+- `read_plugin_entry` — lee el JS del plugin
+- `read_plugin_styles` — lee el CSS del plugin
+- Respeta `TSUKI_DATA_DIR` para el sandbox de `tsuki-dk sandbox`
+
+**TypeScript (`pluginLoader.ts` + `usePlugins.ts`):**
+- `loadAllPlugins()` — se llama una vez al arrancar el IDE
+- Cada plugin recibe un objeto `context` con una API limitada
+- Los plugins registran contribuciones (UI) llamando a métodos del context
+- `PluginSlot.tsx` renderiza las contribuciones en los puntos de extensión del IDE
+
+### API de plugins (`context`)
+
+```js
+// plugin/index.js
+export function activate(context) {
+  // Añadir pestaña al sidebar
+  context.registerSidebarTab({
+    id: 'my-tab',
+    label: 'My Plugin',
+    render() {
+      const div = document.createElement('div')
+      div.textContent = 'Hello from plugin!'
+      return div
+    }
+  })
+
+  // Botón en la toolbar
+  context.registerToolbarAction({
+    id: 'my-action',
+    label: 'Run',
+    onClick() { context.invokeCommand('my_command') }
+  })
+
+  // Panel en Settings
+  context.registerSettingsPanel({
+    id: 'my-settings',
+    label: 'My Plugin Settings',
+    render() { /* ... */ }
+  })
+
+  // Pestaña en el panel inferior
+  context.registerBottomTab({ id: 'my-log', label: 'My Log', render() { /* ... */ } })
+
+  // Eventos del IDE
+  context.on('project:open', ({ path }) => console.log('opened', path))
+  context.on('plugins:reloaded', () => {})
+
+  context.showMessage('Plugin loaded!')
+  context.getProjectPath()
+  await context.invokeCommand('spawn_process', { cmd: '...', args: [] })
+}
+```
+
+### Slots de extensión
+
+| Slot | Componente | Dónde aparece |
+|---|---|---|
+| `sidebar-tab` | `usePluginSidebarTabs()` | Barra lateral izquierda |
+| `bottom-tab` | `usePluginBottomTabs()` | Panel inferior (junto a Output, Terminal…) |
+| `toolbar-action` | `<PluginSlot slot="toolbar-action" />` | Toolbar superior |
+| `settings-panel` | `usePluginSettingsPanels()` | Pantalla de Settings |
+
+### Integración en IdeScreen
+
+```tsx
+import PluginSlot, { usePluginSidebarTabs, usePluginBottomTabs } from '@/components/plugins/PluginSlot'
+import { usePlugins } from '@/lib/usePlugins'
+
+// En el componente raíz — inicia la carga de plugins
+usePlugins()
+
+// En la toolbar
+<PluginSlot slot="toolbar-action" />
+
+// En el sidebar — añadir las tabs devueltas por usePluginSidebarTabs()
+// En el bottom panel — añadir las tabs de usePluginBottomTabs()
+```
+
+### Seguridad
+
+- Los plugins se ejecutan en el renderer de Tauri (mismo proceso que el IDE)
+- El trust se establece en el momento de instalación mediante verificación Ed25519
+- Los plugins del sandbox (`local-dev-*`) tienen el mismo acceso pero solo están disponibles dentro de `tsuki-dk sandbox`
+- La API `context` no expone acceso directo al DOM del IDE — los plugins inyectan nodos en contenedores `ref` aislados
 
 ---
 
-## 7. Soporte de plugins en el IDE
+## 7. Compatibilidad con v1.0
 
-Para que el IDE sea modular:
-
-1. Al instalar un `ide-plugin`, el gestor lo extrae a `~/.tsuki/plugins/<name>/`
-2. El IDE lee `~/.tsuki/plugins/` al arrancar y carga los entry points JS registrados
-3. Los patches `.patch` se aplican sobre los fuentes del IDE en tiempo de build (o en tiempo de ejecución para parches JS/CSS)
-4. Los permisos declarados en `[ide-plugin].permissions` se añaden automáticamente a `tauri.conf.json`
-
-Para desarrollo, `tsuki-dk sandbox` aplica el plugin sobre la copia sandboxeada y lanza el IDE en modo dev con hot-reload.
+Los paquetes v1.0 (`godotinolib.toml`) siguen funcionando sin cambios. `source.go` detecta el formato automáticamente. Al instalar un paquete v1.0 desde el nuevo gestor se envuelve en un `tsuki.toml` implícito con `type = "library"`.
 
 ---
 
-## 8. Resumen de archivos nuevos/modificados
+## 8. Resumen de archivos
 
 | Archivo | Descripción |
 |---|---|
-| `cmd/tsuki-dk/main.go` | Entry point de tsuki-dk |
-| `cli/internal/pkgmgr/v2/source.go` | Fetching y caché de `packages.json` / `tsuki-keys.json` |
-| `cli/internal/pkgmgr/v2/verify.go` | Verificación Ed25519 de paquetes |
+| `cli/cmd/tsuki-dk/main.go` | Entry point de tsuki-dk |
+| `cli/internal/pkgmgr/v2/types.go` | Structs compartidos |
+| `cli/internal/pkgmgr/v2/source.go` | Sources: add/remove, fetch + caché 24h, compat v1/v2/legacy |
+| `cli/internal/pkgmgr/v2/verify.go` | SHA-256 + Ed25519; skip para `local-dev-*` |
+| `cli/internal/pkgmgr/v2/resolver.go` | ParseRef, semver completo, Resolve |
 | `cli/internal/pkgmgr/v2/install.go` | Descarga, extracción e instalación por tipo |
-| `cli/internal/pkgmgr/v2/resolver.go` | Resolución de versiones y dependencias |
-| `cli/internal/cli/pkg.go` | Comandos CLI: install, remove, search, publish, source, list |
-| `tsuki-dk/new.go` | Scaffolding de proyectos nuevos (todos los tipos incluyendo app) |
-| `tsuki-dk/sandbox.go` | Gestión del sandbox |
-| `tsuki-dk/publish.go` | Empaquetado, compilación multi-plataforma, firma y publicación |
-| `tsuki-dk/registry.go` | Gestión del repositorio de paquetes |
-| `src/runtime/pkg_loader.rs` | Loader extendido para `tsuki.toml` v2 |
-| `tsuki.toml` (en tsuki-core) | tsuki-core como paquete app |
-| `flash/tsuki.toml` (en tsuki-flash) | tsuki-flash como paquete app |
+| `cli/internal/pkgmgr/v2/resolver_test.go` | 40+ casos de test |
+| `cli/internal/cli/pkg.go` | Comandos: install, remove, list, search, source, info |
+| `cli/internal/cli/cmd_install.go` | `tsuki install` shortcut |
+| `cli/internal/cli/cmd_update.go` | `tsuki update [pkg]` |
+| `cli/internal/cli/root.go` | Registro de comandos |
+| `cli/internal/dk/root.go` | Root cobra de tsuki-dk |
+| `cli/internal/dk/manifest.go` | Parser tsuki.toml (sin deps externas) |
+| `cli/internal/dk/new.go` | Wizard interactivo con ↑↓ |
+| `cli/internal/dk/build_test_cmd.go` | build (go vet ejemplos) + test |
+| `cli/internal/dk/install_deps.go` | `tsuki-dk install` |
+| `cli/internal/dk/sandbox.go` | Shell interactiva con prompt `[sandbox:<n>]` |
+| `cli/internal/dk/sandbox_server.go` | Servidor HTTP local efímero (registry de desarrollo) |
+| `cli/internal/dk/publish.go` | Pack, firma, upload GitHub Releases |
+| `cli/internal/dk/registry.go` | init/add/remove/sync/status |
+| `cli/internal/dk/key.go` | Claves Ed25519: generate/export/list |
+| `tsuki-core.toml` | tsuki-core como paquete app |
+| `tsuki-flash.toml` | tsuki-flash como paquete app |
+| `tools/build.py` | build_dk + tsuki-dk en instaladores Unix/Windows |
+| `ide/src-tauri/src/plugin_loader.rs` | Comandos Rust: list_ide_plugins, read_plugin_entry, read_plugin_styles |
+| `ide/src-tauri/src/main.rs` | Registra los 3 comandos del plugin loader |
+| `ide/src/lib/pluginLoader.ts` | Carga JS de plugins, context API, registro de contribuciones |
+| `ide/src/lib/usePlugins.ts` | Hook React: carga inicial + re-render al cambiar plugins |
+| `ide/src/components/plugins/PluginSlot.tsx` | Componente + hooks para renderizar contribuciones por slot |
+
+---
+
+## 9. Modularidad del IDE — Hoja de ruta hacia plugins oficiales
+
+Esta sección documenta la arquitectura que permite extraer Sandbox, LSP y Git como paquetes `ide-plugin` independientes, distribuibles a través del mismo gestor de paquetes v2.
+
+### 9.1 Principio general
+
+El IDE no importa directamente ninguna feature experimental. Cada feature se registra a sí misma a través de la API de context durante `activate()`. El IDE solo provee:
+
+- Los **slots de extensión** (puntos donde los plugins inyectan UI)
+- La **context API** (única interfaz contractual entre IDE y plugin)
+- El **event bus** (comunicación desacoplada)
+
+```
+tsuki-ide (core)
+  ├── slot: sidebar-tab
+  ├── slot: bottom-tab
+  ├── slot: toolbar-action
+  ├── slot: settings-panel
+  ├── slot: workstation         ← página completa (Code/Sandbox/Export bar)
+  ├── slot: status-bar          ← items en el strip inferior
+  └── slot: editor-extension   ← completions, diagnostics, inlay hints
+```
+
+### 9.2 Context API completa
+
+```js
+// plugin/index.js
+export function activate(context) {
+
+  // ── Slots de UI ──────────────────────────────────────────────────────────
+
+  context.registerSidebarTab({
+    id: 'my-tab', label: 'My Plugin', icon: '⚡',
+    render() { return document.createElement('div') }
+  })
+
+  context.registerBottomTab({
+    id: 'my-log', label: 'My Log',
+    render() { return document.createElement('div') }
+  })
+
+  context.registerToolbarAction({
+    id: 'my-btn', label: 'Run', icon: '▶',
+    onClick() { context.invokeCommand('spawn_process', { cmd: '...' }) }
+  })
+
+  context.registerSettingsPanel({
+    id: 'my-settings', label: 'My Plugin Settings',
+    render() { return document.createElement('div') }
+  })
+
+  // Página completa en la barra Code/Sandbox/Export
+  context.registerWorkstation({
+    id: 'my-workstation', label: 'Simulator', icon: '🔌', shortcut: '4',
+    render() {
+      const div = document.createElement('div')
+      div.style.cssText = 'width:100%;height:100%;'
+      const root = context.renderReact(div, React.createElement(MySimulator))
+      return div
+    }
+  })
+
+  context.registerStatusBarItem({
+    id: 'my-status', position: 'right',
+    render() {
+      const span = document.createElement('span')
+      span.textContent = 'plugin ready'
+      return span
+    }
+  })
+
+  // ── Editor extension (LSP-style) ─────────────────────────────────────────
+
+  context.registerEditorExtension({
+    id: 'my-lsp',
+
+    onFileChange({ fileId, content, ext, board }) {
+      // reacciona al cambio de archivo activo
+    },
+
+    async getDiagnostics({ content, ext }) {
+      return [{ fileId: '...', line: 1, col: 1, message: 'error', severity: 'error' }]
+    },
+
+    async getCompletions({ content, ext }, { line, column }) {
+      return [{ label: 'setup', kind: 'function' }]
+    },
+
+    async getInlayHints({ content, ext }) {
+      return [{ line: 5, col: 12, label: 'int', kind: 'type' }]
+    },
+
+    dispose() { /* cleanup */ }
+  })
+
+  // ── IDE state (lectura reactiva) ─────────────────────────────────────────
+
+  const { board, projectPath } = context.getState()
+
+  const unsub = context.onStateChange(s => s.board, newBoard => {
+    console.log('board changed to', newBoard)
+  })
+
+  // ── Eventos del IDE ──────────────────────────────────────────────────────
+
+  context.on('project:open',    ({ path }) => {})
+  context.on('board:change',    ({ board }) => {})
+  context.on('theme:change',    ({ theme }) => {})
+  context.on('plugins:reloaded', () => {})
+
+  // ── React rendering ──────────────────────────────────────────────────────
+  // React y ReactDOM están disponibles directamente — no hace falta importarlos.
+
+  const root = context.renderReact(container, React.createElement(MyComponent, { board }))
+  // root es un ReactDOM.Root — llama root.unmount() al hacer dispose()
+}
+```
+
+### 9.3 Plugins oficiales planificados
+
+| Plugin | Paquete | Slots que usa | Estado |
+|--------|---------|---------------|--------|
+| Sandbox (simulador de circuitos) | `tsuki-team/ide-sandbox` | `workstation` | Pendiente extracción |
+| LSP (diagnósticos + completions) | `tsuki-team/ide-lsp` | `editor-extension`, `settings-panel`, `bottom-tab` | Pendiente extracción |
+| Git sidebar | `tsuki-team/ide-git` | `sidebar-tab`, `settings-panel` | Pendiente extracción |
+| WebKit panel | `tsuki-team/ide-webkit` | `workstation`, `settings-panel` | Pendiente extracción |
+
+#### Manifiesto de un plugin oficial
+
+```toml
+[package]
+name        = "ide-sandbox"
+version     = "1.0.0"
+type        = "ide-plugin"
+description = "Arduino circuit simulator for tsuki-ide"
+author      = "tsuki-team"
+license     = "MIT"
+
+[package.signing]
+key = "tsuki-team"
+
+[dependencies]
+"tsuki-team/tsuki-ide" = ">=1.0"
+
+[ide-plugin]
+entry       = "plugin/index.js"
+permissions = ["shell:execute", "fs:read"]
+slots       = ["workstation"]
+```
+
+### 9.4 Proceso de extracción de una feature a plugin
+
+El proceso es siempre el mismo — se documenta aquí usando Sandbox como ejemplo:
+
+**Paso 1 — Crear el paquete con tsuki-dk**
+```bash
+tsuki-dk new ide-plugin ide-sandbox
+```
+
+Estructura generada:
+```
+ide-sandbox/
+├── tsuki.toml
+├── plugin/
+│   ├── index.js      ← activate(context) entry point
+│   └── styles.css    ← estilos inyectados en <head>
+└── README.md
+```
+
+**Paso 2 — Mover la lógica al plugin**
+
+El componente React existente (`SandboxPanel.tsx`) se mueve al directorio del plugin. Dentro de `index.js`:
+
+```js
+// plugin/index.js  — ide-sandbox
+export function activate(context) {
+  // Lazy-load el componente pesado solo cuando el workstation está activo
+  let SandboxApp = null
+
+  context.registerWorkstation({
+    id:       'sandbox',
+    label:    'Sandbox',
+    icon:     '🔌',
+    shortcut: '2',
+    render() {
+      const container = document.createElement('div')
+      container.style.cssText = 'width:100%;height:100%;overflow:hidden'
+
+      // El componente usa context.getState() y context.onStateChange()
+      // en lugar de importar el store directamente
+      import('./SandboxApp.js').then(({ SandboxApp }) => {
+        context.renderReact(container, React.createElement(SandboxApp, { context }))
+      })
+
+      return container
+    }
+  })
+
+  context.registerSettingsPanel({
+    id:    'sandbox-settings',
+    label: 'Sandbox',
+    render() {
+      const div = document.createElement('div')
+      import('./SandboxSettings.js').then(({ SandboxSettings }) => {
+        context.renderReact(div, React.createElement(SandboxSettings, { context }))
+      })
+      return div
+    }
+  })
+}
+```
+
+**Paso 3 — Eliminar el import hardcodeado del IDE**
+
+En `IdeScreen.tsx`, borrar:
+```diff
+- import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
+```
+
+El slot `workstation` con `id: 'sandbox'` es registrado por el plugin. El IDE no necesita conocer `SandboxPanel` en tiempo de compilación.
+
+**Paso 4 — Probar con sandbox local**
+```bash
+cd ide-sandbox
+tsuki-dk sandbox
+# en la shell aislada:
+tsuki install ide-sandbox   # instala desde el registry local efímero
+# abrir el IDE — el workstation Sandbox aparece vía el plugin
+```
+
+**Paso 5 — Publicar**
+```bash
+tsuki-dk publish
+```
+
+Esto empaqueta `plugin/`, firma con Ed25519, sube a GitHub Releases y actualiza `packages.json` del source oficial.
+
+### 9.5 Integración con el build oficial
+
+El pipeline de CI de `tsuki-ide` ejecuta, para cada release:
+
+```bash
+# Para cada plugin oficial bajo packages/official/
+for plugin in ide-sandbox ide-lsp ide-git ide-webkit; do
+  cd packages/official/$plugin
+  tsuki-dk build
+  tsuki-dk test
+  tsuki-dk publish --bump patch   # auto-bump si el código cambió
+  cd -
+done
+
+# Sincronizar el registry oficial
+tsuki-dk registry sync
+git push
+```
+
+El CLI incluye el source oficial como source de prioridad máxima por defecto. Cuando el usuario ejecuta `tsuki update`, los plugins oficiales se actualizan igual que `tsuki-core` o `tsuki-flash`.
+
+### 9.6 Cómo el IDE descubre plugins tras una instalación
+
+Cuando el usuario ejecuta `tsuki install tsuki-team/ide-sandbox`:
+
+1. El CLI descarga y extrae el plugin en `~/.tsuki/plugins/tsuki-team/ide-sandbox/<version>/`
+2. `PackagesSidebar` detecta el éxito y llama `refreshPlugins()` (de `usePlugins.ts`)
+3. `refreshPlugins` vuelve a llamar `list_ide_plugins` (Tauri) → escanea el filesystem
+4. El nuevo plugin se carga con `loadPlugin()` → `activate(context)` se ejecuta
+5. `notifyPluginsChanged()` provoca re-render en todos los componentes suscritos
+6. El workstation/sidebar/bottom-tab nuevo aparece sin reiniciar el IDE
+
+### 9.7 Consideraciones de seguridad
+
+- El trust se establece en el momento de la instalación mediante verificación Ed25519. Una vez instalado, el plugin se ejecuta con el mismo nivel de confianza que el IDE.
+- Los plugins del sandbox de desarrollo (`local-dev-*`) solo se sirven en `127.0.0.1` — nunca llegan al registry de producción.
+- La API `context` no expone el store de Zustand directamente: `getState()` devuelve un snapshot inmutable, y `onStateChange()` solo permite leer, nunca mutar.
+- Las mutaciones del estado del IDE se hacen exclusivamente via `context.invokeCommand()` → comandos Tauri registrados explícitamente.

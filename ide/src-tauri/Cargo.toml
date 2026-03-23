@@ -1,6 +1,6 @@
 [package]
 name = "tsuki-ide"
-version = "5.4.0"
+version = "5.3.2"
 description = "tsuki IDE — Write Go, Flash Arduino"
 authors = ["s7lver"]
 license = "MIT"
@@ -48,6 +48,14 @@ serde_json  = "1"
 tokio       = { version = "1", features = ["full"] }
 which       = "6"
 portable-pty = "0.8"
+
+# ── updater.rs dependencies ────────────────────────────────────────────────────
+dirs          = "5"                                             # home_dir() for installer paths
+base64        = "0.22"                                          # Ed25519 signature decoding
+ed25519-dalek = { version = "2", features = ["digest"] }       # signature verification
+sha2          = "0.10"                                          # SHA-256 checksum for sig
+hex           = "0.4"                                           # hex encoding for checksum
+open          = "5"                                             # fallback: open browser for release page
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

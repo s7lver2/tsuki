@@ -65,6 +65,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&globalNoColor, "no-color", false, "disable colored output")
 
 	rootCmd.AddCommand(
+		// Project commands
 		newInitCmd(),
 		newBuildCmd(),
 		newUploadCmd(),
@@ -73,13 +74,18 @@ func init() {
 		newBoardsCmd(),
 		newCleanCmd(),
 		newVersionCmd(),
-		newPkgCmd(),
 		newSimulateCmd(),
 		newWebkitCmd(),
 		newMonitorCmd(),
+
+		// Package management (top-level shortcuts)
+		newTopInstallCmd(), // tsuki install <pkg>
+		newUpdateCmd(),     // tsuki update [pkg]
+
+		// Package management (full subcommand tree)
+		newPkgCmd(), // tsuki pkg install / remove / search / source / ...
 	)
 }
-
 
 // banner returns the styled ASCII banner.
 func banner() string {
@@ -94,7 +100,6 @@ func banner() string {
 	if color.NoColor {
 		return b
 	}
-	// Color the banner cyan+bold
 	return ui.ColorInfo.Sprint(b)
 }
 

@@ -11,11 +11,14 @@ import {
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
   Beaker, ToggleLeft, GitBranch, Languages, Bug, FileText,
   Trash2, ExternalLink, AlertTriangle, RotateCcw, User, Layers,
-  Download, Plus, X, Radio, Package, Globe,
+  Download, Plus, X, Radio, Package, Globe, Puzzle,
+  BadgeCheck, Users,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { clsx } from 'clsx'
 import { useT, AVAILABLE_LANGS, LANG_META, LangCode } from '@/lib/i18n'
+import { usePluginSettingsPanels, PluginSettingsPanel } from '@/components/plugins/PluginSlot'
+import PluginsManagerTab from '@/components/plugins/PluginsManagerTab'
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Nav definitions
@@ -29,6 +32,11 @@ const MAIN_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] =
   { id: 'editor',     labelKey: 'settings.tab_editor',     icon: <Code2    size={13} /> },
   { id: 'language',   labelKey: 'settings.tab_language',   icon: <Languages size={13} /> },
   { id: 'updates',    labelKey: 'settings.tab_updates',    icon: <Download  size={13} /> },
+]
+
+const PLUGINS_NAV: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'plugins-core',      label: 'Core Plugins',      icon: <BadgeCheck size={13} className="text-sky-400" /> },
+  { id: 'plugins-community', label: 'Community',         icon: <Users      size={13} className="text-amber-400" /> },
 ]
 
 const DEV_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
@@ -322,6 +330,24 @@ export default function SettingsScreen() {
             ))}
           </div>
 
+          {/* Plugins group */}
+          <div className="mx-2 border-t border-[var(--border)] mt-1" />
+          <div className="p-2 pb-1 flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5 px-2 py-1.5 mb-0.5">
+              <Puzzle size={11} className="text-[var(--fg-faint)]" />
+              <span className="text-[10px] font-semibold text-[var(--fg-faint)] uppercase tracking-widest">
+                Plugins
+              </span>
+            </div>
+            {PLUGINS_NAV.map(n => (
+              <NavItem
+                key={n.id} id={n.id} label={n.label} icon={n.icon}
+                active={settingsTab === n.id || settingsTab.startsWith('plugin:')}
+                onClick={() => setSettingsTab(n.id)}
+              />
+            ))}
+          </div>
+
           {/* Divider + Experiments group */}
           <div className="mx-2 border-t border-[var(--border)] mt-1" />
 
@@ -408,6 +434,10 @@ export default function SettingsScreen() {
               {settingsTab === 'exp-workstations' && expEnabled && settings.expWorkstationsEnabled && <WorkstationsTab />}
               {settingsTab === 'updates'      && <UpdatesTab />}
               {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
+              {/* All plugin tabs share a single mounted instance so state persists across navigation */}
+              {(settingsTab === 'plugins' || settingsTab === 'plugins-core' || settingsTab === 'plugins-community' || settingsTab.startsWith('plugin:')) && (
+                <PluginsTab key="plugins-manager" section={settingsTab === 'plugins' ? 'core' : settingsTab} />
+              )}
             </div>
           )}
         </div>
@@ -3589,4 +3619,11 @@ function WebkitMiniDemo() {
       </div>
     </div>
   )
+}
+// ─────────────────────────────────────────────────────────────────────────────
+//  Plugins tab — full plugin manager (Core + Community)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PluginsTab({ section }: { section?: string }) {
+  return <PluginsManagerTab initialTab={section ?? 'core'} />
 }

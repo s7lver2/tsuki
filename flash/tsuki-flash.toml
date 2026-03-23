@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  tsuki-flash — package manifest
+#
+#  This file makes tsuki-flash a first-class package in the tsuki ecosystem.
+#  Users can install / update it with:
+#    tsuki install tsuki-team/tsuki-flash
+#    tsuki update tsuki-flash
+# ─────────────────────────────────────────────────────────────────────────────
+
+[package]
+name        = "tsuki-flash"
+version     = "6.0.0"
+type        = "app"
+description = "Arduino compile & flash toolchain — no arduino-cli required"
+author      = "tsuki-team"
+license     = "MIT"
+repository  = "https://github.com/s7lver2/tsuki"
+
+[package.signing]
+key = "tsuki-team"
+
+[app]
+# The binary is installed as 'tsuki-flash' in ~/.tsuki/bin/
+install_as = "tsuki-flash"
+
+# Pre-built binaries per platform.
+[app.binaries]
+"x86_64-windows"  = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-flash-windows-amd64.exe"
+"x86_64-linux"    = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-flash-linux-amd64"
+"aarch64-linux"   = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-flash-linux-arm64"
+"arm-linux"       = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-flash-linux-arm"
+"x86_64-macos"    = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-flash-darwin-amd64"
+"aarch64-macos"   = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-flash-darwin-arm64"
+
+[dependencies]
+# tsuki-flash has no tsuki-package dependencies.

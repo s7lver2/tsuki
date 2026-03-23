@@ -82,21 +82,30 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
 Textarea.displayName = 'Textarea'
 
 /* ── Toggle ── */
-export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+export function Toggle({ on, onToggle, disabled, loading }: {
+  on: boolean; onToggle: () => void; disabled?: boolean; loading?: boolean
+}) {
   return (
     <button
-      onClick={onToggle}
+      onClick={disabled || loading ? undefined : onToggle}
       className={clsx(
-        'relative w-8 h-[18px] rounded-full transition-colors cursor-pointer border-0',
+        'relative w-8 h-[18px] rounded-full transition-colors border-0 flex-shrink-0',
+        disabled || loading ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
         on ? 'bg-[var(--fg)]' : 'bg-[var(--surface-4)]'
       )}
       aria-checked={on}
+      aria-disabled={disabled || loading}
       role="switch"
     >
-      <span className={clsx(
-        'absolute top-[2px] w-[14px] h-[14px] rounded-full bg-[var(--surface)] transition-all',
-        on ? 'left-[calc(100%-16px)]' : 'left-[2px]'
-      )} />
+      {loading
+        ? <span className="absolute inset-0 flex items-center justify-center">
+            <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin opacity-60" />
+          </span>
+        : <span className={clsx(
+            'absolute top-[2px] w-[14px] h-[14px] rounded-full bg-[var(--surface)] transition-all duration-200',
+            on ? 'left-[calc(100%-16px)]' : 'left-[2px]'
+          )} />
+      }
     </button>
   )
 }

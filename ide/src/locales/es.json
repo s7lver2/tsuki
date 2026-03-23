@@ -271,6 +271,7 @@
     "tab_developer": "Desarrollador",
     "tab_lsp": "Servidor de lenguaje",
     "tab_updates": "Actualizaciones",
+    "tab_plugins": "Plugins",
     "tab_profile": "Perfil"
   }
 }

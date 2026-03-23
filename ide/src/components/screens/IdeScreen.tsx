@@ -4,12 +4,10 @@ import NewProjectModal from '@/components/other/NewProjectModal'
 import { useState, useEffect, useRef } from 'react'
 import { Btn, Divider } from '@/components/shared/primitives'
 import FilesSidebar from '@/components/other/FilesSidebar'
-import GitSidebar from '@/components/experiments/GitSidebar/GitSidebar'
 import PackagesSidebar from '@/components/other/PackagesSidebar'
 import ExamplesSidebar from '@/components/other/ExamplesSidebar'
 import CodeEditor from '@/components/other/CodeEditor'
 import BottomPanel from '@/components/other/BottomPanel'
-import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import {
   Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
@@ -21,6 +19,16 @@ import { clsx } from 'clsx'
 import TsukiLogo from '@/components/shared/TsukiLogo'
 import { showContextMenu } from '@/components/shared/ContextMenu'
 import { useT } from '@/lib/i18n'
+import { usePlugins } from '@/lib/usePlugins'
+import PluginPermissionsModal from '@/components/plugins/PluginPermissionModal'
+import PluginSlot, {
+  usePluginSidebarTabs,
+  usePluginWorkstations,
+  usePluginStatusBarItems,
+  PluginSidebarTab,
+  PluginWorkstation,
+  PluginStatusBarItem,
+} from '@/components/plugins/PluginSlot'
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
@@ -32,13 +40,12 @@ const EXPERIMENTAL_BOARDS: Record<string, string> = {
 }
 
 // ── Workstation pages ─────────────────────────────────────────────────────────
+// Only built-in workstations here. Sandbox, and any future workstations,
+// are registered by installed ide-plugin packages via the plugin system.
 
-type Workstation = 'code' | 'sandbox' | 'export'
-
-const WORKSTATIONS: { id: Workstation; label: string; Icon: ElementType; shortcut: string }[] = [
-  { id: 'code',    label: 'Code',    Icon: Code2,  shortcut: '1' },
-  { id: 'sandbox', label: 'Sandbox', Icon: Cpu,    shortcut: '2' },
-  { id: 'export',  label: 'Export',  Icon: Share2, shortcut: '3' },
+const WORKSTATIONS: { id: string; label: string; Icon: ElementType; shortcut: string }[] = [
+  { id: 'code',   label: 'Code',   Icon: Code2,  shortcut: '1' },
+  { id: 'export', label: 'Export', Icon: Share2, shortcut: '3' },
 ]
 
 export default function IdeScreen() {
@@ -51,29 +58,35 @@ export default function IdeScreen() {
   } = useStore()
 
   const t = useT()
+  const { consentRequest, dismissConsent } = usePlugins()
+  const pluginSidebarTabs  = usePluginSidebarTabs()
+  const pluginWorkstations = usePluginWorkstations()
+  const pluginStatusLeft   = usePluginStatusBarItems('left')
+  const pluginStatusRight  = usePluginStatusBarItems('right')
+  // Active plugin sidebar tab (separate from built-in sidebarTab)
+  const [activePluginTab,   setActivePluginTab]   = useState<string | null>(null)
+
   const [showNewProjectModal, setShowNewProjectModal] = useState(false)
 
-  // Legacy sandbox panel (used when workstations are OFF)
-  const [sandboxOpen, setSandboxOpen] = useState(false)
-  const [sandboxWidth, setSandboxWidth] = useState(480)
-  const [resizingSandbox, setResizingSandbox] = useState(false)
-  const [resizingSidebar, setResizingSidebar] = useState(false)
+  // Legacy sandbox side panel state kept for backward compat
+  // (only shown when workstations experiment is OFF and sandbox plugin installed)
+  const [sandboxOpen,       setSandboxOpen]       = useState(false)
+  const [sandboxWidth,      setSandboxWidth]       = useState(480)
+  const [resizingSandbox,   setResizingSandbox]   = useState(false)
+  const [resizingSidebar,   setResizingSidebar]   = useState(false)
 
-  // Workstation page (used when workstations experiment is ON)
-  const [workstation, setWorkstation] = useState<Workstation>('code')
+  // Workstation — string to support plugin-registered workstation IDs
+  const [workstation, setWorkstation] = useState<string>('code')
 
   const workstationsEnabled = settings.experimentsEnabled && settings.expWorkstationsEnabled
-  const sandboxEnabled      = settings.experimentsEnabled && settings.expSandboxEnabled
-  // Auto-open sandbox when a circuit is dispatched from Examples
+  // Auto-switch to sandbox workstation when a circuit is dispatched from Examples.
+  // 'sandbox' is the id registered by ide-sandbox plugin — if not installed, this is a no-op.
   const { pendingCircuit, clearPendingCircuit } = useStore(s => ({ pendingCircuit: s.pendingCircuit, clearPendingCircuit: s.clearPendingCircuit }))
   useEffect(() => {
     if (!pendingCircuit) return
     clearPendingCircuit()
-    if (workstationsEnabled) {
-      setWorkstation('sandbox')
-    } else if (sandboxEnabled) {
-      setSandboxOpen(true)
-    }
+    if (workstationsEnabled) setWorkstation('sandbox')
+    else setSandboxOpen(true)
   }, [pendingCircuit?.id]) // eslint-disable-line
 
   const activeTab  = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
@@ -119,11 +132,14 @@ export default function IdeScreen() {
       if (e.key === 'T' && e.shiftKey)  { e.preventDefault(); handleCheck();   return }
       if (e.key === 'U' && e.shiftKey)  { e.preventDefault(); handleFlash();   return }
       if (e.key === 'm' && !e.shiftKey) { e.preventDefault(); handleMonitor(); return }
-      // Workstation shortcuts: Ctrl+1/2/3 when workstations enabled
+      // Workstation shortcuts: Ctrl+digit when workstations enabled
       if (workstationsEnabled) {
-        if (e.key === '1') { setWorkstation('code');    return }
-        if (e.key === '2') { setWorkstation('sandbox'); return }
-        if (e.key === '3') { setWorkstation('export');  return }
+        if (e.key === '1') { setWorkstation('code');   return }
+        if (e.key === '3') { setWorkstation('export'); return }
+        // Plugin workstations use their declared shortcut key
+        for (const ws of pluginWorkstations) {
+          if (ws.shortcut && e.key === ws.shortcut) { setWorkstation(ws.id); return }
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -261,25 +277,10 @@ export default function IdeScreen() {
           <Terminal size={12} /><span className="topbar-label-sm ml-1">{t('topbar.monitor')}</span>
         </Btn>
 
-        <div className="flex-1" />
+        {/* Plugin toolbar actions */}
+        <PluginSlot slot="toolbar-action" />
 
-        {/* Legacy sandbox toggle — only shown when workstations are OFF */}
-        {!workstationsEnabled && sandboxEnabled && (
-          <button
-            onClick={() => setSandboxOpen(o => !o)}
-            title="Tsuki Sandbox — Arduino circuit simulator"
-            className={clsx(
-              'flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium transition-colors cursor-pointer flex-shrink-0',
-              sandboxOpen
-                ? 'bg-[var(--active)] border-[var(--border)] text-[var(--fg)]'
-                : 'bg-transparent border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-            )}
-          >
-            <Cpu size={11} />
-            {t('topbar.sandbox')}
-            <span className="text-[9px] opacity-60 font-mono">β</span>
-          </button>
-        )}
+        <div className="flex-1" />
 
         <Btn variant="ghost" size="xs" onClick={toggleTheme}>
           {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
@@ -301,10 +302,9 @@ export default function IdeScreen() {
         {/* Activity bar */}
         <div className="w-10 flex flex-col items-center py-1.5 gap-0.5 border-r border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
           {[
-            { id: 'files',    icon: <Files size={17} />,     tip: t('sidebar.explorer'),  show: true },
-            { id: 'git',      icon: <GitBranch size={17} />, tip: t('sidebar.git'),       show: settings.experimentsEnabled && settings.expGitEnabled },
-            { id: 'packages', icon: <Package size={17} />,   tip: t('sidebar.packages'),  show: true },
-            { id: 'examples', icon: <BookOpen size={17} />,  tip: 'Examples',             show: true },
+            { id: 'files',    icon: <Files size={17} />,    tip: t('sidebar.explorer'), show: true },
+            { id: 'packages', icon: <Package size={17} />,  tip: t('sidebar.packages'), show: true },
+            { id: 'examples', icon: <BookOpen size={17} />, tip: 'Examples',             show: true },
           ].filter(item => item.show).map(({ id, icon, tip }) => (
             <button
               key={id} title={tip}
@@ -322,6 +322,34 @@ export default function IdeScreen() {
               {icon}
             </button>
           ))}
+
+          {/* Plugin sidebar tabs (e.g. ide-git registers one here) */}
+          {pluginSidebarTabs.map(({ id, label, icon }) => {
+            const isActive = sidebarOpen && activePluginTab === id
+            return (
+              <button
+                key={id} title={label}
+                onClick={() => {
+                  if (isActive) {
+                    setActivePluginTab(null)
+                    useStore.setState({ sidebarOpen: false })
+                  } else {
+                    setActivePluginTab(id)
+                    useStore.setState({ sidebarOpen: true, sidebarTab: '__plugin__' as any })
+                  }
+                }}
+                className={clsx(
+                  'w-8 h-8 flex items-center justify-center rounded cursor-pointer border-0 transition-colors relative text-xs',
+                  isActive
+                    ? 'text-[var(--fg)]'
+                    : 'text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
+                )}
+              >
+                {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-5 bg-[var(--fg)] rounded-r" />}
+                {icon ? <span style={{ fontSize: 14 }}>{icon}</span> : <span style={{ fontSize: 10 }}>{label.slice(0, 2)}</span>}
+              </button>
+            )
+          })}
           <div className="flex-1" />
           <button
             title="Settings"
@@ -338,9 +366,21 @@ export default function IdeScreen() {
           sidebarOpen ? '' : 'w-0',
         )} style={sidebarOpen ? { width: settings.sidebarWidth } : {}}>
           {sidebarOpen && sidebarTab === 'files'    && <FilesSidebar />}
-          {sidebarOpen && sidebarTab === 'git'      && <GitSidebar />}
           {sidebarOpen && sidebarTab === 'packages' && <PackagesSidebar />}
           {sidebarOpen && sidebarTab === 'examples' && <ExamplesSidebar />}
+          {/* Plugin sidebar panels (e.g. ide-git renders here) */}
+          {sidebarOpen && activePluginTab && pluginSidebarTabs.map(tab => (
+            <PluginSidebarTab
+              key={tab.id}
+              pluginId={tab.pluginId}
+              tabId={tab.id}
+              label={tab.label}
+              icon={tab.icon}
+              active={activePluginTab === tab.id}
+              onActivate={() => setActivePluginTab(tab.id)}
+              renderContent={tab.renderContent}
+            />
+          ))}
         </div>
 
         {/* Sidebar resize handle */}
@@ -387,11 +427,16 @@ export default function IdeScreen() {
                 />
               </div>
 
-              {/* Sandbox workstation */}
-              <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'sandbox' && 'hidden')}>
-                <SandboxWorkstation />
-              </div>
-
+              {/* Sandbox workstation — rendered by ide-sandbox plugin if installed */}
+              {/* Plugin workstations (sandbox, webkit, etc.) */}
+              {pluginWorkstations.map(ws => (
+                <PluginWorkstation
+                  key={ws.id}
+                  workstationId={ws.id}
+                  active={workstation === ws.id}
+                  renderContent={ws.renderContent}
+                />
+              ))}
 
               {/* Export workstation */}
               <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'export' && 'hidden')}>
@@ -458,41 +503,6 @@ export default function IdeScreen() {
                     <CodeEditor />
                   </div>
                 </div>
-
-
-                {/* Legacy sandbox side panel */}
-                {sandboxEnabled && sandboxOpen && (
-                  <>
-                    <div
-                      className="w-[3px] bg-[var(--border)] hover:bg-[var(--fg-faint)] cursor-col-resize flex-shrink-0 transition-colors"
-                      onMouseDown={() => setResizingSandbox(true)}
-                    />
-                    <div
-                      className="flex flex-col border-l border-[var(--border)] bg-[var(--surface)] flex-shrink-0 overflow-hidden"
-                      style={{ width: sandboxWidth }}
-                    >
-                      <SandboxPanel onClose={() => setSandboxOpen(false)} />
-                    </div>
-                  </>
-                )}
-
-                {sandboxEnabled && !sandboxOpen && (
-                  <div className="w-6 border-l border-[var(--border)] bg-[var(--surface-1)] flex flex-col items-center py-2 flex-shrink-0">
-                    <button
-                      onClick={() => setSandboxOpen(true)}
-                      title="Open Tsuki Sandbox"
-                      className="w-5 flex flex-col items-center gap-0 text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent transition-colors py-1"
-                    >
-                      <Cpu size={12} />
-                      <span
-                        className="text-[8px] font-semibold uppercase tracking-widest mt-2"
-                        style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
-                      >
-                        Sandbox
-                      </span>
-                    </button>
-                  </div>
-                )}
               </div>
 
               <BottomPanel />
@@ -506,6 +516,7 @@ export default function IdeScreen() {
         <WorkstationBar
           active={workstation}
           onSelect={setWorkstation}
+          pluginWorkstations={pluginWorkstations}
         />
       )}
 
@@ -514,18 +525,33 @@ export default function IdeScreen() {
       {showNewProjectModal && (
         <NewProjectModal onClose={() => setShowNewProjectModal(false)} />
       )}
+
+      {/* Plugin permissions consent dialog */}
+      {consentRequest && (
+        <PluginPermissionsModal
+          meta={consentRequest.meta}
+          onGrant={granted => dismissConsent(granted)}
+          onDeny={() => dismissConsent(new Set())}
+        />
+      )}
     </div>
   )
 }
 
 // ── Workstation bar ───────────────────────────────────────────────────────────
 
+type PluginWs = { id: string; label: string; icon?: string; shortcut?: string; renderContent: () => HTMLElement; pluginId: string }
+
 function WorkstationBar({
-  active, onSelect,
+  active, onSelect, pluginWorkstations,
 }: {
-  active: Workstation
-  onSelect: (w: Workstation) => void
+  active: string
+  onSelect: (w: string) => void
+  pluginWorkstations: PluginWs[]
 }) {
+  const allWs = [...WORKSTATIONS, ...pluginWorkstations.map(pw => ({
+    id: pw.id, label: pw.label, shortcut: pw.shortcut ?? '', Icon: null as any,
+  }))]
   return (
     <div className="h-9 flex items-center justify-center gap-0 border-t border-[var(--border)] bg-[var(--surface-2)] flex-shrink-0 px-2 select-none">
       <div className="flex items-center gap-px rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--surface-3)]">
@@ -543,6 +569,26 @@ function WorkstationBar({
             )}
           >
             <ws.Icon size={13} />
+            <span className="tracking-wide uppercase text-[10px]">{ws.label}</span>
+            {active === ws.id && (
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[var(--fg)]" />
+            )}
+          </button>
+        ))}
+        {/* Plugin workstation buttons */}
+        {pluginWorkstations.map(ws => (
+          <button
+            key={ws.id}
+            onClick={() => onSelect(ws.id)}
+            title={ws.shortcut ? `${ws.label} (Ctrl+${ws.shortcut})` : ws.label}
+            className={clsx(
+              'flex items-center gap-1.5 px-4 h-7 text-xs font-semibold transition-all cursor-pointer border-0 relative border-l border-[var(--border)]',
+              active === ws.id
+                ? 'bg-[var(--surface-1)] text-[var(--fg)] shadow-sm'
+                : 'bg-transparent text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]',
+            )}
+          >
+            {ws.icon && <span style={{ fontSize: 13 }}>{ws.icon}</span>}
             <span className="tracking-wide uppercase text-[10px]">{ws.label}</span>
             {active === ws.id && (
               <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[var(--fg)]" />
@@ -618,124 +664,6 @@ function CodeWorkstation({
 
 // ── Sandbox workstation ───────────────────────────────────────────────────────
 
-function SandboxWorkstation() {
-  const { settings, openTabs, activeTabIdx } = useStore()
-  const sandboxEnabled = settings.experimentsEnabled && settings.expSandboxEnabled
-  const [codeOpen, setCodeOpen] = useState(false)
-  const [codeHeight, setCodeHeight] = useState(220)
-  const draggingRef = useRef(false)
-  const startYRef   = useRef(0)
-  const startHRef   = useRef(0)
-
-  const activeTab = activeTabIdx >= 0 ? openTabs[activeTabIdx] : null
-
-  // Resize drag for the code panel
-  useEffect(() => {
-    function onMove(e: MouseEvent) {
-      if (!draggingRef.current) return
-      const delta = startYRef.current - e.clientY
-      setCodeHeight(Math.max(80, Math.min(520, startHRef.current + delta)))
-    }
-    function onUp() {
-      draggingRef.current = false
-      document.body.style.cursor     = ''
-      document.body.style.userSelect = ''
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup',   onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup',   onUp)
-    }
-  }, [])
-
-  if (!sandboxEnabled) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 text-[var(--fg-faint)]">
-        <Cpu size={32} className="opacity-30" />
-        <div className="text-center">
-          <p className="text-sm font-medium text-[var(--fg-muted)]">Sandbox not enabled</p>
-          <p className="text-xs mt-1">Enable the <strong className="text-[var(--fg-muted)]">Sandbox</strong> experiment in Settings → Experiments.</p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-      {/* SandboxPanel takes remaining space */}
-      <div className="flex-1 overflow-hidden min-h-0">
-        <SandboxPanel fullscreen />
-      </div>
-
-      {/* ── Collapsible code panel ── */}
-      <div className="flex-shrink-0 border-t border-[var(--border)] bg-[var(--surface-1)] relative">
-
-        {/* Resize grip — visible only when panel is open, sits on the top edge */}
-        {codeOpen && (
-          <div
-            className="absolute top-0 left-0 right-0 h-1 cursor-row-resize z-10 hover:bg-[var(--fg-faint)] transition-colors"
-            onMouseDown={e => {
-              e.stopPropagation()
-              draggingRef.current = true
-              startYRef.current   = e.clientY
-              startHRef.current   = codeHeight
-              document.body.style.cursor     = 'row-resize'
-              document.body.style.userSelect = 'none'
-            }}
-          />
-        )}
-
-        {/* Header — click to toggle */}
-        <div
-          className="h-7 flex items-center gap-2 px-3 select-none cursor-pointer hover:bg-[var(--hover)] transition-colors"
-          onClick={() => setCodeOpen(o => !o)}
-        >
-          <ChevronRight
-            size={11}
-            className="text-[var(--fg-faint)] transition-transform flex-shrink-0"
-            style={{ transform: codeOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          />
-          <Code2 size={11} className="text-[var(--fg-faint)] flex-shrink-0" />
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--fg-faint)] flex-1">
-            Code
-          </span>
-          {activeTab ? (
-            <span className="text-[10px] font-mono text-[var(--fg-muted)] truncate max-w-[200px]">
-              {activeTab.name}
-              {activeTab.modified && <span className="ml-1 text-[var(--fg-faint)]">●</span>}
-            </span>
-          ) : (
-            <span className="text-[10px] text-[var(--fg-faint)] italic">no file open</span>
-          )}
-        </div>
-
-        {/* Code content */}
-        {codeOpen && (
-          <div
-            className="overflow-auto border-t border-[var(--border)]"
-            style={{ height: codeHeight }}
-          >
-            {activeTab ? (
-              <pre
-                className="p-3 text-xs font-mono leading-5 text-[var(--fg-muted)] whitespace-pre min-h-full m-0"
-                style={{ fontFamily: 'var(--font-mono, "JetBrains Mono", Consolas, monospace)' }}
-              >
-                {activeTab.content || (
-                  <span className="text-[var(--fg-faint)] italic not-italic">empty file</span>
-                )}
-              </pre>
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-[var(--fg-faint)] italic">
-                Open a file in the editor to preview it here
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 
 // ── Export workstation ────────────────────────────────────────────────────────
@@ -769,6 +697,8 @@ function ExportWorkstation({ board, projectName }: { board: string; projectName:
 function StatusBar({ tsuki }: { tsuki: string }) {
   const { board, backend, gitBranch, openTabs, activeTabIdx, problems } = useStore()
   const [cursor, setCursor] = useState('Ln 1, Col 1')
+  const pluginLeft  = usePluginStatusBarItems('left')
+  const pluginRight = usePluginStatusBarItems('right')
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -796,9 +726,15 @@ function StatusBar({ tsuki }: { tsuki: string }) {
             <span className="w-1.5 h-1.5 rounded-full bg-green-400" /> <span style={{ color: '#4ade80' }}>月</span> ready
           </span>
         )}
+        {pluginLeft.map(item => (
+          <PluginStatusBarItem key={item.id} itemId={item.id} renderContent={item.renderContent} />
+        ))}
       </div>
       <div className="flex-1" />
       <div className="flex items-center gap-3 text-2xs text-[var(--fg-faint)] font-mono">
+        {pluginRight.map(item => (
+          <PluginStatusBarItem key={item.id} itemId={item.id} renderContent={item.renderContent} />
+        ))}
         <span>{tsuki}</span>
         <span>{backend}</span>
         <span>board: {board}</span>

@@ -6,6 +6,7 @@ import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Filter, Copy,
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
 import { ptyCreate, ptyWrite, ptyKill, ptyOnData, ptyOnExit, spawnProcess, listShells, pathExists, type ShellInfo, isTauri } from '@/lib/tauri'
+import { usePluginBottomTabs, PluginBottomTabContent } from '@/components/plugins/PluginSlot'
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
@@ -1105,6 +1106,7 @@ function SerialMonitor() {
 export default function BottomPanel() {
   const { bottomTab, setBottomTab, logs, clearLogs, problems, bottomHeight } = useStore()
   const t = useT()
+  const pluginTabs = usePluginBottomTabs()
   const endRef = useRef<HTMLDivElement>(null)
 
   // ── Output filter state ───────────────────────────────────────────────────
@@ -1175,6 +1177,14 @@ export default function BottomPanel() {
             {tab.id === 'output' && logCounts.err > 0 && (
               <span className="text-2xs font-mono text-red-400">{logCounts.err}</span>
             )}
+          </button>
+        ))}
+        {/* Plugin bottom tabs */}
+        {pluginTabs.map(tab => (
+          <button key={tab.id} onClick={() => setBottomTab(tab.id as any)}
+            className={clsx('px-3 py-1 rounded text-xs cursor-pointer border-0 bg-transparent transition-colors',
+              bottomTab === (tab.id as any) ? 'text-[var(--fg)] bg-[var(--active)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg)]')}>
+            {tab.label}
           </button>
         ))}
         <div className="flex-1" />
@@ -1300,6 +1310,13 @@ export default function BottomPanel() {
       <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'monitor' && 'hidden')}>
         <SerialMonitor />
       </div>
+
+      {/* Plugin bottom tab content panels */}
+      {pluginTabs.map(tab => (
+        <div key={tab.id} className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== (tab.id as any) && 'hidden')}>
+          <PluginBottomTabContent tabId={tab.id} renderContent={tab.renderContent} />
+        </div>
+      ))}
     </div>
   )
 }

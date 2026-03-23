@@ -4,6 +4,9 @@
 mod simulator;
 mod win_proc;
 mod pty_session;
+mod plugin_loader;
+mod plugin_permissions;
+mod updater;
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
@@ -832,16 +835,28 @@ async fn write_file(path: String, content: String) -> Result<(), String> {
     }
     std::fs::write(&path, content).map_err(|e| format!("Write error: {}", e))
 }
+/// Returns the config directory to use for settings.
+/// In sandbox mode (TSUKI_DK_SANDBOX=1) this is TSUKI_DATA_DIR/config/
+/// so the IDE never touches the host's %APPDATA% or ~/.config.
+fn resolve_config_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    if std::env::var("TSUKI_DK_SANDBOX").is_ok() {
+        if let Ok(data_dir) = std::env::var("TSUKI_DATA_DIR") {
+            return Some(std::path::PathBuf::from(data_dir).join("config"));
+        }
+    }
+    app.path_resolver().app_config_dir()
+}
+
 #[tauri::command]
 async fn load_settings(app: tauri::AppHandle) -> Result<String, String> {
-    let dir = app.path_resolver().app_config_dir().ok_or("Cannot resolve config dir")?;
+    let dir = resolve_config_dir(&app).ok_or("Cannot resolve config dir")?;
     let p = dir.join("settings.json");
     if p.exists() { std::fs::read_to_string(&p).map_err(|e| e.to_string()) }
     else { Ok("{}".into()) }
 }
 #[tauri::command]
 async fn save_settings(app: tauri::AppHandle, settings: String) -> Result<(), String> {
-    let dir = app.path_resolver().app_config_dir().ok_or("Cannot resolve config dir")?;
+    let dir = resolve_config_dir(&app).ok_or("Cannot resolve config dir")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("settings.json"), settings).map_err(|e| e.to_string())
 }
@@ -967,7 +982,7 @@ async fn get_default_board(app: tauri::AppHandle) -> String {
 }
 
 fn read_setting_or(app: &tauri::AppHandle, key: &str, fallback: &str) -> String {
-    let dir = match app.path_resolver().app_config_dir() { Some(d) => d, None => return fallback.into() };
+    let dir = match resolve_config_dir(app) { Some(d) => d, None => return fallback.into() };
     if let Ok(raw) = std::fs::read_to_string(dir.join("settings.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
@@ -1445,176 +1460,7 @@ async fn tail_debug_log(lines: usize) -> String {
 }
 
 // ── Update system ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PlatformAsset {
-    pub url:       String,
-    pub signature: String,
-    pub size:      u64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct UpdateInfo {
-    pub version:   String,
-    pub channel:   String,
-    pub pub_date:  String,
-    pub notes:     String,
-    pub platforms: std::collections::HashMap<String, PlatformAsset>,
-    /// If set, the IDE will re-show the onboarding wizard when updating
-    /// to this version (stored in settings.forcedOnboardingVersion).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub forced_onboarding_version: Option<String>,
-    /// If set, the IDE will show the What's New popup for this version.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub whats_new_version: Option<String>,
-    /// JSON-encoded array of ChangelogEntry ({type, text}) for the popup.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub whats_new_changelog: Option<String>,
-}
-
-/// Fetch the update manifest for `channel` from `manifest_url`.
-/// Uses reqwest with rustls — no subprocess, no console window.
-#[tauri::command]
-async fn check_for_updates(_channel: String, manifest_url: String) -> Result<UpdateInfo, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("tsuki-ide-updater")
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    let response = client.get(&manifest_url)
-        .header("Accept", "application/json")
-        .send().await
-        .map_err(|e| format!("Manifest fetch error ({}): {e}", manifest_url))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Manifest fetch returned {}: {}", response.status(), manifest_url));
-    }
-
-    let info: UpdateInfo = response.json().await
-        .map_err(|e| format!("Manifest parse error: {e}"))?;
-
-    Ok(info)
-}
-
-/// Returns the current app version from Cargo.toml so the frontend can
-/// compare it against the manifest version to decide what to show.
-#[tauri::command]
-fn get_app_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
-}
-
-/// Download and apply an update.
-/// Emits update_progress events: { stage, pct?, total?, downloaded? }
-///   stage = "downloading" | "installing" | "done"
-/// After the installer exits the app is relaunched via AppHandle::restart.
-#[tauri::command]
-async fn apply_update(app: tauri::AppHandle, window: Window, info: UpdateInfo) -> Result<(), String> {
-    let platform_key = {
-        let os   = if cfg!(target_os = "windows") { "windows" }
-                   else if cfg!(target_os = "macos") { "darwin" }
-                   else { "linux" };
-        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
-        format!("{}-{}", os, arch)
-    };
-
-    let asset = info.platforms.get(&platform_key)
-        .ok_or_else(|| format!("No asset for platform '{platform_key}' in update manifest"))?;
-
-    let total_bytes = asset.size;  // 0 if unknown
-
-    window.emit("update_progress", serde_json::json!({
-        "stage": "downloading", "platform": &platform_key,
-        "pct": 0, "downloaded": 0, "total": total_bytes
-    })).map_err(|e| e.to_string())?;
-
-    let client = reqwest::Client::builder()
-        .user_agent("tsuki-ide-updater")
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    let response = client.get(&asset.url)
-        .send().await
-        .map_err(|e| format!("Download failed ({}): {e}", asset.url))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Download returned {}: {}", response.status(), asset.url));
-    }
-
-    // Stream the response body so we can emit progress events
-    use futures_util::StreamExt;
-    let content_length = response.content_length().unwrap_or(total_bytes);
-    let mut stream = response.bytes_stream();
-    let mut buf: Vec<u8> = Vec::with_capacity(content_length as usize);
-    let mut downloaded: u64 = 0;
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("Download stream error: {e}"))?;
-        downloaded += chunk.len() as u64;
-        buf.extend_from_slice(&chunk);
-
-        let pct = if content_length > 0 {
-            (downloaded * 100 / content_length).min(100)
-        } else { 0 };
-
-        window.emit("update_progress", serde_json::json!({
-            "stage": "downloading",
-            "pct": pct,
-            "downloaded": downloaded,
-            "total": content_length,
-        })).ok();
-    }
-
-    let tmp_dir  = std::env::temp_dir();
-    let filename = asset.url.split('/').last().unwrap_or("tsuki-update");
-    let tmp_path = tmp_dir.join(filename);
-
-    std::fs::write(&tmp_path, &buf)
-        .map_err(|e| format!("Failed to save to {}: {e}", tmp_path.display()))?;
-
-    window.emit("update_progress", serde_json::json!({"stage": "installing", "pct": 100}))
-        .map_err(|e| e.to_string())?;
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // /RESTARTAPPLICATIONS is not used here — we restart via AppHandle below
-        std::process::Command::new(&tmp_path)
-            .arg("/SILENT")
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .spawn()
-            .map_err(|e| format!("Installer launch failed: {e}"))?;
-    }
-    #[cfg(unix)]
-    {
-        let extract_dir = tmp_dir.join("tsuki-update-extract");
-        let _ = std::fs::create_dir_all(&extract_dir);
-        std::process::Command::new("tar")
-            .args(["xzf", tmp_path.to_str().unwrap_or(""), "-C", extract_dir.to_str().unwrap_or("")])
-            .status()
-            .map_err(|e| format!("tar failed: {e}"))?;
-        let install_sh = extract_dir.read_dir()
-            .map_err(|e| e.to_string())?
-            .filter_map(|e| e.ok())
-            .find(|e| e.file_name() == "install.sh")
-            .map(|e| e.path())
-            .ok_or("install.sh not found in archive")?;
-        std::process::Command::new("bash")
-            .arg(&install_sh).arg("-y")
-            .spawn()
-            .map_err(|e| format!("install.sh failed: {e}"))?;
-    }
-
-    window.emit("update_progress", serde_json::json!({"stage": "done", "pct": 100}))
-        .ok();
-
-    // Wait for the installer to start, then restart this process.
-    // On Windows the installer runs SILENT in the background and replaces
-    // the binary; on Unix install.sh does the same. Either way we relaunch
-    // so the user lands on the fresh version immediately.
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-    tauri::api::process::restart(&app.env());
-    unreachable!() // restart() terminates the process
-}
+// Implemented in updater.rs — commands re-exported below via invoke_handler.
 
 
 fn main() {
@@ -1636,6 +1482,16 @@ fn main() {
     {
         // Build all candidate paths
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+        // ── Sandbox override — always first ──────────────────────────────────
+        // When TSUKI_DK_SANDBOX=1, all settings live in TSUKI_DATA_DIR/config/
+        // so we never touch the host's APPDATA / XDG_CONFIG_HOME / Library.
+        if std::env::var("TSUKI_DK_SANDBOX").is_ok() {
+            if let Ok(data_dir) = std::env::var("TSUKI_DATA_DIR") {
+                candidates.push(std::path::PathBuf::from(&data_dir)
+                    .join("config").join("settings.json"));
+            }
+        }
 
         #[cfg(windows)]
         {
@@ -1850,9 +1706,19 @@ fn main() {
             pty_session::pty_write,
             pty_session::pty_resize,
             pty_session::pty_kill,
-            check_for_updates,
-            apply_update,
-            get_app_version,
+            updater::check_ide_update_v2,
+            updater::install_ide_update_v2,
+            updater::install_ide_update_legacy,
+            updater::get_app_version,
+            plugin_loader::list_ide_plugins,
+            plugin_loader::read_plugin_entry,
+            plugin_loader::read_plugin_styles,
+            // NEW — permission system
+            plugin_permissions::get_plugin_permissions,
+            plugin_permissions::set_plugin_permissions,
+            plugin_permissions::check_plugin_permission,
+            plugin_permissions::revoke_plugin_permissions,
+            plugin_permissions::list_all_plugin_permissions,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

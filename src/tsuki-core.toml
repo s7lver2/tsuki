@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  tsuki-core — package manifest
+#
+#  This file makes tsuki-core a first-class package in the tsuki ecosystem.
+#  Users can install / update it with:
+#    tsuki install tsuki-team/tsuki-core
+#    tsuki update tsuki-core
+# ─────────────────────────────────────────────────────────────────────────────
+
+[package]
+name        = "tsuki-core"
+version     = "6.0.0"
+type        = "app"
+description = "Go/Python → C++ transpiler for the Tsuki Arduino framework"
+author      = "tsuki-team"
+license     = "MIT"
+repository  = "https://github.com/s7lver2/tsuki"
+
+[package.signing]
+key = "tsuki-team"
+
+[app]
+# The binary is installed as 'tsuki-core' in ~/.tsuki/bin/
+install_as = "tsuki-core"
+
+# Pre-built binaries per platform.
+# These are populated automatically by `tsuki-dk publish` / the CI release pipeline.
+# Format: "tsuki-core-<version>-<platform>[.exe]"
+[app.binaries]
+"x86_64-windows"  = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-core-windows-amd64.exe"
+"x86_64-linux"    = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-core-linux-amd64"
+"aarch64-linux"   = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-core-linux-arm64"
+"arm-linux"       = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-core-linux-arm"
+"x86_64-macos"    = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-core-darwin-amd64"
+"aarch64-macos"   = "https://github.com/s7lver2/tsuki/releases/download/v6.0.0/tsuki-core-darwin-arm64"
+
+[dependencies]
+# tsuki-core has no tsuki-package dependencies at runtime.
+# It is a self-contained Rust binary.

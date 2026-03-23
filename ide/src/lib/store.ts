@@ -5,7 +5,7 @@ import { applyTheme, applyUiScale, applyFontRendering, applyCompactMode } from '
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
 export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
 export type BottomTab = 'output' | 'problems' | 'terminal' | 'monitor'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'exp-webkit' | 'language' | 'developer' | 'profile' | 'updates'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'exp-webkit' | 'language' | 'developer' | 'profile' | 'updates' | 'plugins' | 'plugins-core' | 'plugins-community'
 
 export interface FileNode {
   id: string
