@@ -16,3 +16,6 @@ circuittest.json
 web/node_modules
 web/.next
 tools/keys
+venv/
+.venv/
+__pycache__/

@@ -6,6 +6,7 @@ import { Btn } from '@/components/shared/primitives'
 import { Plus, FolderOpen, Settings, Clock, ChevronRight, BookOpen } from 'lucide-react'
 import { useT } from '@/lib/i18n'
 import TsukiLogo from '@/components/shared/TsukiLogo'
+import { MinimalChrome } from '@/components/shared/AppChrome'
 
 
 
@@ -37,27 +38,14 @@ export default function WelcomeScreen() {
 
 
   return (
-    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
-      {/* Titlebar */}
-      <div className="h-11 flex items-center px-5 border-b border-[var(--border)] flex-shrink-0">
-        <div className="flex items-center gap-2.5">
-          <TsukiLogo size="sm" showText />
-        </div>
-        <div className="ml-auto flex items-center gap-1">
-          <Btn variant="ghost" size="xs" onClick={toggleTheme} className="font-mono text-[10px]">
-            {theme === 'dark' ? '◐' : '○'}
-          </Btn>
-          <Btn variant="ghost" size="xs" onClick={() => setScreen('settings')}>
-            <Settings size={13} />
-          </Btn>
-        </div>
-      </div>
+    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)] rounded-[10px] overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_0_0_1px_var(--chrome-border,#1e2022)]">
+      <MinimalChrome title="Welcome" />
 
       {/* ── Closed beta banner ── */}
-      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-yellow-400/20 bg-yellow-400/5 flex-shrink-0">
-        <span className="text-yellow-400 text-base leading-none flex-shrink-0">⚠</span>
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b border-[color-mix(in_srgb,var(--warn)_20%,transparent)] bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] flex-shrink-0">
+        <span className="text-[var(--warn)] text-base leading-none flex-shrink-0">⚠</span>
         <div className="flex-1 min-w-0">
-          <span className="text-xs font-semibold text-yellow-400">{t('beta.badge')} — </span>
+          <span className="text-xs font-semibold text-[var(--warn)]">{t('beta.badge')} — </span>
           <span className="text-xs text-[var(--fg-muted)]">{t('beta.message')}</span>
         </div>
       </div>

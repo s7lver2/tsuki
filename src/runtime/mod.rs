@@ -289,12 +289,13 @@ impl Runtime {
             .fun("Now",    FnMap::Direct("millis()".into()))
             .fun("Since",  FnMap::template("(millis()-{0})"))
             // ── Python (snake_case) ───────────────────────────────────────────
-            // time.sleep(n)    → delay(n/1e6)         n is nanoseconds (same as Go Sleep)
-            //                    time.sleep(500 * time.Millisecond) → delay(500)
-            // time.sleep_ms(n) → delay(n)             explicit ms alias: sleep_ms(500) → delay(500)
-            // time.sleep_us(n) → delayMicroseconds(n) explicit µs alias
-            // time.sleep_ns(n) → delay((n)/1000000UL) explicit ns alias (same as sleep)
-            .fun("sleep",    FnMap::template("delay(({0})/1000000UL)"))
+            // time.sleep(n)    → delay(n)              n is milliseconds (Python-native)
+            //                    time.sleep(2000 * time.Millisecond) → delay(2000 * 1)   = delay(2000)
+            //                    time.sleep(2    * time.Second)      → delay(2    * 1000) = delay(2000)
+            // time.sleep_ms(n) → delay(n)              explicit ms alias (same as sleep)
+            // time.sleep_us(n) → delayMicroseconds(n)  explicit µs alias
+            // time.sleep_ns(n) → delay((n)/1000000UL)  explicit ns alias
+            .fun("sleep",    FnMap::template("delay({0})"))
             .fun("sleep_ms", FnMap::template("delay({0})"))
             .fun("sleep_us", FnMap::template("delayMicroseconds({0})"))
             .fun("sleep_ns", FnMap::template("delay(({0})/1000000UL)"))
@@ -302,15 +303,18 @@ impl Runtime {
             .fun("since",    FnMap::template("(millis()-{0})"))
             .fun("millis",   FnMap::Direct("millis()".into()))
             .fun("micros",   FnMap::Direct("micros()".into()))
-            // ── Constants (nanosecond values — Go convention kept for Go source) ─
+            // ── Constants ────────────────────────────────────────────────────
+            // Go Sleep uses nanoseconds — keep Go constants unchanged
             .cst("Second",      "1000000000ULL")
             .cst("Millisecond", "1000000ULL")
             .cst("Microsecond", "1000ULL")
-            // Python-friendly constants
-            // Use time.MS with sleep_ms:  time.sleep_ms(500 * time.MS)  → delay(500)
-            // Use time.Millisecond with sleep: time.sleep(500 * time.Millisecond) → delay(500)
-            .cst("MS",  "1")    // time.sleep_ms(500 * time.MS)  == delay(500)
-            .cst("US",  "1")    // time.sleep_us(500 * time.US)  == delayMicroseconds(500)
+            // Python sleep uses milliseconds — these constants match that unit:
+            // time.sleep(2000 * time.MS)          → delay(2000 * 1)    = delay(2000)
+            // time.sleep(2    * time.S)            → delay(2    * 1000) = delay(2000)
+            // time.sleep_us(500 * time.US)         → delayMicroseconds(500 * 1)
+            .cst("MS",  "1")     // time.sleep(500  * time.MS) == delay(500)
+            .cst("S",   "1000")  // time.sleep(2    * time.S)  == delay(2000)
+            .cst("US",  "1")     // time.sleep_us(500 * time.US) == delayMicroseconds(500)
         );
     }
 

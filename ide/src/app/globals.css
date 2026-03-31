@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Transparent root — needed for rounded Tauri window */
+html, body {
+  background: transparent !important;
+  overflow: hidden;
+}
+
 /* ── Design tokens ── */
 :root {
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
@@ -55,6 +61,14 @@ html, html.dark {
   --err:        #ef4444;
   --warn:       #f59e0b;
   --info:       #93c5fd;
+/* ── AppChrome vars (dark) ── */
+  --chrome-bg:       #0e0f10;
+  --chrome-border:   #1e2022;
+  --chrome-sep:      #242628;
+  --chrome-fg:       #c8ccd0;
+  --chrome-fg-muted: #6b6f72;
+  --chrome-input:    #181a1b;
+  --chrome-group:    #141618;
 }
 
 /* LIGHT MODE */
@@ -73,6 +87,15 @@ html.light {
   --accent-inv: #ffffff;
   --hover:      rgba(0,0,0,0.03);
   --active:     rgba(0,0,0,0.06);
+
+  /* ── AppChrome vars (light) ── */
+  --chrome-bg:       #f0f0f0;
+  --chrome-border:   #d8d8d8;
+  --chrome-sep:      #d0d0d0;
+  --chrome-fg:       #1a1a1a;
+  --chrome-fg-muted: #666666;
+  --chrome-input:    #e8e8e8;
+  --chrome-group:    #e0e0e0;
   --active-border: #999;
   --syn-kw:     #111111;
   --syn-fn:     #2d2d2d;
@@ -108,10 +131,31 @@ html[data-compact="true"] {
 }
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 100px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.18);
+  border-radius: 100px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Light mode scrollbar overrides */
+html.light ::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.12);
+  background-clip: padding-box;
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.24);
+  background-clip: padding-box;
+}
 
 /* ── Selection ── */
 ::selection { background: rgba(100,100,100,0.25); }
@@ -149,8 +193,18 @@ html[data-compact="true"] {
 }
 .editor-textarea::-webkit-scrollbar { width: 6px; height: 6px; }
 .editor-textarea::-webkit-scrollbar-track { background: transparent; }
-.editor-textarea::-webkit-scrollbar-thumb { background: var(--surface-4); border-radius: 3px; }
-.editor-textarea::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
+.editor-textarea::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 100px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.editor-textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.18);
+  border-radius: 100px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
 .editor-textarea::-webkit-scrollbar-corner { background: transparent; }
 
 .editor-highlight {

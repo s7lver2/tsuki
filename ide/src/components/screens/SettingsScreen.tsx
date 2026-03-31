@@ -1,17 +1,18 @@
 'use client'
 import React from 'react'
+import { MinimalChrome } from '@/components/shared/AppChrome'
 import { useStore, SettingsTab, SettingsState } from '@/lib/store'
 import ProfilesPanel from '@/components/other/ProfilesPanel'
 import { IDE_THEMES, SYNTAX_THEMES } from '@/lib/themes'
 import { ICON_PACKS } from '@/lib/iconPacks'
-import { Btn, Input, Select, Toggle, Badge, Divider } from '@/components/shared/primitives'
-import WebkitPanel from '@/components/experiments/WebKitPanel/WebKitPanel'
+import { Btn, Input, Select, Toggle, Badge, Divider, IconBtn } from '@/components/shared/primitives'
+// TEMP HIDDEN: import WebkitPanel from '@/components/experiments/WebKitPanel/WebKitPanel'
 import {
   ArrowLeft, Terminal, Sliders, Code2, RefreshCw, FolderOpen,
   Palette, Check, Cpu, FlaskConical, ChevronRight, Zap, FlaskRound,
   Beaker, ToggleLeft, GitBranch, Languages, Bug, FileText,
   Trash2, ExternalLink, AlertTriangle, RotateCcw, User, Layers,
-  Download, Plus, X, Radio, Package, Globe,
+  Download, Plus, X, Radio, Package, Globe, 
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { clsx } from 'clsx'
@@ -22,26 +23,27 @@ import { useT, AVAILABLE_LANGS, LANG_META, LangCode } from '@/lib/i18n'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAIN_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
-  { id: 'appearance', labelKey: 'settings.tab_appearance', icon: <Palette  size={13} /> },
-  { id: 'profile', labelKey: 'settings.tab_profile', icon: <User size={13} /> },
-  { id: 'cli',        labelKey: 'settings.tab_tools',      icon: <Terminal size={13} /> },
-  { id: 'defaults',   labelKey: 'settings.tab_board',      icon: <Sliders  size={13} /> },
-  { id: 'editor',     labelKey: 'settings.tab_editor',     icon: <Code2    size={13} /> },
+  { id: 'appearance', labelKey: 'settings.tab_appearance', icon: <Palette   size={13} /> },
+  { id: 'editor',     labelKey: 'settings.tab_editor',     icon: <Code2     size={13} /> },
+  { id: 'defaults',   labelKey: 'settings.tab_board',      icon: <Sliders   size={13} /> },
+  { id: 'export',     labelKey: 'settings.tab_export',     icon: <Download  size={13} /> },
+  { id: 'cli',        labelKey: 'settings.tab_tools',      icon: <Terminal  size={13} /> },
   { id: 'language',   labelKey: 'settings.tab_language',   icon: <Languages size={13} /> },
   { id: 'updates',    labelKey: 'settings.tab_updates',    icon: <Download  size={13} /> },
+  { id: 'profile',    labelKey: 'settings.tab_profile',    icon: <User      size={13} /> },
 ]
 
 const DEV_NAV: { id: SettingsTab; labelKey: string; icon: React.ReactNode }[] = [
   { id: 'developer', labelKey: 'settings.tab_developer', icon: <Beaker size={13} /> },
 ]
 
-const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled' | 'expWebkitEnabled' }[] = [
+const EXP_NAV: { id: SettingsTab; label: string; icon: React.ReactNode; settingKey?: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' }[] = [
   { id: 'experiments', label: 'General',   icon: <FlaskConical size={13} /> },
   { id: 'exp-sandbox', label: 'Sandbox',   icon: <Cpu          size={13} />, settingKey: 'expSandboxEnabled' },
   { id: 'exp-git',     label: 'Git',       icon: <GitBranch    size={13} />, settingKey: 'expGitEnabled'     },
   { id: 'exp-lsp',     label: 'LSP',       icon: <Zap          size={13} />, settingKey: 'expLspEnabled'     },
-  { id: 'exp-workstations', label: 'Workstations', icon: <Layers size={13} />, settingKey: 'expWorkstationsEnabled' },
-  { id: 'exp-webkit',  label: 'Webkit',    icon: <Globe        size={13} />, settingKey: 'expWebkitEnabled'  },
+  // TEMP HIDDEN (graduated): exp-workstations — now always active, no longer an experiment
+  // TEMP HIDDEN: exp-webkit
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,7 +196,7 @@ function RegistrySourcesEditor() {
               <button
                 onClick={() => remove(i)}
                 title="Remove registry"
-                className="w-6 h-6 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors"
+                className="w-6 h-6 flex items-center justify-center rounded text-[var(--fg-faint)] hover:text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_10%,transparent)] border-0 bg-transparent cursor-pointer transition-colors"
               >
                 <X size={10} />
               </button>
@@ -224,7 +226,7 @@ function RegistrySourcesEditor() {
               <span className="text-[10px] text-[var(--fg-muted)]">Remove all custom registries?</span>
               <button
                 onClick={clearAll}
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors"
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_10%,transparent)] border-0 bg-transparent cursor-pointer transition-colors"
               >
                 <Trash2 size={10} /> Yes, clear
               </button>
@@ -238,7 +240,7 @@ function RegistrySourcesEditor() {
           ) : (
             <button
               onClick={() => setClearConfirm(true)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--fg-faint)] hover:text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors"
+              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--fg-faint)] hover:text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_10%,transparent)] border-0 bg-transparent cursor-pointer transition-colors"
             >
               <Trash2 size={10} /> Clear all custom registries
             </button>
@@ -294,18 +296,12 @@ export default function SettingsScreen() {
   const t = useT()
 
   return (
-    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
-      {/* ── Top bar ── */}
-      <div className="h-11 flex items-center px-4 gap-3 border-b border-[var(--border)] flex-shrink-0">
-        <Btn variant="ghost" size="xs" onClick={goBack}><ArrowLeft size={13} /> {t('common.back')}</Btn>
-        <Divider vertical />
-        <span className="text-sm font-semibold">{t('settings.title')}</span>
-        <div className="ml-auto">
-          <Btn variant="ghost" size="xs" onClick={toggleTheme} className="font-mono text-[10px]">
-            {theme === 'dark' ? '◐ dark' : '○ light'}
-          </Btn>
-        </div>
-      </div>
+    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)] rounded-[10px] overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_0_0_1px_var(--chrome-border,#1e2022)]">
+      <MinimalChrome title="Settings">
+        <IconBtn onClick={goBack}>
+          <ArrowLeft size={12} />
+        </IconBtn>
+      </MinimalChrome>
 
       <div className="flex flex-1 overflow-hidden">
         {/* ── Sidebar ── */}
@@ -333,7 +329,7 @@ export default function SettingsScreen() {
                 {t('settings.tab_experiments')}
               </span>
               {expEnabled && (
-                <span className="ml-auto text-[8px] font-mono text-green-400 bg-green-400/10 px-1 rounded">ON</span>
+                <span className="ml-auto text-[8px] font-mono text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-1 rounded">ON</span>
               )}
             </div>
 
@@ -351,8 +347,7 @@ export default function SettingsScreen() {
 
             {/* Per-experiment tabs — only when that specific experiment is enabled */}
             {expEnabled && EXP_NAV.filter(n => n.id !== 'experiments').map(n => {
-              // exp-webkit is always visible so users can enable it from there
-              if (n.id !== 'exp-webkit' && n.settingKey && !settings[n.settingKey]) return null
+              if (n.settingKey && !settings[n.settingKey]) return null
               return (
                 <NavItem
                   key={n.id} id={n.id as SettingsTab} label={n.label} icon={n.icon}
@@ -380,7 +375,7 @@ export default function SettingsScreen() {
                     key={n.id} id={n.id} label={t(n.labelKey)} icon={n.icon}
                     active={settingsTab === n.id}
                     onClick={() => setSettingsTab(n.id)}
-                    badge={<span className="text-[9px] font-mono text-amber-400 bg-amber-400/10 px-1 rounded">dev</span>}
+                    badge={<span className="text-[9px] font-mono text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] px-1 rounded">dev</span>}
                   />
                 ))}
               </div>
@@ -389,27 +384,23 @@ export default function SettingsScreen() {
         </div>
 
         {/* ── Content ── */}
-        <div className={clsx('flex-1', settingsTab === 'exp-webkit' && expEnabled ? 'overflow-hidden flex flex-col' : 'overflow-y-auto')}>
-          {/* webkit tab gets the full area — no padding wrapper */}
-          {settingsTab === 'exp-webkit' && expEnabled ? (
-            <WebkitExpTab />
-          ) : (
-            <div className="w-full" style={{ maxWidth: "min(760px, 100%)", padding: "clamp(12px,4vw,40px) var(--settings-content-px)" }}>
-              {settingsTab === 'appearance'   && <AppearanceTab />}
-              {settingsTab === 'cli'          && <CliTab />}
-              {settingsTab === 'defaults'     && <DefaultsTab />}
-              {settingsTab === 'editor'       && <EditorTab />}
-              {settingsTab === 'language'     && <LanguageTab />}
-              {settingsTab === 'profile'      && <ProfilesPanel />}
-              {settingsTab === 'experiments'  && <ExperimentsTab />}
-              {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
-              {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
-              {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
-              {settingsTab === 'exp-workstations' && expEnabled && settings.expWorkstationsEnabled && <WorkstationsTab />}
-              {settingsTab === 'updates'      && <UpdatesTab />}
-              {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
-            </div>
-          )}
+        <div className="flex-1 overflow-y-auto">
+          <div className="w-full" style={{ maxWidth: "min(760px, 100%)", padding: "clamp(12px,4vw,40px) var(--settings-content-px)" }}>
+            {settingsTab === 'appearance'   && <AppearanceTab />}
+            {settingsTab === 'cli'          && <CliTab />}
+            {settingsTab === 'defaults'     && <DefaultsTab />}
+            {settingsTab === 'editor'       && <EditorTab />}
+            {settingsTab === 'language'     && <LanguageTab />}
+            {settingsTab === 'profile'      && <ProfilesPanel />}
+            {settingsTab === 'experiments'  && <ExperimentsTab />}
+            {settingsTab === 'exp-sandbox'  && expEnabled && settings.expSandboxEnabled && <SandboxTab />}
+            {settingsTab === 'exp-git'      && expEnabled && settings.expGitEnabled && <GitExpTab />}
+            {settingsTab === 'exp-lsp'      && expEnabled && settings.expLspEnabled && <LspExpTab />}
+            {/* TEMP HIDDEN: exp-workstations tab — workstations graduated to always-on */}
+            {/* TEMP HIDDEN: exp-webkit tab */}
+            {settingsTab === 'updates'      && <UpdatesTab />}
+            {settingsTab === 'developer'    && settings.developerOptions && <DeveloperTab />}
+          </div>
         </div>
       </div>
     </div>
@@ -431,7 +422,7 @@ interface ExpDef {
   tag: string
   icon: React.ReactNode
   desc: string
-  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled' | 'expWorkstationsEnabled' | 'expWebkitEnabled'  // union grows as experiments are added
+  settingKey: 'expSandboxEnabled' | 'expGitEnabled' | 'expLspEnabled'  // union grows as experiments are added
   resources: string                 // what it costs when enabled
 }
 
@@ -466,26 +457,8 @@ const EXPERIMENTS: ExpDef[] = [
     settingKey: 'expLspEnabled',
     resources: 'Launches a background tsuki-lsp process. Adds ~5–15 MB RAM. Requires tsuki-lsp in PATH.',
   },
-  {
-    id: 'workstations',
-    tab: 'exp-workstations',
-    name: 'Workstations',
-    tag: 'α',
-    icon: <Layers size={16} />,
-    desc: 'DaVinci Resolve-style page bar at the bottom of the IDE. Switch between Code, Sandbox, and Export workstations — each occupies the full screen area.',
-    settingKey: 'expWorkstationsEnabled',
-    resources: 'Zero overhead when inactive. Sandbox workstation re-uses the existing simulator — no extra bundle cost.',
-  },
-  {
-    id: 'webkit',
-    tab: 'exp-webkit',
-    name: 'tsuki-webkit',
-    tag: 'α',
-    icon: <Globe size={16} />,
-    desc: 'JSX → HTML/CSS/JS compiler for ESP8266/ESP32 web control panels. Write React-style components; tsuki-webkit serves them over WiFi from your board.',
-    settingKey: 'expWebkitEnabled',
-    resources: 'In-browser JSX preview only — no background processes. Requires tsuki-webkit binary for full builds.',
-  },
+  // TEMP HIDDEN (graduated): workstations — now always active, no longer an experiment
+  // TEMP HIDDEN: webkit
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -555,7 +528,7 @@ function ExperimentsTab() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h2 className="text-lg font-semibold tracking-tight">Experiments</h2>
-            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">enabled</span>
+            <span className="text-xs font-mono text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-1.5 py-0.5 rounded">enabled</span>
           </div>
           <p className="text-sm text-[var(--fg-muted)]">
             Toggle individual experiments below. Disabled experiments are completely inert — they load no code and consume no resources.
@@ -655,7 +628,7 @@ function ExperimentCard({
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-sm font-medium">{exp.name}</span>
             <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">{exp.tag}</span>
-            {active && <span className="text-[9px] font-mono text-green-400 bg-green-400/10 px-1 rounded">on</span>}
+            {active && <span className="text-[9px] font-mono text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-1 rounded">on</span>}
           </div>
           <p className="text-xs text-[var(--fg-muted)] leading-relaxed line-clamp-2">{exp.desc}</p>
         </div>
@@ -1296,7 +1269,7 @@ function AppearanceTab() {
                 <div className="text-sm font-medium text-[var(--fg)]">{pack.name}</div>
                 <div className="text-[11px] text-[var(--fg-muted)] mt-0.5">{pack.desc}</div>
               </div>
-              {active && <Check size={13} className="text-green-400 flex-shrink-0" />}
+              {active && <Check size={13} className="text-[var(--ok)] flex-shrink-0" />}
             </button>
           )
         })}
@@ -1323,7 +1296,7 @@ function AppearanceTab() {
                 ))}
               </div>
               <span className="text-sm font-medium text-[var(--fg)] flex-1">{st.name}</span>
-              {active && <Check size={13} className="text-green-400 flex-shrink-0" />}
+              {active && <Check size={13} className="text-[var(--ok)] flex-shrink-0" />}
             </button>
           )
         })}
@@ -1538,7 +1511,7 @@ function DefaultsTab() {
       <GroupHeader title="Build" />
       <SettingsField name="default_board" desc="Board when no --board flag is given">
         <Select value={settings.defaultBoard} onChange={e => updateSetting('defaultBoard', e.target.value)}>
-          {['uno','nano','mega','leonardo','micro','pro_mini_5v','esp32','esp8266','d1_mini','pico'].map(b => (
+          {['uno','nano','mega','leonardo','micro','pro_mini_5v','esp32','esp8266','d1_mini' /* TEMP HIDDEN: 'pico' */].map(b => (
             <option key={b} value={b}>{b}</option>
           ))}
         </Select>
@@ -1744,7 +1717,7 @@ function GitExpTab() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h2 className="text-lg font-semibold tracking-tight">Git Integration</h2>
-            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">active</span>
+            <span className="text-xs font-mono text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-1.5 py-0.5 rounded">active</span>
             <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">β</span>
           </div>
           <p className="text-sm text-[var(--fg-muted)]">
@@ -1778,8 +1751,8 @@ function GitExpTab() {
         </div>
       </div>
 
-      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
-        <span className="text-yellow-400 text-xs mt-0.5">⚠</span>
+      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] border border-[color-mix(in_srgb,var(--warn)_20%,transparent)]">
+        <span className="text-[var(--warn)] text-xs mt-0.5">⚠</span>
         <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
           This is an experimental feature. Push/pull to remote repositories is not yet supported. Only local git operations are available.
         </p>
@@ -1828,7 +1801,7 @@ function LanguageTab() {
                 <div className="text-xs text-[var(--fg-faint)] mt-0.5 font-mono">{code}</div>
               </div>
               {isActive ? (
-                <span className="flex items-center gap-1 text-xs font-semibold text-green-400 bg-green-400/10 px-2 py-0.5 rounded flex-shrink-0">
+                <span className="flex items-center gap-1 text-xs font-semibold text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-2 py-0.5 rounded flex-shrink-0">
                   <Check size={10} /> {t('settings.lang_active')}
                 </span>
               ) : (
@@ -1871,7 +1844,7 @@ function LspExpTab() {
             <h2 className="text-lg font-semibold tracking-tight">Language Server (LSP)</h2>
             <span className={clsx(
               'text-xs font-mono px-1.5 py-0.5 rounded',
-              lspOn ? 'text-green-400 bg-green-400/10' : 'text-[var(--fg-faint)] bg-[var(--surface-3)]'
+              lspOn ? 'text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)]' : 'text-[var(--fg-faint)] bg-[var(--surface-3)]'
             )}>
               {lspOn ? 'active' : 'inactive'}
             </span>
@@ -1979,7 +1952,7 @@ function LspExpTab() {
             lang: 'Go (.go)',
             icon: '🐹',
             badge: 'full support',
-            badgeColor: 'text-green-400 bg-green-400/10',
+            badgeColor: 'text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)]',
             note: 'Transpiler-aware diagnostics — detects missing arduino imports, unused packages, brace balance, setup()/loop() checks.',
           },
           {
@@ -1987,7 +1960,7 @@ function LspExpTab() {
             lang: 'C++ (.cpp)',
             icon: '⚙️',
             badge: 'partial',
-            badgeColor: 'text-yellow-400 bg-yellow-400/10',
+            badgeColor: 'text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)]',
             note: '#include library detection, assignment-in-condition warnings, and missing void setup()/loop() in .cpp sketches.',
           },
           {
@@ -1995,7 +1968,7 @@ function LspExpTab() {
             lang: 'Arduino (.ino)',
             icon: '🔌',
             badge: 'partial',
-            badgeColor: 'text-yellow-400 bg-yellow-400/10',
+            badgeColor: 'text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)]',
             note: 'Treated as C++ with Arduino.h auto-injected. Same library detection and structural checks as C++.',
           },
         ].map(({ key, lang, icon, badge, badgeColor, note }) => (
@@ -2119,8 +2092,8 @@ function LspExpTab() {
         </div>
       </div>
 
-      <div className="flex items-start gap-2 px-3 py-3 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
-        <span className="text-yellow-400 text-xs mt-0.5 flex-shrink-0">⚠</span>
+      <div className="flex items-start gap-2 px-3 py-3 rounded-lg bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] border border-[color-mix(in_srgb,var(--warn)_20%,transparent)]">
+        <span className="text-[var(--warn)] text-xs mt-0.5 flex-shrink-0">⚠</span>
         <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
           Alpha feature. Full completions, hover docs, and signature help require <code className="font-mono bg-[var(--surface-3)] px-1 rounded">tsuki-lsp</code> to be installed. Front-end diagnostics and library detection run without it.
         </p>
@@ -2286,8 +2259,8 @@ function UpdatesTab() {
       <GroupHeader title="Update channel" />
       <div className="flex flex-col gap-2 mt-3 mb-5">
         {([
-          { id: 'stable'  as const, label: 'Stable',  badge: 'recommended', badgeColor: 'text-green-400 bg-green-400/10',  desc: 'Tested and signed before publishing.' },
-          { id: 'testing' as const, label: 'Testing', badge: 'beta',         badgeColor: 'text-yellow-400 bg-yellow-400/10', desc: 'Early access — may contain bugs. Separate signing key.' },
+          { id: 'stable'  as const, label: 'Stable',  badge: 'recommended', badgeColor: 'text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)]',  desc: 'Tested and signed before publishing.' },
+          { id: 'testing' as const, label: 'Testing', badge: 'beta',         badgeColor: 'text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)]', desc: 'Early access — may contain bugs. Separate signing key.' },
         ]).map(ch => (
           <button
             key={ch.id}
@@ -2307,7 +2280,7 @@ function UpdatesTab() {
               </div>
               <p className="text-xs text-[var(--fg-muted)]">{ch.desc}</p>
             </div>
-            {channel === ch.id && <Check size={13} className="text-green-400 mt-0.5 flex-shrink-0" />}
+            {channel === ch.id && <Check size={13} className="text-[var(--ok)] mt-0.5 flex-shrink-0" />}
           </button>
         ))}
       </div>
@@ -2407,8 +2380,8 @@ function UpdatesTab() {
               {cmp !== null && cmp > 0 && (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
-                    <Download size={14} className="text-green-400 flex-shrink-0" />
-                    <span className="text-sm font-semibold text-green-400">
+                    <Download size={14} className="text-[var(--ok)] flex-shrink-0" />
+                    <span className="text-sm font-semibold text-[var(--ok)]">
                       v{manifest.version} available
                     </span>
                     <span className="text-xs text-[var(--fg-faint)]">
@@ -2436,7 +2409,7 @@ function UpdatesTab() {
 
               {/* Same version */}
               {cmp !== null && cmp === 0 && (
-                <div className="flex items-center gap-2 text-xs text-green-400">
+                <div className="flex items-center gap-2 text-xs text-[var(--ok)]">
                   <Check size={13} className="flex-shrink-0" />
                   <span>You&apos;re on the latest version (v{currentVersion}).</span>
                 </div>
@@ -2445,7 +2418,7 @@ function UpdatesTab() {
               {/* Older version in channel (shown below, greyed out) */}
               {cmp !== null && cmp < 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2 text-xs text-green-400">
+                  <div className="flex items-center gap-2 text-xs text-[var(--ok)]">
                     <Check size={13} className="flex-shrink-0" />
                     <span>Your version (v{currentVersion}) is newer than {channel}.</span>
                   </div>
@@ -2488,7 +2461,7 @@ function UpdatesTab() {
           <div key={ch} className="px-4 py-3">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs font-semibold capitalize">{ch}</span>
-              {ch === channel && <span className="text-[9px] font-mono text-green-400 bg-green-400/10 px-1 rounded">active</span>}
+              {ch === channel && <span className="text-[9px] font-mono text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-1 rounded">active</span>}
             </div>
             <p className="text-[10px] font-mono text-[var(--fg-faint)] break-all leading-relaxed select-all">
               {UPDATE_PUBKEYS[ch]}
@@ -2666,16 +2639,16 @@ function VersionHistoryPanel({
               return (
                 <div key={rel.tag_name} className={clsx(
                   'px-4 py-3 flex items-start gap-3 transition-colors',
-                  isCurrent ? 'bg-green-400/5' : 'hover:bg-[var(--hover)]',
+                  isCurrent ? 'bg-[color-mix(in_srgb,var(--ok)_5%,transparent)]' : 'hover:bg-[var(--hover)]',
                 )}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                       <span className="text-sm font-semibold font-mono">{rel.tag_name}</span>
                       {isCurrent && (
-                        <span className="text-[9px] font-mono text-green-400 bg-green-400/10 px-1.5 rounded">installed</span>
+                        <span className="text-[9px] font-mono text-[var(--ok)] bg-[color-mix(in_srgb,var(--ok)_10%,transparent)] px-1.5 rounded">installed</span>
                       )}
                       {rel.prerelease && (
-                        <span className="text-[9px] font-mono text-yellow-400 bg-yellow-400/10 px-1.5 rounded">pre-release</span>
+                        <span className="text-[9px] font-mono text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] px-1.5 rounded">pre-release</span>
                       )}
                       <span className="text-[10px] text-[var(--fg-faint)]">
                         {new Date(rel.published_at).toLocaleDateString()}
@@ -2728,8 +2701,8 @@ function VersionHistoryPanel({
       </div>
 
       {/* Downgrade warning */}
-      <div className="mb-6 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
-        <AlertTriangle size={12} className="text-yellow-400 mt-0.5 flex-shrink-0" />
+      <div className="mb-6 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] border border-[color-mix(in_srgb,var(--warn)_20%,transparent)]">
+        <AlertTriangle size={12} className="text-[var(--warn)] mt-0.5 flex-shrink-0" />
         <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
           <strong className="text-[var(--fg)]">Downgrading</strong> replaces the IDE binary but does not roll back project files or config. Back up your work before downgrading. Signature verification is skipped for manual installs.
         </p>
@@ -2898,13 +2871,13 @@ function DeveloperTab() {
   return (
     <div>
       <div className="flex items-start gap-3 mb-7">
-        <div className="w-10 h-10 rounded-lg border border-amber-400/30 bg-amber-400/5 flex items-center justify-center flex-shrink-0">
-          <Beaker size={18} className="text-amber-400" />
+        <div className="w-10 h-10 rounded-lg border border-[color-mix(in_srgb,var(--warn)_30%,transparent)] bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] flex items-center justify-center flex-shrink-0">
+          <Beaker size={18} className="text-[var(--warn)]" />
         </div>
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h2 className="text-lg font-semibold tracking-tight">Developer Options</h2>
-            <span className="text-[9px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">dev</span>
+            <span className="text-[9px] font-mono text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] px-1.5 py-0.5 rounded">dev</span>
           </div>
           <p className="text-sm text-[var(--fg-muted)]">
             Internal tools for debugging and resetting IDE state. Not intended for regular use.
@@ -2917,15 +2890,15 @@ function DeveloperTab() {
 
       {/* Restart-required banner */}
       {showRestart && (
-        <div className="mb-4 flex items-center gap-3 px-3 py-2.5 rounded-lg bg-amber-400/10 border border-amber-400/30">
-          <AlertTriangle size={13} className="text-amber-400 flex-shrink-0" />
+        <div className="mb-4 flex items-center gap-3 px-3 py-2.5 rounded-lg bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] border border-[color-mix(in_srgb,var(--warn)_30%,transparent)]">
+          <AlertTriangle size={13} className="text-[var(--warn)] flex-shrink-0" />
           <p className="text-xs text-[var(--fg-muted)] flex-1 leading-relaxed">
             <strong className="text-[var(--fg)]">Restart required.</strong>{' '}
             The Rust process reads both settings at startup — changes take effect after a full restart.
           </p>
           <button
             onClick={() => window.location.reload()}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-amber-400/40 bg-amber-400/10 text-amber-400 text-xs font-medium cursor-pointer hover:bg-amber-400/20 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[color-mix(in_srgb,var(--warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] text-[var(--warn)] text-xs font-medium cursor-pointer hover:bg-[color-mix(in_srgb,var(--warn)_20%,transparent)] transition-colors"
           >
             <RotateCcw size={11} /> Restart now
           </button>
@@ -2940,7 +2913,7 @@ function DeveloperTab() {
         <div className="flex items-center gap-2">
           <Toggle on={settings.debugMode} onToggle={toggleDebugMode} />
           {settings.debugMode && (
-            <span className="flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">
+            <span className="flex items-center gap-1 text-[10px] font-mono text-[var(--warn)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] px-1.5 py-0.5 rounded">
               <Bug size={10} /> active
             </span>
           )}
@@ -2960,7 +2933,7 @@ function DeveloperTab() {
               className={clsx(
                 'flex-1 flex flex-col gap-1 px-3 py-2 rounded border text-left cursor-pointer transition-colors',
                 settings.debugLogFormat === fmt
-                  ? 'border-amber-400/50 bg-amber-400/8 text-[var(--fg)]'
+                  ? 'border-[color-mix(in_srgb,var(--warn)_50%,transparent)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] text-[var(--fg)]'
                   : 'border-[var(--border)] bg-[var(--surface-1)] text-[var(--fg-muted)] hover:bg-[var(--hover)]',
               )}
             >
@@ -3044,7 +3017,7 @@ function DeveloperTab() {
                 <div className={clsx(
                   'mt-0.5 w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors',
                   on
-                    ? 'bg-amber-400 border-amber-400'
+                    ? 'bg-[var(--warn)] border-[var(--warn)]'
                     : 'bg-transparent border-[var(--fg-faint)]',
                 )}>
                   {on && <Check size={8} className="text-black" />}
@@ -3110,10 +3083,10 @@ function DeveloperTab() {
           <button
             onClick={clearLog}
             disabled={clearing}
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-[var(--fg-muted)] hover:text-red-400 hover:bg-red-400/10 border-0 bg-transparent cursor-pointer transition-colors disabled:opacity-40"
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-[var(--fg-muted)] hover:text-[var(--err)] hover:bg-[color-mix(in_srgb,var(--err)_10%,transparent)] border-0 bg-transparent cursor-pointer transition-colors disabled:opacity-40"
           >
             {clearDone
-              ? <><Check size={10} className="text-green-400" /> Cleared</>
+              ? <><Check size={10} className="text-[var(--ok)]" /> Cleared</>
               : <><Trash2 size={10} /> Clear</>
             }
           </button>
@@ -3133,8 +3106,8 @@ function DeveloperTab() {
                 const isSystem = /\[system:|\[cat=main]|log-cleared/.test(line)
                 return (
                   <span key={i} className={
-                    isErr    ? 'text-red-400 block'
-                    : isWarn   ? 'text-yellow-400 block'
+                    isErr    ? 'text-[var(--err)] block'
+                    : isWarn   ? 'text-[var(--warn)] block'
                     : isSpawn  ? 'text-blue-400 block'
                     : isSystem ? 'text-[var(--fg-faint)] block'
                     : 'text-[var(--fg-muted)] block'
@@ -3194,9 +3167,9 @@ function DeveloperTab() {
               const isOk      = line.includes('EXISTS') || line.includes('✓')
               return (
                 <span key={i} className={
-                  isSection ? 'text-amber-400 font-semibold block mt-1'
-                  : isMissing ? 'text-red-400 block'
-                  : isOk     ? 'text-green-400 block'
+                  isSection ? 'text-[var(--warn)] font-semibold block mt-1'
+                  : isMissing ? 'text-[var(--err)] block'
+                  : isOk     ? 'text-[var(--ok)] block'
                   : 'block'
                 }>
                   {line}
@@ -3230,7 +3203,7 @@ function DeveloperTab() {
               className={clsx(
                 'flex items-start gap-3 p-3 rounded border cursor-pointer transition-colors',
                 settings.winSpawnMethod === opt.value
-                  ? 'border-amber-400/40 bg-amber-400/5 text-[var(--fg)]'
+                  ? 'border-[color-mix(in_srgb,var(--warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] text-[var(--fg)]'
                   : 'border-[var(--border)] hover:bg-[var(--hover)] text-[var(--fg-muted)]',
               )}
             >
@@ -3240,7 +3213,7 @@ function DeveloperTab() {
                 value={opt.value}
                 checked={settings.winSpawnMethod === opt.value}
                 onChange={() => updateSetting('winSpawnMethod', opt.value)}
-                className="mt-0.5 accent-amber-400 flex-shrink-0"
+                className="mt-0.5 accent-[var(--warn)] flex-shrink-0"
               />
               <div>
                 <div className="text-xs font-medium mb-0.5">{opt.label}</div>
@@ -3285,7 +3258,7 @@ function DeveloperTab() {
           </Btn>
         </div>
         {resetDone && (
-          <div className="flex items-center gap-2 text-xs text-green-400">
+          <div className="flex items-center gap-2 text-xs text-[var(--ok)]">
             <Check size={12} /> Flag cleared. The wizard will appear on the next app launch or after reload.
           </div>
         )}
@@ -3301,15 +3274,15 @@ function DeveloperTab() {
             return (
               <div key={key} className="flex items-center gap-3 py-1 border-b border-[var(--border-subtle)] last:border-0">
                 <span className="flex-1 text-[var(--fg)]">{key}</span>
-                <span className={val === '✓ set' ? 'text-green-400' : 'text-[var(--fg-faint)]'}>{val}</span>
+                <span className={val === '✓ set' ? 'text-[var(--ok)]' : 'text-[var(--fg-faint)]'}>{val}</span>
               </div>
             )
           })}
         </div>
       </div>
 
-      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-amber-400/5 border border-amber-400/20">
-        <span className="text-amber-400 text-xs mt-0.5">⚠</span>
+      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-[color-mix(in_srgb,var(--warn)_5%,transparent)] border border-[color-mix(in_srgb,var(--warn)_20%,transparent)]">
+        <span className="text-[var(--warn)] text-xs mt-0.5">⚠</span>
         <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
           Developer options are intended for contributors and debugging. Disable them in the Experiments → General tab when done.
         </p>
@@ -3318,275 +3291,5 @@ function DeveloperTab() {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Workstations experiment tab
-// ─────────────────────────────────────────────────────────────────────────────
-
-function WorkstationsTab() {
-  const { settings, updateSetting } = useStore()
-
-  const PAGE_ITEMS = [
-    { id: 'code',    icon: <Code2 size={14} />,       label: 'Code',       desc: 'Editor + sidebar + terminal. The classic coding view.' },
-    { id: 'sandbox', icon: <Cpu  size={14} />,        label: 'Sandbox',    desc: 'Full-screen circuit simulator. Uses the existing Sandbox experiment.' },
-    { id: 'export',  icon: <Download size={14} />,    label: 'Export',     desc: 'Build, flash, and package. One place for release actions.' },
-  ]
-
-  const enabledPages: string[] = (settings as any).workstationPages ?? ['code', 'sandbox', 'export']
-
-  function togglePage(id: string) {
-    // Always keep at least one page enabled
-    const next = enabledPages.includes(id)
-      ? enabledPages.filter(p => p !== id)
-      : [...enabledPages, id]
-    if (next.length === 0) return
-    updateSetting('workstationPages' as any, next)
-  }
-
-  return (
-    <div>
-      <div className="flex items-start gap-3 mb-7">
-        <div className="w-10 h-10 rounded-lg border border-[var(--border)] flex items-center justify-center flex-shrink-0">
-          <Layers size={18} className="text-[var(--fg-muted)]" />
-        </div>
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-lg font-semibold tracking-tight">Workstations</h2>
-            <span className="text-xs font-mono text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded">active</span>
-            <span className="text-[9px] font-mono text-[var(--fg-faint)] bg-[var(--surface-3)] px-1 rounded">α</span>
-          </div>
-          <p className="text-sm text-[var(--fg-muted)]">
-            DaVinci Resolve-style page bar at the bottom of the IDE. Switch between dedicated full-screen workspaces — each tailored to a specific task.
-          </p>
-        </div>
-      </div>
-
-      {/* Visual mockup of the page bar */}
-      <div className="mb-7 rounded-xl border border-[var(--border)] bg-[#0d0d0d] overflow-hidden">
-        {/* fake editor area */}
-        <div className="h-28 flex items-center justify-center">
-          <span className="text-[11px] text-[var(--fg-faint)] font-mono opacity-50">— workstation content —</span>
-        </div>
-        {/* page bar */}
-        <div className="h-10 border-t border-[var(--border)] bg-[var(--surface-1)] flex items-center justify-center gap-1 px-4">
-          {PAGE_ITEMS.map(p => {
-            const on = enabledPages.includes(p.id)
-            return (
-              <div
-                key={p.id}
-                className={clsx(
-                  'flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium transition-colors',
-                  on
-                    ? 'bg-[var(--active)] text-[var(--fg)] border border-[var(--fg-faint)]/20'
-                    : 'text-[var(--fg-faint)] opacity-30',
-                )}
-              >
-                {p.icon}
-                {p.label}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      <GroupHeader title="Page bar" />
-      <SettingsField
-        name="Position"
-        desc="Where the workstation switcher bar appears."
-      >
-        <Select
-          value={(settings as any).workstationBarPosition ?? 'bottom'}
-          onChange={e => updateSetting('workstationBarPosition' as any, e.target.value)}
-        >
-          <option value="bottom">Bottom</option>
-          <option value="top">Top (below toolbar)</option>
-        </Select>
-      </SettingsField>
-
-      <SettingsField
-        name="Show labels"
-        desc="Show text labels next to workstation icons. Disable for a compact icon-only bar."
-      >
-        <Toggle
-          on={(settings as any).workstationShowLabels ?? true}
-          onToggle={() => updateSetting('workstationShowLabels' as any, !((settings as any).workstationShowLabels ?? true))}
-        />
-      </SettingsField>
-
-      <GroupHeader title="Active workstations" />
-      <p className="text-xs text-[var(--fg-muted)] mb-4 leading-relaxed">
-        Choose which pages appear in the bar. At least one must remain enabled.
-      </p>
-      <div className="flex flex-col gap-2 mb-6">
-        {PAGE_ITEMS.map(p => {
-          const on = enabledPages.includes(p.id)
-          return (
-            <div
-              key={p.id}
-              className={clsx(
-                'flex items-center gap-3 px-4 py-3 rounded-lg border transition-colors',
-                on ? 'border-[var(--fg-faint)] bg-[var(--surface-1)]' : 'border-[var(--border)] bg-[var(--surface-1)] opacity-50',
-              )}
-            >
-              <div className={clsx('flex-shrink-0 transition-colors', on ? 'text-[var(--fg-muted)]' : 'text-[var(--fg-faint)]')}>
-                {p.icon}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium mb-0.5">{p.label}</div>
-                <p className="text-xs text-[var(--fg-muted)] leading-relaxed">{p.desc}</p>
-              </div>
-              <Toggle
-                on={on}
-                onToggle={() => togglePage(p.id)}
-              />
-            </div>
-          )
-        })}
-      </div>
-
-      <GroupHeader title="Behaviour" />
-      <SettingsField
-        name="Remember last workstation"
-        desc="Re-open the last active workstation when the IDE starts."
-      >
-        <Toggle
-          on={(settings as any).workstationRememberLast ?? true}
-          onToggle={() => updateSetting('workstationRememberLast' as any, !((settings as any).workstationRememberLast ?? true))}
-        />
-      </SettingsField>
-
-      <SettingsField
-        name="Animate transitions"
-        desc="Slide animation when switching between workstations."
-      >
-        <Toggle
-          on={(settings as any).workstationAnimations ?? true}
-          onToggle={() => updateSetting('workstationAnimations' as any, !((settings as any).workstationAnimations ?? true))}
-        />
-      </SettingsField>
-
-      <div className="mt-6 flex items-start gap-2 px-3 py-3 rounded-lg bg-yellow-400/5 border border-yellow-400/20">
-        <span className="text-yellow-400 text-xs mt-0.5">⚠</span>
-        <p className="text-xs text-[var(--fg-muted)] leading-relaxed">
-          Alpha feature. The Sandbox workstation requires the Sandbox experiment to also be enabled. Export workstation is a placeholder — full functionality coming soon.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  tsuki-webkit experiment settings tab
-// ─────────────────────────────────────────────────────────────────────────────
-
-
-function WebkitExpTab() {
-  return (
-    <div className="flex flex-col items-center justify-center gap-8 px-6 py-10 min-h-full select-none text-center">
-
-      {/* Icon */}
-      <div className="relative">
-        <div className="w-20 h-20 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 flex items-center justify-center">
-          <Globe size={36} className="text-emerald-400" />
-        </div>
-        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[var(--surface-3)] border border-[var(--border)] flex items-center justify-center">
-          <span className="text-[9px] font-mono text-emerald-400">α</span>
-        </div>
-      </div>
-
-      <div className="max-w-sm">
-        <h2 className="text-lg font-bold mb-2 tracking-tight">tsuki-webkit</h2>
-        <p className="text-sm text-[var(--fg-muted)] leading-relaxed">
-          Escribe tu panel de control web para ESP8266 / ESP32 en{" "}
-          <span className="text-emerald-400 font-mono">JSX</span> — tsuki-webkit
-          lo compila en una página HTML servida directamente desde tu placa vía WiFi.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-2 w-full max-w-sm">
-        {[
-          { icon: <Code2 size={13} />, label: "JSX → HTML/CSS/JS",   desc: "Compilado en el IDE, sin Node.js" },
-          { icon: <Zap   size={13} />, label: "Servidor web embebido", desc: "Para ESP8266 y ESP32" },
-          { icon: <Cpu   size={13} />, label: "Simulación de API",     desc: "Sin necesidad de hardware físico" },
-          { icon: <Globe size={13} />, label: "Consola Serial",        desc: "Salida Serial en tiempo real" },
-        ].map(f => (
-          <div key={f.label} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] text-left">
-            <span className="text-emerald-400 flex-shrink-0">{f.icon}</span>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-[var(--fg)]">{f.label}</div>
-              <div className="text-[10px] text-[var(--fg-faint)]">{f.desc}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <WebkitMiniDemo />
-
-      <div className="flex flex-col items-center gap-2">
-        <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-emerald-500/30 bg-emerald-500/5">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs text-emerald-300 font-medium">Próximamente — en desarrollo activo</span>
-        </div>
-        <p className="text-[10px] text-[var(--fg-faint)] max-w-xs leading-relaxed">
-          tsuki-webkit llegará en una próxima actualización. Sin configuración extra — todo compila en el IDE.
-        </p>
-      </div>
-    </div>
-  )
-}
-
-// ── Minimal inline animated code demo ────────────────────────────────────────
-
-function WebkitMiniDemo() {
-  const [step, setStep] = React.useState(0)
-  const [cycle, setCycle] = React.useState(0)
-
-  const STEPS = [
-    { code: "import { Api } from 'tsuki-webkit'",   color: '#7dd3fc',  label: 'import',   labelColor: '#60a5fa' },
-    { code: 'export default function App() {',       color: '#c4b5fd',  label: 'define',   labelColor: '#a78bfa' },
-    { code: '  <button onClick={Api.toggle}>',       color: '#86efac',  label: 'JSX',      labelColor: '#4ade80' },
-    { code: '    Toggle LED',                        color: '#e2e8f0',  label: '',         labelColor: '' },
-    { code: '  </button>',                           color: '#86efac',  label: 'compile ✓',labelColor: '#4ade80' },
-  ]
-
-  React.useEffect(() => {
-    const t = setTimeout(() => {
-      if (step < STEPS.length - 1) {
-        setStep(s => s + 1)
-      } else {
-        setTimeout(() => { setStep(0); setCycle(c => c + 1) }, 1800)
-      }
-    }, step === 0 ? 400 : 600)
-    return () => clearTimeout(t)
-  }, [step, cycle])  // eslint-disable-line
-
-  return (
-    <div className="w-full max-w-xs rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
-      {/* Fake titlebar */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--border)] bg-[var(--surface-1)]">
-        <span className="w-2.5 h-2.5 rounded-full bg-red-500/60" />
-        <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/60" />
-        <span className="w-2.5 h-2.5 rounded-full bg-green-500/60" />
-        <span className="ml-2 text-[10px] font-mono text-[var(--fg-faint)]">app.jsx</span>
-      </div>
-      {/* Code lines */}
-      <div className="px-3 py-2 font-mono text-[11px] flex flex-col gap-1" style={{ minHeight: 110 }}>
-        {STEPS.slice(0, step + 1).map((s, i) => (
-          <div key={i} className="flex items-center gap-2 transition-opacity" style={{ color: s.color, opacity: i === step ? 1 : 0.45 }}>
-            <span className="flex-1">{s.code}</span>
-            {i === step && s.label && (
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0" style={{ color: s.labelColor, background: `${s.labelColor}18`, border: `1px solid ${s.labelColor}30` }}>
-                {s.label}
-              </span>
-            )}
-          </div>
-        ))}
-        {step === STEPS.length - 1 && (
-          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            192.168.x.x / ESP8266 · ready
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+// TEMP HIDDEN: WorkstationsTab function removed (workstations graduated to always-on)
+// TEMP HIDDEN: WebkitExpTab function removed

@@ -49,8 +49,8 @@ const BOARDS = [
   { id: 'esp32',        label: 'ESP32 Dev Module',    note: 'Dual-core · 240 MHz · WiFi + BT' },
   { id: 'esp8266',      label: 'ESP8266 Generic',     note: 'Single-core · 80 MHz · WiFi' },
   { id: 'd1_mini',      label: 'Wemos D1 Mini',       note: 'ESP8266 · compact · popular' },
-  { id: 'pico',          label: 'Raspberry Pi Pico',   note: 'RP2040 · 133 MHz · 2 MB' },
-  { id: 'xiao_rp2040',  label: 'Seeed XIAO RP2040',   note: 'RP2040 · 133 MHz · 2 MB · tiny', badge: 'new' as const },
+  // TEMP HIDDEN: { id: 'pico',          label: 'Raspberry Pi Pico',   note: 'RP2040 · 133 MHz · 2 MB' },
+  // TEMP HIDDEN: { id: 'xiao_rp2040',  label: 'Seeed XIAO RP2040',   note: 'RP2040 · 133 MHz · 2 MB · tiny', badge: 'new' as const },
 ]
 
 const BACKENDS = [

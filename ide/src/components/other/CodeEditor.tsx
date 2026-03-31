@@ -627,6 +627,7 @@ export default function CodeEditor() {
   const [pendingLibs, setPendingLibs]   = useState<Array<LibraryInfo & { importName: string }>>([])
   const [ghostEnabled, setGhostEnabled] = useState(true)
   const [curLine, setCurLine]           = useState(1)
+  const [codeSerieVisible, setCodeSerieVisible] = useState(false)
 
   // Search
   const [searchOpen, setSearchOpen]         = useState(false)
@@ -674,6 +675,8 @@ export default function CodeEditor() {
   const featuresEffective = featuresActive && !isBuildFile
 
   // ── Effects ────────────────────────────────────────────────────────────────
+
+  useEffect(() => { setCodeSerieVisible(false) }, [tab?.fileId])
 
   useEffect(() => {
     if (!tab) return
@@ -1096,18 +1099,35 @@ export default function CodeEditor() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Build-file read-only banner */}
-      {isBuildFile && (
-        <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0"
-          style={{ background: 'rgba(245,158,11,0.08)', borderBottom: '1px solid rgba(245,158,11,0.2)' }}>
-          <span style={{ color: '#f59e0b', fontSize: 11 }}>⊘</span>
-          <span style={{ fontSize: 11, color: 'rgba(245,158,11,0.9)' }}>
-            <strong>Generated file</strong> — read-only.
-            {buildReadOnly
-              ? <> Enable <em>Allow editing build files</em> in Settings → Editor to unlock.</>
-              : <> Editing is unlocked — changes will be overwritten on next build.</>
-            }
-          </span>
+      {/* Lock overlay — código generado */}
+      {isBuildFile && buildReadOnly && !codeSerieVisible && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center"
+          style={{ backdropFilter: 'blur(6px)', background: 'rgba(10,11,12,0.55)' }}>
+          <div className="flex flex-col items-center gap-4 px-8 py-7 rounded-xl select-none"
+            style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', maxWidth: 340, textAlign: 'center' }}>
+            <div style={{ fontSize: 32 }}>🔒</div>
+            <div>
+              <p className="text-[13px] font-semibold text-[var(--fg)] mb-1">Código serie</p>
+              <p className="text-[11px] text-[var(--fg-muted)] leading-relaxed">
+                Este archivo es generado automáticamente por tsuki. Editar código compilado puede romper el proyecto.
+              </p>
+            </div>
+            <button
+              onClick={() => setCodeSerieVisible(true)}
+              className="px-4 py-1.5 rounded-md text-[11px] font-medium cursor-pointer border-0 transition-colors"
+              style={{ background: 'var(--active)', color: 'var(--fg)' }}>
+              Ver en modo lectura
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Read-only indicator when viewing */}
+      {isBuildFile && buildReadOnly && codeSerieVisible && (
+        <div className="flex items-center gap-2 px-3 py-1 flex-shrink-0"
+          style={{ background: 'rgba(245,158,11,0.06)', borderBottom: '1px solid rgba(245,158,11,0.15)' }}>
+          <span style={{ fontSize: 10 }}>🔒</span>
+          <span style={{ fontSize: 10.5, color: 'rgba(245,158,11,0.7)' }}>Código generado — sólo lectura</span>
         </div>
       )}
 

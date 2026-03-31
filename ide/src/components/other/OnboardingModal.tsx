@@ -233,8 +233,8 @@ const BOARDS = [
   { id: 'mega',        label: 'Arduino Mega', chip: 'ATmega2560', color: '#1a3a6b' },
   { id: 'esp32',       label: 'ESP32',        chip: 'Xtensa LX6', color: '#7a1a1a' },
   { id: 'esp8266',     label: 'ESP8266',      chip: '80 MHz',     color: '#7a5a1a' },
-  { id: 'pico',        label: 'RPi Pico',     chip: 'RP2040',     color: '#5a1a7a' },
-  { id: 'xiao_rp2040', label: 'XIAO RP2040', chip: 'RP2040',     color: '#1a6a6a' },
+  // TEMP HIDDEN: { id: 'pico',        label: 'RPi Pico',     chip: 'RP2040',     color: '#5a1a7a' },
+  // TEMP HIDDEN: { id: 'xiao_rp2040', label: 'XIAO RP2040', chip: 'RP2040',     color: '#1a6a6a' },
   { id: 'leonardo',    label: 'Leonardo',     chip: 'ATmega32U4', color: '#2e1a7a' },
 ]
 
@@ -264,7 +264,7 @@ const SHORTCUTS = [
 
 const PLAN_NORMAL = [
   'Go & Python → Arduino transpiler',
-  'All supported boards (Uno, ESP32, Pico…)',
+  'All supported boards (Uno, ESP32…)',
   'Built-in package manager (tsukilib)',
   'Circuit sandbox simulator',
   'Community support',

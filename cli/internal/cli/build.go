@@ -435,7 +435,19 @@ func compileTsukiFlash(
 
 	cppStd := m.Build.CppStd
 	if cppStd == "" {
-		cppStd = "c++11"
+		// RP2040 SDK 5.x requires C++17 (uses digit separators, structured
+		// bindings, and REG_FIELD_WIDTH macros that fail to parse under C++11/14).
+		// Fall back to c++17 for all RP2040 boards automatically.
+		rp2040Boards := map[string]bool{
+			"xiao_rp2040": true,
+			"pico":        true,
+			"pico2":       true,
+		}
+		if rp2040Boards[strings.ToLower(board)] {
+			cppStd = "c++17"
+		} else {
+			cppStd = "c++11"
+		}
 	}
 
 	lang := m.EffectiveLanguage()

@@ -31,16 +31,22 @@ export const Btn = forwardRef<HTMLButtonElement, BtnProps>(
 Btn.displayName = 'Btn'
 
 /* ── Input ── */
-export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  ({ className, ...p }, ref) => (
+interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
+  onValue?: (v: string) => void
+  mono?: boolean
+}
+export const Input = forwardRef<HTMLInputElement, InputProps>(
+  ({ className, onValue, mono, onChange, ...p }, ref) => (
     <input
       ref={ref}
       className={clsx(
         'w-full bg-[var(--surface)] border border-[var(--border)] rounded text-[var(--fg)] text-sm placeholder-[var(--fg-faint)]',
         'px-2.5 py-1.5 outline-none transition-colors',
         'focus:border-[var(--fg-muted)]',
+        mono && 'font-mono',
         className
       )}
+      onChange={e => { onChange?.(e); onValue?.(e.target.value) }}
       {...p}
     />
   )
@@ -48,8 +54,12 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
 Input.displayName = 'Input'
 
 /* ── Select ── */
-export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
-  ({ className, ...p }, ref) => (
+interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  onValue?: (v: string) => void
+  options?: { value: string; label: string }[]
+}
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(
+  ({ className, onValue, options, onChange, children, ...p }, ref) => (
     <select
       ref={ref}
       className={clsx(
@@ -58,8 +68,13 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
         'focus:border-[var(--fg-muted)]',
         className
       )}
+      onChange={e => { onChange?.(e); onValue?.(e.target.value) }}
       {...p}
-    />
+    >
+      {options
+        ? options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)
+        : children}
+    </select>
   )
 )
 Select.displayName = 'Select'

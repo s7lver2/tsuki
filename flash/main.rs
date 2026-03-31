@@ -551,8 +551,9 @@ fn ansi_bdr() -> (&'static str, &'static str, &'static str) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn render_compile_error(e: &FlashError) {
-    section("CompileError");
-
+    // NOTE: do NOT call section() here — same double-print issue as
+    // render_flash_error.  The tsuki-ux traceback already shows the label;
+    // we only stream the detail lines to stderr.
     match e {
         FlashError::CompileFailed { output } | FlashError::LinkFailed { output } => {
             for line in output.lines() {
@@ -584,8 +585,12 @@ fn render_compile_error(e: &FlashError) {
 }
 
 fn render_flash_error(e: &FlashError, port: &str) {
-    section(&format!("FlashError  upload to {} failed", port));
-
+    // NOTE: do NOT call section() here.  section() writes directly to stderr
+    // and its output (the "+- ... -+" header) gets captured by the tsuki-ux
+    // traceback renderer, which then wraps it *again* inside its own panel,
+    // producing the garbled "FlashError: +- FlashError upload to … -+" nesting
+    // visible in the terminal.  The section label is already emitted by the
+    // outer traceback; we only emit the detail lines.
     match e {
         FlashError::FlashFailed { output, .. } => {
             for line in output.lines() {

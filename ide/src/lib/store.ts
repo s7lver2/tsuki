@@ -3,9 +3,9 @@ import { create } from 'zustand'
 import { applyTheme, applyUiScale, applyFontRendering, applyCompactMode } from './themes'
 
 export type Screen = 'welcome' | 'ide' | 'settings' | 'docs'
-export type SidebarTab = 'files' | 'git' | 'packages' | 'examples'
-export type BottomTab = 'output' | 'problems' | 'terminal' | 'monitor'
-export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'exp-webkit' | 'language' | 'developer' | 'profile' | 'updates'
+export type SidebarTab = 'files' | 'git' | 'packages' | 'examples' | 'explorer'
+export type BottomTab = 'output' | 'problems' | 'terminal' | 'monitor' | 'explorer'
+export type SettingsTab = 'cli' | 'defaults' | 'editor' | 'appearance' | 'experiments' | 'exp-sandbox' | 'exp-git' | 'exp-lsp' | 'exp-workstations' | 'exp-webkit' | 'language' | 'developer' | 'profile' | 'updates' | 'export'
 
 export interface FileNode {
   id: string
@@ -213,6 +213,17 @@ export interface SettingsState {
   monitorBaud: string       // last used baud rate
   // ── Windows ──────────────────────────────────────────────────────────────
   winSpawnMethod: 'shell' | 'direct' | 'detached'
+  // ── Export workstation ────────────────────────────────────────────────────
+  exportFileView:  'list' | 'cards'
+  exportOutDir:    string
+  exportVersion:   string
+  exportInclSource: boolean
+  exportInclBuild:  boolean
+  exportGhToken:   string
+  exportGhPublic:  boolean
+  exportDockerTag: string
+  // ── File explorer panel ───────────────────────────────────────────────────
+  explorerLocation: 'sidebar' | 'bottom'
   // ── Debug / Logging ───────────────────────────────────────────────────────
   // Requires app restart to take effect (logging starts at process init).
   debugMode: boolean
@@ -347,10 +358,10 @@ const TEMPLATES_INO: Record<string, string> = {
 }
 
 const TEMPLATES_PYTHON: Record<string, string> = {
-  blink:  `import arduino\nimport time\n\nLED_PIN: int = 13\n\ndef setup():\n    arduino.pinMode(LED_PIN, arduino.OUTPUT)\n\ndef loop():\n    arduino.digitalWrite(LED_PIN, arduino.HIGH)\n    time.sleep(500 * time.Millisecond)\n    arduino.digitalWrite(LED_PIN, arduino.LOW)\n    time.sleep(500 * time.Millisecond)`,
+  blink:  `import arduino\nimport time\n\nLED_PIN: int = 13\n\ndef setup():\n    arduino.pinMode(LED_PIN, arduino.OUTPUT)\n\ndef loop():\n    arduino.digitalWrite(LED_PIN, arduino.HIGH)\n    time.sleep_ms(500)\n    arduino.digitalWrite(LED_PIN, arduino.LOW)\n    time.sleep_ms(500)`,
   serial: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(115200)\n    print("Serial ready!")\n\ndef loop():\n    if arduino.Serial.available() > 0:\n        b: int = arduino.Serial.read()\n        print(str(b))`,
-  sensor: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(9600)\n\ndef loop():\n    val: int = arduino.analogRead(arduino.A0)\n    print(val)\n    time.sleep(500 * time.Millisecond)`,
-  dht:    `import arduino\nimport dht\nimport time\n\nSENSOR_PIN: int = 2\nsensor = dht.new(SENSOR_PIN, dht.DHT22)\n\ndef setup():\n    arduino.Serial.begin(9600)\n    sensor.begin()\n    print("DHT22 ready!")\n\ndef loop():\n    temp: float = sensor.read_temperature()\n    hum:  float = sensor.read_humidity()\n    print(temp)\n    print(hum)\n    time.sleep(2000 * time.Millisecond)`,
+  sensor: `import arduino\nimport time\n\ndef setup():\n    arduino.Serial.begin(9600)\n\ndef loop():\n    val: int = arduino.analogRead(arduino.A0)\n    print(val)\n    time.sleep_ms(500)`,
+  dht:    `import arduino\nimport dht\nimport time\n\nSENSOR_PIN: int = 2\nsensor = dht.new(SENSOR_PIN, dht.DHT22)\n\ndef setup():\n    arduino.Serial.begin(9600)\n    sensor.begin()\n    print("DHT22 ready!")\n\ndef loop():\n    temp: float = sensor.read_temperature()\n    hum:  float = sensor.read_humidity()\n    print(temp)\n    print(hum)\n    time.sleep_ms(2000)`,
   ws2812: `import arduino\nimport ws2812\n\nLED_PIN: int  = 6\nNUM_LEDS: int = 8\nstrip = ws2812.new(NUM_LEDS, LED_PIN)\n\ndef setup():\n    strip.begin()\n    arduino.Serial.begin(9600)\n\ndef loop():\n    strip.set_pixel_color(0, ws2812.color(255, 0, 0))\n    strip.show()\n    arduino.delay(500)\n    strip.set_pixel_color(0, ws2812.color(0, 0, 0))\n    strip.show()\n    arduino.delay(500)`,
   empty:  `import arduino\n\ndef setup():\n    pass\n\ndef loop():\n    pass`,
 }
@@ -480,6 +491,15 @@ const DEFAULT_SETTINGS: SettingsState = {
   monitorPort: '',
   monitorBaud: '9600',
   winSpawnMethod: 'shell',
+  exportFileView:   'list',
+  exportOutDir:     '',
+  exportVersion:    '1.0.0',
+  exportInclSource: true,
+  exportInclBuild:  true,
+  exportGhToken:    '',
+  exportGhPublic:   false,
+  exportDockerTag:  '',
+  explorerLocation: 'bottom',
   debugMode: false,
   debugLogFormat: 'flat',
   debugLogCategories: {

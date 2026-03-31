@@ -166,10 +166,69 @@ pub fn ensure_arch(arch: &str, variant: &str, verbose: bool) -> Result<SdkPaths>
 
     // Fast path: check if the layout is already present.
     if let Some(paths) = crate::sdk::scan_tsuki_modules(&root, arch, variant) {
-        if verbose {
-            eprintln!("  [modules] {} already installed (cached)", arch);
+        // For RP2040 the fast path is only valid when pqt-pico-sdk is ALSO
+        // present. That tool package ships the prebuilt pico-sdk static
+        // libraries (libpico.a, hardware_gpio.a, tinyusb_device.a, …) that
+        // the linker needs to resolve every pico-sdk symbol used by the
+        // Arduino core and user sketches:
+        //
+        //   gpio_init / gpio_set_function   → hardware_gpio
+        //   sleep_ms / sleep_us / time_us_64 → pico_time / hardware_timer
+        //   multicore_fifo_*               → pico_multicore
+        //   tud_task_ext / tud_cdc_n_*     → tinyusb_device
+        //   mutex_try_enter / mutex_exit   → pico_sync
+        //   irq_set_exclusive_handler      → hardware_irq
+        //   exception_set_exclusive_handler → hardware_exception
+        //   check_sys_clock_khz            → hardware_clocks
+        //   panic / _exit / _sbrk          → pico_runtime / pico_stdlib
+        //
+        // Without pqt-pico-sdk every RP2040 link fails with hundreds of
+        // "undefined reference" errors for all of the above.
+        //
+        // Scenario that hits this bug:
+        //   • User had core installed via arduino-cli / old tsuki-modules
+        //     (which didn't download pqt-pico-sdk separately).
+        //   • scan_tsuki_modules() finds the hardware/ layout → fast path
+        //     fires → install() is never called → pqt-pico-sdk never
+        //     downloaded → linker fails.
+        //
+        // Fix: for rp2040, also verify pqt-pico-sdk exists. If absent, fall
+        // through to install() which downloads only the missing tool (the core
+        // itself won't be re-downloaded because platform_dir.exists() will be
+        // true inside install()).
+        if arch == "rp2040" {
+            let pico_sdk_tool = root
+                .join("packages")
+                .join("rp2040")
+                .join("tools")
+                .join("pqt-pico-sdk");
+
+            if !pico_sdk_tool.is_dir() {
+                // pqt-pico-sdk is absent — do NOT take the fast path.
+                // install() will download only the missing tool.
+                if verbose {
+                    eprintln!(
+                        "  [modules] rp2040 core present but pqt-pico-sdk missing at {} — downloading…",
+                        pico_sdk_tool.display()
+                    );
+                } else {
+                    println!(
+                        "  pqt-pico-sdk (pico-sdk prebuilt libs) not found — downloading…"
+                    );
+                }
+                // Fall through to the slow path below.
+            } else {
+                if verbose {
+                    eprintln!("  [modules] rp2040 already installed (cached, pqt-pico-sdk present)");
+                }
+                return Ok(paths);
+            }
+        } else {
+            if verbose {
+                eprintln!("  [modules] {} already installed (cached)", arch);
+            }
+            return Ok(paths);
         }
-        return Ok(paths);
     }
 
     // Slow path: auto-install.
@@ -224,22 +283,73 @@ pub fn install(arch: &str, verbose: bool) -> Result<()> {
     let core_needed = !platform_dir.exists();
 
     let host = current_host();
-    let tools_needed: Vec<(PathBuf, ToolSystem, String)> = platform
-        .tools_deps
-        .iter()
-        .filter_map(|dep| {
-            let tool_dir = root
-                .join("packages").join(&dep.packager)
-                .join("tools").join(&dep.name)
-                .join(&dep.version);
-            if tool_dir.exists() { return None; }
-            let system = find_tool_system_any(&index, &dep.packager, &dep.name, &dep.version, &host)?
-                .clone();
-            Some((tool_dir, system, dep.name.clone()))
-        })
-        .collect();
+
+    // Collect tools that need to be downloaded.
+    // Separate "can download" from "missing but not in index" to warn explicitly
+    // instead of silently ignoring — the silent drop is what causes the
+    // "pqt-pico-sdk missing → undefined reference" build failures.
+    let mut tools_needed: Vec<(PathBuf, ToolSystem, String)> = Vec::new();
+    let mut tools_missing_in_index: Vec<String> = Vec::new();
+
+    for dep in &platform.tools_deps {
+        let tool_dir = root
+            .join("packages").join(&dep.packager)
+            .join("tools").join(&dep.name)
+            .join(&dep.version);
+
+        if tool_dir.exists() {
+            if verbose {
+                eprintln!("  [modules] tool {} {} already present", dep.name, dep.version);
+            }
+            continue;
+        }
+
+        match find_tool_system_any(&index, &dep.packager, &dep.name, &dep.version, &host) {
+            Some(system) => tools_needed.push((tool_dir, system.clone(), dep.name.clone())),
+            None => {
+                eprintln!(
+                    "  {} Tool '{}' v{} (packager='{}') not found in index for host '{}' — trying fallback",
+                    C_WARN.paint("⚠"), dep.name, dep.version, dep.packager, host
+                );
+                tools_missing_in_index.push(dep.name.clone());
+            }
+        }
+    }
 
     if !core_needed && tools_needed.is_empty() {
+        // Before declaring "already up to date", verify that any tools which
+        // couldn't be resolved from the index are actually present on disk.
+        // For RP2040: pqt-pico-sdk is mandatory for linking — if it is absent
+        // AND couldn't be found in the index, surface a clear error instead of
+        // silently proceeding to a link failure with hundreds of "undefined reference".
+        if arch == "rp2040" && !tools_missing_in_index.is_empty() {
+            let pico_sdk_dir = root
+                .join("packages").join("rp2040")
+                .join("tools").join("pqt-pico-sdk");
+
+            if !pico_sdk_dir.is_dir() {
+                return Err(FlashError::Other(format!(
+                    "pqt-pico-sdk (RP2040 prebuilt pico-sdk libraries) is missing and could not \
+be resolved from the package index for host '{host}'.\n\
+\n\
+These libraries are required to link RP2040 firmware (gpio_init, sleep_ms, tud_task_ext, …).\n\
+\n\
+Likely causes & fixes:\n\
+  1. The package index uses host tag 'all' — update tsuki-flash (fix already merged).\n\
+  2. Stale index cache — run: tsuki-flash modules update\n\
+  3. Partial install — delete the cache and reinstall:\n\
+       rmdir /S /Q %USERPROFILE%\\.tsuki\\modules\\packages\\rp2040\\tools\\pqt-pico-sdk\n\
+       tsuki-flash modules install rp2040\n\
+\n\
+Missing tools: {missing}\n\
+Expected dir:  {path}",
+                    host    = host,
+                    missing = tools_missing_in_index.join(", "),
+                    path    = pico_sdk_dir.display(),
+                )));
+            }
+        }
+
         println!("  {} {} {} already up to date",
             C_MUTED.paint("•"), bold(arch), C_MUTED.paint(&platform.version));
         return write_installed_manifest(&root, arch, &platform.version);
@@ -695,6 +805,15 @@ fn current_host() -> String {
 fn host_matches(system_host: &str, current: &str) -> bool {
     // Exact match first — fastest exit.
     if system_host == current { return true; }
+
+    // "all" means architecture-independent content (e.g. pqt-pico-sdk ships
+    // prebuilt ARM Cortex-M0+ .a files that are identical on every host OS).
+    // The earlephilhower arduino-pico package index uses this tag for tools
+    // whose binaries do not vary by host platform.
+    // Without this case, find_tool_system_any() silently returns None for
+    // pqt-pico-sdk → tools_needed is empty → "already up to date" fires →
+    // pqt-pico-sdk never downloaded → link fails with "undefined reference".
+    if system_host == "all" { return true; }
 
     // Family-based matching: the package index may list a more-specific triple
     // (e.g. "x86_64-w64-mingw32") while our current_host() returns the same

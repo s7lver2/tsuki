@@ -205,7 +205,7 @@ export default function DocsScreen() {
 
   return (
     <DocsI18nProvider lang={lang} setLang={setLang}>
-      <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
+      <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)] rounded-[10px] overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_0_0_1px_var(--chrome-border,#1e2022)]">
 
         {/* Top bar */}
         <div className="h-11 flex items-center px-4 gap-3 border-b border-[var(--border)] flex-shrink-0">

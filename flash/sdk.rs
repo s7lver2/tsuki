@@ -259,13 +259,26 @@ fn scan_arduino15_vendor(
         variant_dir
     } else {
         let variants_root = sdk_dir.join("variants");
-        let keyword = variant.split('_').next().unwrap_or(variant); // e.g. "seeed" from "seeed_xiao_rp2040"
-        // Try partial match on board keyword
+        // Build a list of keywords from all parts of the variant id.
+        // e.g. "seeed_xiao_rp2040" → ["seeed_xiao_rp2040", "seeed", "xiao", "rp2040"]
+        // This lets "XIAO_RP2040" match even though its name doesn't contain "seeed".
+        let variant_lower = variant.to_lowercase();
+        let keywords: Vec<&str> = std::iter::once(variant_lower.as_str())
+            .chain(variant_lower.split('_'))
+            .collect();
+        // Try partial match — first dir whose lowercase name contains ANY keyword
         let partial = variants_root.read_dir().ok()
-            .and_then(|rd| rd.flatten().find(|e| {
-                let n = e.file_name().to_string_lossy().to_lowercase();
-                e.path().is_dir() && (n.contains(&variant.to_lowercase()) || n.contains(keyword))
-            }))
+            .and_then(|rd| {
+                let mut entries: Vec<_> = rd.flatten()
+                    .filter(|e| e.path().is_dir())
+                    .collect();
+                // Prefer longer matches (more specific) — sort by name length desc
+                entries.sort_by_key(|e| std::cmp::Reverse(e.file_name().len()));
+                entries.into_iter().find(|e| {
+                    let n = e.file_name().to_string_lossy().to_lowercase();
+                    keywords.iter().any(|kw| kw.len() > 2 && n.contains(*kw))
+                })
+            })
             .map(|e| e.path());
         if let Some(p) = partial.filter(|p| p.is_dir()) {
             p

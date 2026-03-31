@@ -71,8 +71,8 @@ var boardChoices = []boardChoice{
 	{"esp32", "ESP32 Dev Module", "Dual-core · 240 MHz · WiFi + BT"},
 	{"esp8266", "ESP8266 Generic", "Single-core · 80 MHz · WiFi"},
 	{"d1_mini", "Wemos D1 Mini", "ESP8266 · compact · popular"},
-	{"pico",        "Raspberry Pi Pico",  "RP2040 · 133 MHz · 2 MB"},
-	{"xiao_rp2040",  "Seeed XIAO RP2040",  "RP2040 · 133 MHz · 2 MB · tiny"},
+	// TEMP HIDDEN: {"pico",        "Raspberry Pi Pico",  "RP2040 · 133 MHz · 2 MB"},
+	// TEMP HIDDEN: {"xiao_rp2040",  "Seeed XIAO RP2040",  "RP2040 · 133 MHz · 2 MB · tiny"},
 }
 
 // ── Compiler backend choices ──────────────────────────────────────────────────

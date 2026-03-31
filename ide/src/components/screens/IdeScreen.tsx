@@ -7,28 +7,30 @@ import FilesSidebar from '@/components/other/FilesSidebar'
 import GitSidebar from '@/components/experiments/GitSidebar/GitSidebar'
 import PackagesSidebar from '@/components/other/PackagesSidebar'
 import ExamplesSidebar from '@/components/other/ExamplesSidebar'
+// TEMP HIDDEN: import FileExplorer from '@/components/other/FileExplorer'
 import CodeEditor from '@/components/other/CodeEditor'
 import BottomPanel from '@/components/other/BottomPanel'
 import SandboxPanel from '@/components/experiments/SandboxPanel/SandboxPanel'
+import ExportWorkstation from '@/components/other/ExportWorkstation'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import {
-  Files, GitBranch, Settings, Home, Check, Zap, Upload, Play, Plus,
-  Terminal, Sun, Moon, X, ChevronRight, Package, Cpu, BookOpen,
-  Code2, Share2, Layers, AlertTriangle,
+  Files, GitBranch, Settings, X, ChevronRight, Package, Cpu, BookOpen,
+  Code2, Share2, AlertTriangle, FolderOpen,
 } from 'lucide-react'
 import type { ElementType } from 'react'
 import { clsx } from 'clsx'
-import TsukiLogo from '@/components/shared/TsukiLogo'
 import { showContextMenu } from '@/components/shared/ContextMenu'
 import { useT } from '@/lib/i18n'
+import { AppChrome } from '@/components/shared/AppChrome'
 
 const BOARDS = [
   'uno','nano','nano_old','mega','leonardo','micro','pro_mini_5v','pro_mini_3v3',
-  'esp32','esp32s2','esp32c3','esp8266','d1_mini','nodemcu','pico','xiao_rp2040',
+  'esp32','esp32s2','esp32c3','esp8266','d1_mini','nodemcu',
+  // TEMP HIDDEN: 'pico','xiao_rp2040',
 ]
 
 const EXPERIMENTAL_BOARDS: Record<string, string> = {
-  pico: 'El soporte para Raspberry Pi Pico (RP2040) es experimental. Requiere el core earlephilhower instalado en arduino-cli.',
+  // TEMP HIDDEN: pico: 'El soporte para Raspberry Pi Pico (RP2040) es experimental. Requiere el core earlephilhower instalado en arduino-cli.',
 }
 
 // ── Workstation pages ─────────────────────────────────────────────────────────
@@ -48,6 +50,7 @@ export default function IdeScreen() {
     openTabs, activeTabIdx, closeTab, openFile,
     tree, toggleTheme, theme,
     settings, updateSetting, setBottomTab, saveActiveFile, dispatchCommand, dispatchBuild,
+    pendingCircuit, clearPendingCircuit,
   } = useStore()
 
   const t = useT()
@@ -62,10 +65,9 @@ export default function IdeScreen() {
   // Workstation page (used when workstations experiment is ON)
   const [workstation, setWorkstation] = useState<Workstation>('code')
 
-  const workstationsEnabled = settings.experimentsEnabled && settings.expWorkstationsEnabled
+  // Workstations always enabled (no longer an experiment)
+  const workstationsEnabled = true
   const sandboxEnabled      = settings.experimentsEnabled && settings.expSandboxEnabled
-  // Auto-open sandbox when a circuit is dispatched from Examples
-  const { pendingCircuit, clearPendingCircuit } = useStore(s => ({ pendingCircuit: s.pendingCircuit, clearPendingCircuit: s.clearPendingCircuit }))
   useEffect(() => {
     if (!pendingCircuit) return
     clearPendingCircuit()
@@ -132,8 +134,40 @@ export default function IdeScreen() {
 
   useEffect(() => {
     const { addLog } = useStore.getState()
+    const s = useStore.getState().settings
+
+    // ── Project + environment ────────────────────────────────────────────────
     addLog('info', `IDE ready · project: ${projectName || '(none)'} · board: ${board} · lang: ${projectLanguage}`)
-    addLog('info', `Experiments: sandbox=${settings.expSandboxEnabled} git=${settings.expGitEnabled} lsp=${settings.expLspEnabled}`)
+
+    // ── Experiments ──────────────────────────────────────────────────────────
+    // Each flag on its own line so toggling one doesn't bury the others.
+    addLog('info', [
+      `Experiments: sandbox=${s.expSandboxEnabled}`,
+      `git=${s.expGitEnabled}`,
+      `lsp=${s.expLspEnabled}`,
+      `workstations=${s.expWorkstationsEnabled}`,
+      `enabled=${s.experimentsEnabled}`,
+    ].join(' '))
+
+    // ── Build / compiler settings ────────────────────────────────────────────
+    addLog('info', [
+      `Build: backend=${backend}`,
+      `cpp_std=${s.cppStd}`,
+      `baud=${s.defaultBaud}`,
+      `verbose=${s.verbose}`,
+    ].join(' · '))
+
+    // ── Toolchain paths ──────────────────────────────────────────────────────
+    // Logged separately so long paths don't truncate the other fields.
+    const tsukiFlashResolved = s.tsukiFlashPath?.trim() || '(auto)'
+    addLog('info', `Toolchain: tsuki-flash=${tsukiFlashResolved}`)
+
+    // ── UI / layout ──────────────────────────────────────────────────────────
+    addLog('info', [
+      `UI: theme=${useStore.getState().theme}`,
+      `adaptiveSidebar=${s.adaptiveSidebar}`,
+      `minWindowWidth=${s.minWindowWidth ?? 1024}`,
+    ].join(' · '))
 
     const currentPath = settings.tsukiPath?.trim()
     const isAbsolutePath = currentPath?.includes('\\') || currentPath?.includes('/')
@@ -197,103 +231,31 @@ export default function IdeScreen() {
   }, [settings.adaptiveSidebar, settings.minWindowWidth]) // eslint-disable-line
 
   return (
-    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)]">
+    <div className="h-screen flex flex-col bg-[var(--surface)] text-[var(--fg)] rounded-[10px] overflow-hidden shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_0_0_1px_var(--chrome-border,#1e2022)]">
 
-      {/* ── Topbar ── */}
-      <div className="topbar flex items-center gap-1 px-2 border-b border-[var(--border)] flex-shrink-0 bg-[var(--surface-1)]">
-
-        <div className="flex items-center gap-2 mr-1 min-w-0 max-w-[240px]">
-          <TsukiLogo size="sm" />
-          <div className="min-w-0">
-            <div className="font-semibold text-sm tracking-tight leading-none truncate">
-              {projectName || 'Tsuki'}
-            </div>
-            {projectPath && (
-              <div className="text-[9px] text-[var(--fg-faint)] font-mono leading-none mt-0.5 truncate">
-                {projectPath}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <Divider vertical />
-
-        <select
-          value={board}
-          onChange={e => setBoard(e.target.value)}
-          className="bg-transparent border border-[var(--border)] rounded px-2 py-0.5 text-xs text-[var(--fg-muted)] outline-none cursor-pointer appearance-none hover:border-[var(--fg-faint)] transition-colors flex-shrink-0"
-        >
-          {BOARDS.map(b => <option key={b} value={b}>{b}</option>)}
-        </select>
-
-        <Divider vertical />
-
-        {projectLanguage === 'go' && (
-          <Btn variant="ghost" size="xs" onClick={handleCheck}
-            title={`${tsuki} check${board ? ' --board ' + board : ''}`}>
-            <Check size={12} /><span className="topbar-label ml-1">{t('topbar.check')}</span>
-          </Btn>
-        )}
-
-        <Btn variant="ghost" size="xs" onClick={handleBuild}
-          title={`${tsuki} build --compile${board ? ' --board ' + board : ''}`}>
-          <Zap size={12} /><span className="topbar-label ml-1">{t('topbar.build')}</span>
-        </Btn>
-
-        <Btn variant="ghost" size="xs" onClick={handleFlash}
-          title={`${tsuki} flash${board ? ' --board ' + board : ''}`}
-          className="!text-green-400 hover:!text-green-400">
-          <Upload size={12} /><span className="topbar-label ml-1">{t('topbar.flash')}</span>
-        </Btn>
-
-        <button
-          onClick={handleRun}
-          title={`${tsuki} build --compile && ${tsuki} flash`}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[var(--fg)] text-[var(--accent-inv)] text-xs font-semibold hover:opacity-80 transition-opacity cursor-pointer border-0 flex-shrink-0"
-        >
-          <Play size={11} /> Run
-        </button>
-
-        <Divider vertical />
-
-        <Btn variant="ghost" size="xs" onClick={handleMonitor}
-          title={`${tsuki} monitor${settings.defaultBaud !== '9600' ? ' --baud ' + settings.defaultBaud : ''}`}>
-          <Terminal size={12} /><span className="topbar-label-sm ml-1">{t('topbar.monitor')}</span>
-        </Btn>
-
-        <div className="flex-1" />
-
-        {/* Legacy sandbox toggle — only shown when workstations are OFF */}
-        {!workstationsEnabled && sandboxEnabled && (
-          <button
-            onClick={() => setSandboxOpen(o => !o)}
-            title="Tsuki Sandbox — Arduino circuit simulator"
-            className={clsx(
-              'flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium transition-colors cursor-pointer flex-shrink-0',
-              sandboxOpen
-                ? 'bg-[var(--active)] border-[var(--border)] text-[var(--fg)]'
-                : 'bg-transparent border-[var(--border)] text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-            )}
-          >
-            <Cpu size={11} />
-            {t('topbar.sandbox')}
-            <span className="text-[9px] opacity-60 font-mono">β</span>
-          </button>
-        )}
-
-        <Btn variant="ghost" size="xs" onClick={toggleTheme}>
-          {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
-        </Btn>
-        <Btn variant="ghost" size="xs" onClick={() => setScreen('settings')}>
-          <Settings size={13} />
-        </Btn>
-        <Btn variant="ghost" size="xs" title={t('topbar.newProject')} onClick={() => setShowNewProjectModal(true)}>
-          <Plus size={13} />
-        </Btn>
-        <Btn variant="ghost" size="xs" onClick={() => setScreen('welcome')}>
-          <Home size={13} />
-        </Btn>
-      </div>
+      {/* ── AppChrome — DaVinci-style unified titlebar + toolbar ── */}
+      <AppChrome
+        projectName={projectName}
+        projectPath={projectPath}
+        projectLanguage={projectLanguage}
+        board={board}
+        boards={BOARDS}
+        onBoardChange={setBoard}
+        onCheck={projectLanguage === 'go' ? handleCheck : undefined}
+        onBuild={handleBuild}
+        onFlash={handleFlash}
+        onRun={handleRun}
+        onMonitor={handleMonitor}
+        theme={theme}
+        onTheme={toggleTheme}
+        onSettings={() => setScreen('settings')}
+        onHome={() => setScreen('welcome')}
+        onNew={() => setShowNewProjectModal(true)}
+        sandboxEnabled={sandboxEnabled}
+        workstationsEnabled={workstationsEnabled}
+        sandboxOpen={sandboxOpen}
+        onSandboxToggle={() => setSandboxOpen(o => !o)}
+      />
 
       {/* ── Body ── */}
       <div className="flex flex-1 overflow-hidden min-h-0">
@@ -301,10 +263,11 @@ export default function IdeScreen() {
         {/* Activity bar */}
         <div className="w-10 flex flex-col items-center py-1.5 gap-0.5 border-r border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
           {[
-            { id: 'files',    icon: <Files size={17} />,     tip: t('sidebar.explorer'),  show: true },
-            { id: 'git',      icon: <GitBranch size={17} />, tip: t('sidebar.git'),       show: settings.experimentsEnabled && settings.expGitEnabled },
-            { id: 'packages', icon: <Package size={17} />,   tip: t('sidebar.packages'),  show: true },
-            { id: 'examples', icon: <BookOpen size={17} />,  tip: 'Examples',             show: true },
+            { id: 'files',    icon: <Files size={17} />,       tip: t('sidebar.explorer'),  show: true },
+            { id: 'git',      icon: <GitBranch size={17} />,   tip: t('sidebar.git'),       show: settings.experimentsEnabled && settings.expGitEnabled },
+            { id: 'packages', icon: <Package size={17} />,     tip: t('sidebar.packages'),  show: true },
+            { id: 'examples', icon: <BookOpen size={17} />,    tip: 'Examples',             show: true },
+            { id: 'explorer', icon: <FolderOpen size={17} />,  tip: 'File Explorer',        show: false /* TEMP HIDDEN */ },
           ].filter(item => item.show).map(({ id, icon, tip }) => (
             <button
               key={id} title={tip}
@@ -341,6 +304,7 @@ export default function IdeScreen() {
           {sidebarOpen && sidebarTab === 'git'      && <GitSidebar />}
           {sidebarOpen && sidebarTab === 'packages' && <PackagesSidebar />}
           {sidebarOpen && sidebarTab === 'examples' && <ExamplesSidebar />}
+          {/* TEMP HIDDEN: {sidebarOpen && sidebarTab === 'explorer' && <FileExplorer />} */}
         </div>
 
         {/* Sidebar resize handle */}
@@ -359,10 +323,10 @@ export default function IdeScreen() {
 
           {/* Experimental board warning banner */}
           {board && EXPERIMENTAL_BOARDS[board] && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/30 flex-shrink-0">
-              <AlertTriangle size={13} className="text-amber-400 mt-0.5 flex-shrink-0" />
-              <p className="text-[11px] text-amber-300/90 leading-snug flex-1">
-                <span className="font-semibold text-amber-300">Soporte experimental:</span>{' '}
+            <div className="flex items-start gap-2 px-3 py-2 bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] border-b border-[color-mix(in_srgb,var(--warn)_25%,transparent)] flex-shrink-0">
+              <AlertTriangle size={13} className="text-[var(--warn)] mt-0.5 flex-shrink-0" />
+              <p className="text-[11px] text-[var(--fg-muted)] leading-snug flex-1">
+                <span className="font-semibold text-[var(--warn)]">Soporte experimental:</span>{' '}
                 {EXPERIMENTAL_BOARDS[board]}
               </p>
             </div>
@@ -395,7 +359,9 @@ export default function IdeScreen() {
 
               {/* Export workstation */}
               <div className={clsx('flex-1 flex flex-col overflow-hidden min-h-0', workstation !== 'export' && 'hidden')}>
-                <ExportWorkstation board={board} projectName={projectName} />
+                <ErrorBoundary>
+                  <ExportWorkstation />
+                </ErrorBoundary>
               </div>
 
               {/* Bottom panel: always mounted to preserve terminal sessions, hidden via CSS on non-code workstations */}
@@ -501,7 +467,7 @@ export default function IdeScreen() {
         </div>
       </div>
 
-      {/* ── Workstation bar (DaVinci-style) — only when experiment enabled ── */}
+      {/* ── Workstation bar (DaVinci-style) ── */}
       {workstationsEnabled && (
         <WorkstationBar
           active={workstation}
@@ -738,32 +704,6 @@ function SandboxWorkstation() {
 }
 
 
-// ── Export workstation ────────────────────────────────────────────────────────
-
-function ExportWorkstation({ board, projectName }: { board: string; projectName: string }) {
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-[var(--fg-faint)]">
-      <Share2 size={32} className="opacity-30" />
-      <div className="text-center max-w-sm">
-        <p className="text-sm font-semibold text-[var(--fg-muted)] mb-1">Export workstation</p>
-        <p className="text-xs leading-relaxed">
-          Release builds, OTA packaging, and deployment options will appear here.
-          <br />
-          <span className="text-[var(--fg-faint)] opacity-60 italic mt-2 block">Coming soon.</span>
-        </p>
-      </div>
-      {projectName && (
-        <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] text-xs font-mono text-[var(--fg-muted)]">
-          <span className="text-[var(--fg-faint)]">project</span>
-          <span className="text-[var(--fg)]">{projectName}</span>
-          <span className="text-[var(--fg-faint)]">board</span>
-          <span className="text-[var(--fg)]">{board}</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Status bar ─────────────────────────────────────────────────────────────────
 
 function StatusBar({ tsuki }: { tsuki: string }) {
@@ -788,12 +728,12 @@ function StatusBar({ tsuki }: { tsuki: string }) {
         <span className="flex items-center gap-1"><GitBranch size={9} /> {gitBranch}</span>
         {(errCount + warnCount) > 0 ? (
           <span className="flex items-center gap-1.5">
-            {errCount  > 0 && <span className="text-red-400">✗ {errCount}</span>}
-            {warnCount > 0 && <span className="text-yellow-400">⚠ {warnCount}</span>}
+            {errCount  > 0 && <span className="text-[var(--err)]">✗ {errCount}</span>}
+            {warnCount > 0 && <span className="text-[var(--warn)]">⚠ {warnCount}</span>}
           </span>
         ) : (
           <span className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400" /> <span style={{ color: '#4ade80' }}>月</span> ready
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--ok)]" /> <span style={{ color: 'var(--ok)' }}>月</span> ready
           </span>
         )}
       </div>

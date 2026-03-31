@@ -30,7 +30,7 @@ var boardCatalog = []boardInfo{
 	{"mkr1000",  "Arduino MKR1000 (SAMD21)",     256,   32,  "arduino:samd:mkr1000"},
 	{"esp32",    "ESP32 Dev Module",             4096,  520, "esp32:esp32:esp32"},
 	{"esp8266",  "ESP8266 Generic",              4096,  80,  "esp8266:esp8266:generic"},
-	{"pico",     "Raspberry Pi Pico (RP2040)",   2048,  264, "rp2040:rp2040:rpipico"},
+	// TEMP HIDDEN: {"pico",     "Raspberry Pi Pico (RP2040)",   2048,  264, "rp2040:rp2040:rpipico"},
 	{"teensy40", "Teensy 4.0 (iMXRT1062)",       1984,  1024,"teensy:avr:teensy40"},
 }
 

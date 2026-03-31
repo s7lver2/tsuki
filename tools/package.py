@@ -31,56 +31,51 @@ def should_ignore(rel_path, ignore_patterns, is_dir=False):
     return False
 
 def zip_directory(dir_path='.', zip_path='archive.zip', additional_ignores=[]):
-    # Read .gitignore if it exists
     gitignore_path = os.path.join(dir_path, '.gitignore')
     ignore_patterns = []
     if os.path.exists(gitignore_path):
         with open(gitignore_path, 'r') as f:
-            ignore_patterns = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-    
-    # Always ignore .git by default, plus additional ignores
+            ignore_patterns = [l.strip() for l in f if l.strip() and not l.startswith('#')]
     ignore_patterns += ['.git/'] + additional_ignores
-    
-    # Count total files to add for progress (optional, but helps to show activity)
-    total_files = 0
+
+    files_to_add = []
     for root, dirs, files in os.walk(dir_path):
         rel_root = os.path.relpath(root, dir_path)
-        
-        # Filter directories
-        dirs[:] = [d for d in dirs if not should_ignore(os.path.normpath(os.path.join(rel_root, d)), ignore_patterns, is_dir=True)]
-        
+        dirs[:] = [d for d in dirs if not should_ignore(
+            os.path.join(rel_root, d).replace(os.sep, '/'), ignore_patterns, is_dir=True)]
         for file in files:
             abs_path = os.path.join(root, file)
-            rel_path = os.path.normpath(os.path.relpath(abs_path, dir_path))
-            if not should_ignore(rel_path, ignore_patterns, is_dir=False):
-                total_files += 1
-    
-    print(f"Found {total_files} files to archive.")
-    
-    # Create the zip file with no compression for speed
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zipf:  # Changed to ZIP_STORED for faster execution
-        added = 0
-        for root, dirs, files in os.walk(dir_path):
-            rel_root = os.path.relpath(root, dir_path)
-            
-            # Filter directories
-            dirs[:] = [d for d in dirs if not should_ignore(os.path.normpath(os.path.join(rel_root, d)), ignore_patterns, is_dir=True)]
-            
-            for file in files:
-                abs_path = os.path.join(root, file)
-                rel_path = os.path.normpath(os.path.relpath(abs_path, dir_path))
-                
-                if should_ignore(rel_path, ignore_patterns, is_dir=False):
-                    continue
-                
-                print(f"Adding {rel_path} ({added + 1}/{total_files})")
-                zipf.write(abs_path, rel_path)
-                added += 1
+            arcname = os.path.relpath(abs_path, dir_path).replace(os.sep, '/')
+            if not should_ignore(arcname, ignore_patterns):
+                files_to_add.append((abs_path, arcname))
 
-# Usage: zip the current directory, with optional additional ignores
+    print(f"Found {len(files_to_add)} files to archive.")
+
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as zipf:
+        for i, (abs_path, arcname) in enumerate(files_to_add):
+            # Timestamp fijo → todos los bytes son ASCII válido → nunca se corrompe
+            info = zipfile.ZipInfo(arcname, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(abs_path, 'rb') as f:
+                zipf.writestr(info, f.read())
+            print(f"Adding {arcname} ({i+1}/{len(files_to_add)})")
+
+    # Verificar que el zip sea legible
+    print("\nVerifying archive...")
+    with zipfile.ZipFile(zip_path) as z:
+        bad = []
+        for name in z.namelist():
+            try:
+                with z.open(name) as f: f.read(16)
+            except Exception as e:
+                bad.append(f"  BAD: {name} — {e}")
+        if bad:
+            print(f"WARNING: {len(bad)} corrupted entries!")
+            for b in bad: print(b)
+        else:
+            print(f"OK — {len(z.namelist())} files, all readable.")
+
 if __name__ == '__main__':
-    import os as _os
-    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    _out  = _os.path.join(_root, 'archive.zip')
-    # Example: additional_ignores = ['some_dir/', 'another_dir/file.txt']
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _out  = os.path.join(_root, 'archive.zip')
     zip_directory(dir_path=_root, zip_path=_out, additional_ignores=[])

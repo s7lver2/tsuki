@@ -3,6 +3,7 @@ import { useStore, BottomTab } from '@/lib/store'
 import { useEffect, useRef, useState, useCallback, KeyboardEvent as RKE } from 'react'
 import { IconBtn } from '@/components/shared/primitives'
 import { Trash2, GripHorizontal, AlertTriangle, Info, AlertCircle, Filter, Copy, ChevronDown, Radio, Circle, PlugZap, Unplug, Settings2 } from 'lucide-react'
+import FileExplorer from '@/components/other/FileExplorer'
 import { clsx } from 'clsx'
 import { useT } from '@/lib/i18n'
 import { ptyCreate, ptyWrite, ptyKill, ptyOnData, ptyOnExit, spawnProcess, listShells, pathExists, type ShellInfo, isTauri } from '@/lib/tauri'
@@ -16,6 +17,7 @@ function useTabs() {
     { id: 'problems' as BottomTab, label: t('bottomPanel.problems') },
     { id: 'terminal' as BottomTab, label: t('bottomPanel.terminal') },
     { id: 'monitor'  as BottomTab, label: 'Monitor' },
+    { id: 'explorer' as BottomTab, label: 'Explorer' },
   ]
 }
 
@@ -62,7 +64,8 @@ function ResizeHandle() {
   return (
     <div
       onMouseDown={onMouseDown}
-      className="h-[3px] flex items-center justify-center cursor-row-resize border-t border-[var(--border)] hover:border-[var(--fg-faint)] group transition-colors flex-shrink-0"
+      className="h-[3px] flex items-center justify-center cursor-row-resize border-t border-[var(--border)] hover:border-[var(--accent,#6ba4e0)] group transition-colors flex-shrink-0"
+      style={{ transition: 'border-color 0.15s' }}
     >
       <GripHorizontal size={12} className="text-[var(--fg-faint)] opacity-0 group-hover:opacity-100 transition-opacity" />
     </div>
@@ -214,6 +217,33 @@ interface TermViewProps {
   onRunning:   (b: boolean) => void
 }
 
+// ── Startup noise filter ─────────────────────────────────────────────────────
+// Suppresses well-known shell banner/header lines that add no value in the
+// IDE terminal. Covers cmd.exe and PowerShell banners (all languages).
+const STARTUP_NOISE_RE = [
+  // cmd.exe / PowerShell Windows banner
+  /^Microsoft Windows \[/i,
+  /^\(c\) Microsoft Corporation/i,
+  /^Copyright \(C\) Microsoft Corporation/i,
+  // PowerShell version line
+  /^Windows PowerShell/i,
+  /^PowerShell \d/i,
+  // "Try the new cross-platform..."
+  /^Try the new cross-platform/i,
+  // The programmatic cd commands we send (cmd echoes them even with /Q in interactive mode)
+  /^cd\s+\/d\s+/i,
+  /^Set-Location\s+-LiteralPath/i,
+  // cmd.exe prompt lines that appear during startup before first user input
+  // e.g. "C:\Users\NICKE\AppData\Local\Temp>"  or  "E:\GoDotIno\test\test>"
+  /^[A-Z]:\\.*>$/,
+  // Blank prompt line that cmd.exe emits on start with /Q
+  /^\s*$/,
+]
+
+function isStartupNoise(line: string): boolean {
+  return STARTUP_NOISE_RE.some(re => re.test(line))
+}
+
 function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
   const [lines,   setLines  ] = useState<TermLine[]>([makeLine(`Launching ${session.shell.name}…`, 'system')])
   const [input,   setInput  ] = useState('')
@@ -231,6 +261,11 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
   const readyRef       = useRef(false)
   // Track the last path we cd'd into so we don't repeat it
   const lastCdPathRef  = useRef<string | null>(null)
+  // Current PTY column count — kept in sync with the panel width via ResizeObserver
+  const colsRef        = useRef(120)
+  // After startup noise window closes, stop filtering blank lines so normal
+  // terminal output (e.g. blank lines between command output) is preserved.
+  const startupDoneRef = useRef(false)
 
   const push = useCallback((raw: string, kind: LineKind = 'output') => {
     setLines(prev => [...prev, makeLine(raw, kind)])
@@ -271,6 +306,9 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
         case 'fish':       return ['--interactive']
         case 'powershell': return ['-NoLogo', '-NoExit', '-NoProfile']
         case 'pwsh':       return ['-NoLogo', '-NoExit', '-NoProfile']
+        // /Q suppresses command echoing — we don't want to see the cd commands
+        // we send programmatically echoed back into the terminal output.
+        case 'cmd':        return ['/Q']
         default:           return []
       }
     })()
@@ -292,21 +330,65 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
     const toNativePath = (p: string) =>
       p.replace(/\//g, '\\')
     const rawCwd = projectPath ? toNativePath(projectPath) : undefined
-    const cols = 220, rows = 40
+
+    const rows = 40
 
     ;(async () => {
       try {
         // Register listeners BEFORE ptyCreate to avoid missing early output
         const unsubData = await ptyOnData(ptyId, (chunk: string) => {
           if (cancelled) return
-          // Accumulate chunks and split on newlines; keep trailing partial line
-          const raw        = lineBuffRef.current + chunk
-          const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-          const parts      = normalized.split('\n')
-          lineBuffRef.current = parts.pop() ?? ''
-          for (const part of parts) {
-            if (part) push(part, 'output')
+          // Accumulate chunks and split on newlines; keep trailing partial line.
+          //
+          // tsuki-ux uses \r (bare carriage-return, no \n) to overwrite the
+          // current line for spinner/progress animations.  We must NOT convert
+          // \r → \n here; instead we treat a bare \r as "replace last line":
+          //   • \r\n  → normal newline (Windows-style, already handled first)
+          //   • \r    → overwrite the last pushed line (tsuki-ux progress)
+          //   • \n    → normal newline
+          const raw = lineBuffRef.current + chunk
+
+          // Split on \r\n first so Windows CRLF is a single \n, then process
+          // bare \r and \n separately.
+          const segments = raw.replace(/\r\n/g, '\n').split(/(\r|\n)/)
+          // segments alternates: text, delimiter, text, delimiter, …
+          // We reconstruct line-by-line, honouring bare \r as overwrite.
+          let buf = ''
+          for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i]
+            if (seg === '\n') {
+              // Commit current buffer as a new line
+              if (buf && !(startupDoneRef.current === false && isStartupNoise(buf))) push(buf, 'output')
+              buf = ''
+            } else if (seg === '\r') {
+              // Overwrite: replace the last line in state with whatever comes next
+              // We stash the intent in buf reset; the next text segment replaces it.
+              // If there is already something in buf, discard it (tsuki-ux wrote \r
+              // to go back to column 0 and overwrite the spinner line).
+              buf = '\x00OVERWRITE\x00'
+            } else {
+              if (buf === '\x00OVERWRITE\x00') {
+                // Replace the last visible output line in state
+                setLines(prev => {
+                  const copy = [...prev]
+                  // Find the last 'output' line and replace it
+                  for (let j = copy.length - 1; j >= 0; j--) {
+                    if (copy[j].kind === 'output') {
+                      copy[j] = makeLine(seg, 'output')
+                      return copy
+                    }
+                  }
+                  // No output line found — just append
+                  return [...copy, makeLine(seg, 'output')]
+                })
+                buf = ''
+              } else {
+                buf += seg
+              }
+            }
           }
+          // Whatever remains is a partial line — keep it buffered
+          lineBuffRef.current = buf === '\x00OVERWRITE\x00' ? '' : buf
         })
         const unsubExit = await ptyOnExit(ptyId, (code: number) => {
           if (cancelled) return
@@ -326,7 +408,7 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
         if (cancelled) return
 
         // Always spawn without cwd — avoids ConPTY/CreateProcess failure on Windows.
-        await ptyCreate(ptyId, shell.path, shellArgs, undefined, cols, rows)
+        await ptyCreate(ptyId, shell.path, shellArgs, undefined, colsRef.current, rows)
 
         if (cancelled) {
           ptyKill(ptyId).catch(() => {})
@@ -350,13 +432,21 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
                   default:           return `cd ${JSON.stringify(rawCwd)}\n`
                 }
               })()
+              // Mark this path as handled so the projectPath-watcher effect
+              // below doesn't fire a duplicate cd for the same directory.
+              lastCdPathRef.current = projectPath ?? null
               ptyWrite(ptyId, cdCmd).catch(() => {})
+              // Startup noise window closes after cd is sent — subsequent
+              // blank lines / prompts are real terminal output.
+              setTimeout(() => { startupDoneRef.current = true }, 800)
             }).catch(() => {})
           }, 300)
         }
 
         setReady(true)
         readyRef.current = true
+        // If there's no project path, close the startup noise window immediately
+        if (!rawCwd) setTimeout(() => { startupDoneRef.current = true }, 500)
         setTimeout(() => inputRef.current?.focus(), 50)
       } catch (e) {
         if (!cancelled) {
@@ -385,6 +475,31 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
       ptyKill(ptyId).catch(() => {})
       unsubs.forEach(f => f())
     }
+  }, []) // eslint-disable-line
+
+  // ── Dynamic terminal width ────────────────────────────────────────────────
+  // tsuki-ux computes box-drawing widths from the PTY column count.  If cols
+  // is fixed at 220 but the panel is only, say, 100 chars wide, the ╭─╮ boxes
+  // overflow and their right borders are pushed off-screen.  We measure the
+  // scrollback container and keep the PTY in sync via ResizeObserver.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const charWidth = 7.2 // approximate px width of a monospace char at 12px
+    const update = () => {
+      const newCols = Math.max(40, Math.floor(el.clientWidth / charWidth))
+      if (newCols !== colsRef.current) {
+        colsRef.current = newCols
+        // Notify the PTY so it reflows — fire-and-forget, best-effort
+        import('@/lib/tauri').then(({ ptyResize }) => {
+          ptyResize(ptyIdRef.current, newCols, 40).catch(() => {})
+        }).catch(() => {})
+      }
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
   }, []) // eslint-disable-line
 
   // ── React to project path changes — send cd when ready ───────────────────
@@ -486,8 +601,13 @@ function TermView({ session, projectPath, onAlive, onRunning }: TermViewProps) {
         {lines.map(l => (
           <div
             key={l.id}
-            className="whitespace-pre-wrap break-all"
+            className="whitespace-pre-wrap"
             style={{
+              // overflowWrap:'anywhere' lets long identifiers/paths wrap at any
+              // character boundary, but — unlike break-all — it will NOT break
+              // inside tsuki-ux box-drawing sequences (╭─╮│╰) unless there is
+              // genuinely no other break opportunity on the line.
+              overflowWrap: 'anywhere',
               color: l.kind === 'error'  ? '#e06c75'
                    : l.kind === 'prompt' ? 'var(--fg)'
                    : l.kind === 'system' ? 'var(--fg-faint)'
@@ -561,14 +681,94 @@ function Terminal() {
     const { cmd, args, cwd, chainArgs } = pendingBuild
     clearPendingBuild()
 
-    const { addLog, setBottomTab } = useStore.getState()
+    const { addLog, setBottomTab, setProblems } = useStore.getState()
     setBottomTab('output')
+    setProblems([])
+
+    // Compiler diagnostic regex: path:line:col: (error|warning|note): message
+    const COMPILER_DIAG = /^(.+?):(\d+):(\d+):\s+(error|warning|note|fatal error):\s+(.+)$/
+    const buildProblems: import('@/lib/store').Problem[] = []
+    let problemId   = 0
+    // Tracks whether we're inside a Traceback box (stderr artifact from tsuki-flash)
+    let inTraceback   = false
+    // After "✖  tsuki-flash compile --board ..." tsuki-flash re-prints the full │ block.
+    // We suppress that duplicate block until a non-│ / non-separator line appears.
+    let inDupeBlock   = false
+    // Deduplicate compiler diagnostic lines (appear in both the inline box and the dupe block)
+    const seenDiags   = new Set<string>()
+
+    function processLine(raw: string): { skip: boolean; type: import('@/lib/store').LogLine['type'] } {
+      const t = raw.trimStart()
+
+      // ── Traceback box ─────────────────────────────────────────────────────────
+      if (t.startsWith('╭') && /Traceback/.test(t)) {
+        inTraceback = true
+        return { skip: true, type: 'info' }
+      }
+      if (inTraceback) {
+        if (t.startsWith('╰') && t.endsWith('╯')) inTraceback = false
+        return { skip: true, type: 'info' }
+      }
+
+      // ── Duplicate │ block after "✖  tsuki-flash <cmd>" ───────────────────────
+      // tsuki-flash prints:  ✖  tsuki-flash compile --board ...
+      // then re-dumps the │  ... block again before printing CompileError: / [exit N]
+      // Detect the trigger: ✖ line that contains "tsuki-flash" but is NOT "... failed"
+      if (/^[✖✗]/.test(t) && /tsuki-flash\b/.test(t) && !/\bfailed\b/.test(t)) {
+        inDupeBlock = true
+        return { skip: false, type: 'err' }   // show the ✖ header itself
+      }
+      if (inDupeBlock) {
+        // │ lines, separator dashes, blank → suppress
+        if (!t || /^[│─\s]/.test(t)) return { skip: true, type: 'info' }
+        // anything else (CompileError:, ✖ ...failed, ╰) ends the dupe block
+        inDupeBlock = false
+      }
+
+      // ── Empty ─────────────────────────────────────────────────────────────────
+      if (!t) return { skip: true, type: 'info' }
+
+      // ── Explicit markers ──────────────────────────────────────────────────────
+      if (/^[✔✓]/.test(t) || t === '[done]') return { skip: false, type: 'ok' }
+      if (/CompileError:/.test(t) || /^\[exit [^0]/.test(t) || /^\[error:/.test(t))
+        return { skip: false, type: 'err' }
+      if (/\bcompilation failed\b/i.test(t) || /\blink failed\b/i.test(t))
+        return { skip: false, type: 'err' }
+
+      // ── Compiler diagnostic lines ─────────────────────────────────────────────
+      if (COMPILER_DIAG.test(t)) {
+        const m = t.match(COMPILER_DIAG)!
+        const key = `${m[1]}:${m[2]}:${m[3]}:${m[4]}`
+        const isDupe = seenDiags.has(key)
+        seenDiags.add(key)
+        return { skip: isDupe, type: m[4].startsWith('error') || m[4] === 'fatal error' ? 'err' : 'warn' }
+      }
+
+      return { skip: false, type: 'info' }
+    }
 
     const run = (cmdStr: string, argsArr: string[]): Promise<number> => {
       addLog('info', `> ${[cmdStr, ...argsArr].join(' ')}`)
       return new Promise<number>(resolve => {
-        spawnProcess(cmdStr, argsArr, cwd ?? projectPathRef.current ?? undefined, (line, isErr) => {
-          if (line.trim()) addLog(isErr ? 'err' : 'info', line)
+        spawnProcess(cmdStr, argsArr, cwd ?? projectPathRef.current ?? undefined, (line, _isErr) => {
+          const { skip, type } = processLine(line)
+          if (skip) return
+          addLog(type, line)
+          const m = line.trimStart().match(COMPILER_DIAG)
+          if (m && (m[4].startsWith('error') || m[4] === 'fatal error' || m[4] === 'warning')) {
+            const key = `${m[1]}:${m[2]}:${m[3]}:${m[4]}`
+            if (!buildProblems.some(p => p.id === key)) {
+              buildProblems.push({
+                id: key,
+                severity: m[4] === 'warning' ? 'warning' : 'error',
+                file: m[1].replace(/\\/g, '/').split('/').pop() ?? m[1],
+                line: Number(m[2]),
+                col: Number(m[3]),
+                message: m[5].trim(),
+              })
+              setProblems([...buildProblems])
+            }
+          }
         }).then(handle => {
           handle.done.then(code => {
             handle.dispose()
@@ -782,21 +982,32 @@ function ProblemsTab() {
     </div>
   )
   const icons = {
-    error:   <AlertCircle   size={12} className="text-red-400    flex-shrink-0" />,
-    warning: <AlertTriangle size={12} className="text-yellow-400 flex-shrink-0" />,
-    info:    <Info          size={12} className="text-blue-400   flex-shrink-0" />,
+    error:   <AlertCircle   size={12} className="text-red-400    flex-shrink-0 mt-0.5" />,
+    warning: <AlertTriangle size={12} className="text-yellow-400 flex-shrink-0 mt-0.5" />,
+    info:    <Info          size={12} className="text-blue-400   flex-shrink-0 mt-0.5" />,
   }
+  const errCount  = problems.filter(p => p.severity === 'error').length
+  const warnCount = problems.filter(p => p.severity === 'warning').length
   return (
-    <div className="flex-1 overflow-y-auto">
-      {problems.map(p => (
-        <div key={p.id} className="flex items-start gap-2 px-3 py-1.5 hover:bg-[var(--hover)]">
-          {icons[p.severity]}
-          <div className="flex-1 min-w-0">
-            <span className="text-xs text-[var(--fg)]">{p.message}</span>
-            <span className="text-2xs text-[var(--fg-faint)] font-mono ml-2">{p.file}:{p.line}:{p.col}</span>
+    <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+      <div className="flex items-center gap-3 px-3 py-1 border-b border-[var(--border)] flex-shrink-0">
+        {errCount  > 0 && <span className="flex items-center gap-1 text-[10px] text-red-400"><AlertCircle size={10} />{errCount} error{errCount !== 1 ? 's' : ''}</span>}
+        {warnCount > 0 && <span className="flex items-center gap-1 text-[10px] text-yellow-400"><AlertTriangle size={10} />{warnCount} warning{warnCount !== 1 ? 's' : ''}</span>}
+      </div>
+      <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+        {problems.map(p => (
+          <div key={p.id} className="flex items-start gap-2 px-3 py-1.5 hover:bg-[var(--hover)] border-b border-[var(--border)]/30"
+            style={{ borderLeft: `2px solid ${p.severity === 'error' ? 'rgb(248 113 113/0.5)' : 'rgb(251 191 36/0.4)'}` }}>
+            {icons[p.severity]}
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-[var(--fg)] leading-snug">{p.message}</p>
+              <p className="text-[10px] text-[var(--fg-faint)] font-mono mt-0.5">
+                {p.file}<span className="text-[var(--fg-faint)]/60">:{p.line}:{p.col}</span>
+              </p>
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }
@@ -1148,10 +1359,24 @@ export default function BottomPanel() {
   }
 
   const LOG_ICON: Record<string, React.ReactNode> = {
-    ok:   <span className="text-green-400  select-none">✓</span>,
-    err:  <span className="text-red-400    select-none">✗</span>,
-    warn: <span className="text-yellow-400 select-none">⚠</span>,
-    info: <span className="text-[var(--fg-faint)] select-none">·</span>,
+    ok:   <span className="text-green-400  select-none" style={{ fontSize: 10 }}>✔</span>,
+    err:  <span className="text-red-400    select-none" style={{ fontSize: 10 }}>✖</span>,
+    warn: <span className="text-yellow-400 select-none" style={{ fontSize: 10 }}>▲</span>,
+    info: <span className="select-none" style={{ color: 'var(--fg-faint)', fontSize: 10 }}>›</span>,
+  }
+
+  const LOG_ACCENT: Record<string, string> = {
+    ok:   'transparent',
+    err:  'rgba(248,113,113,0.10)',
+    warn: 'rgba(251,191,36,0.07)',
+    info: 'transparent',
+  }
+
+  const LOG_LEFT_BAR: Record<string, string> = {
+    ok:   'transparent',
+    err:  'rgb(248 113 113 / 0.55)',
+    warn: 'rgb(251 191 36 / 0.45)',
+    info: 'transparent',
   }
 
   return (
@@ -1160,11 +1385,13 @@ export default function BottomPanel() {
       <ResizeHandle />
 
       {/* ── Tab bar ── */}
-      <div className="h-8 flex items-center px-2 gap-0.5 border-b border-[var(--border)] flex-shrink-0">
+      <div className="h-8 flex items-center px-2 gap-0.5 border-b border-[var(--border)] flex-shrink-0" style={{ background: 'var(--surface-2)' }}>
         {useTabs().map(tab => (
           <button key={tab.id} onClick={() => setBottomTab(tab.id)}
             className={clsx('px-3 py-1 rounded text-xs cursor-pointer border-0 bg-transparent transition-colors flex items-center gap-1.5',
-              bottomTab === tab.id ? 'text-[var(--fg)] bg-[var(--active)]' : 'text-[var(--fg-muted)] hover:text-[var(--fg)]')}>
+              bottomTab === tab.id
+                ? 'text-[var(--fg)] bg-[var(--surface-3)] shadow-[inset_0_-1px_0_0_var(--border)]'
+                : 'text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]')}>
             {tab.label}
             {tab.id === 'problems' && (errCount + warnCount) > 0 && (
               <span className="flex items-center gap-1 text-2xs font-mono">
@@ -1255,7 +1482,8 @@ export default function BottomPanel() {
           )}
 
           {/* Log list */}
-          <div className="flex-1 overflow-y-auto px-3 py-1.5 min-h-0"
+          <div className="flex-1 overflow-y-auto overflow-x-auto px-3 py-1.5 min-h-0"
+            style={{ scrollbarWidth: 'thin' }}
             onScroll={e => {
               const el = e.currentTarget
               const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
@@ -1266,26 +1494,124 @@ export default function BottomPanel() {
                 {logs.length === 0 ? 'No output yet.' : 'No entries match the current filter.'}
               </span>
             )}
-            {filteredLogs.map(l => (
-              <div key={l.id}
-                className="flex gap-2 font-mono text-xs leading-[18px] hover:bg-[var(--hover)] rounded px-1 -mx-1 group cursor-default"
-                title={l.msg}>
-                <span className="text-[var(--fg-faint)] flex-shrink-0 select-none w-14 text-right">{l.time}</span>
-                <span className="flex-shrink-0 w-3">{LOG_ICON[l.type]}</span>
-                <span className={clsx('flex-1 min-w-0 break-all', {
-                  'text-green-400':          l.type === 'ok',
-                  'text-red-400':            l.type === 'err',
-                  'text-yellow-400':         l.type === 'warn',
-                  'text-[var(--fg-muted)]':  l.type === 'info',
-                })}>{l.msg}</span>
-                <button
-                  onClick={() => navigator.clipboard.writeText(l.msg).catch(() => {})}
-                  className="opacity-0 group-hover:opacity-100 w-4 h-4 flex items-center justify-center text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent flex-shrink-0 transition-opacity"
-                  title="Copy line">
-                  <Copy size={9} />
-                </button>
-              </div>
-            ))}
+            {(() => {
+              // Group consecutive box-drawing lines into single card blocks
+              type Group =
+                | { kind: 'line'; log: typeof filteredLogs[0] }
+                | { kind: 'box';  lines: typeof filteredLogs }
+
+              const groups: Group[] = []
+              let boxLines: typeof filteredLogs = []
+
+              const isBoxLine = (msg: string) =>
+                /^[\s]*[╭╰│▶…·─]/.test(msg) && !/^CompileError:/.test(msg.trim())
+
+              const flushBox = () => {
+                if (boxLines.length) {
+                  groups.push({ kind: 'box', lines: boxLines })
+                  boxLines = []
+                }
+              }
+
+              for (const l of filteredLogs) {
+                if (isBoxLine(l.msg)) {
+                  boxLines.push(l)
+                } else {
+                  flushBox()
+                  groups.push({ kind: 'line', log: l })
+                }
+              }
+              flushBox()
+
+              return groups.map((g, gi) => {
+                if (g.kind === 'box') {
+                  // Determine card accent from first err/warn line inside box
+                  const hasErr  = g.lines.some(l => l.type === 'err')
+                  const hasWarn = g.lines.some(l => l.type === 'warn')
+                  const accentColor = hasErr
+                    ? 'rgb(248 113 113 / 0.4)'
+                    : hasWarn
+                    ? 'rgb(251 191 36 / 0.35)'
+                    : 'var(--border)'
+                  const cardBg = hasErr
+                    ? 'rgba(248,113,113,0.04)'
+                    : hasWarn
+                    ? 'rgba(251,191,36,0.03)'
+                    : 'var(--surface-2)'
+
+                  return (
+                    <div key={`box-${gi}`}
+                      className="my-1 rounded-md overflow-hidden font-mono text-xs leading-[17px]"
+                      style={{
+                        background: cardBg,
+                        border: `1px solid ${accentColor}`,
+                      }}>
+                      {g.lines.map(l => {
+                        const isSep = /^[\s]*[─]+/.test(l.msg)
+                        return (
+                          <div key={l.id}
+                            className="group flex cursor-default hover:bg-white/[0.025] transition-colors"
+                            style={{ paddingLeft: '10px', paddingRight: '6px' }}>
+                            <span
+                              className="flex-1 min-w-0 whitespace-pre py-px"
+                              style={{
+                                color: l.type === 'err'  ? '#e06c75'
+                                     : l.type === 'ok'   ? '#98c379'
+                                     : l.type === 'warn' ? '#e5c07b'
+                                     : isSep ? 'var(--fg-faint)'
+                                     : 'var(--fg-muted)',
+                                opacity: isSep ? 0.35 : 1,
+                              }}>
+                              {l.msg}
+                            </span>
+                            <button
+                              onClick={() => navigator.clipboard.writeText(l.msg).catch(() => {})}
+                              className="opacity-0 group-hover:opacity-100 w-4 h-4 flex items-center justify-center text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent flex-shrink-0 transition-opacity self-center ml-1"
+                              title="Copy line">
+                              <Copy size={9} />
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                }
+
+                // Regular single-line log entry
+                const l = g.log
+                const bg  = LOG_ACCENT[l.type]  ?? 'transparent'
+                const bar = LOG_LEFT_BAR[l.type] ?? 'transparent'
+                return (
+                  <div key={l.id}
+                    className="flex gap-2 font-mono text-xs leading-[17px] hover:bg-[var(--hover)] rounded group cursor-default"
+                    style={{
+                      borderLeft: `2px solid ${bar}`,
+                      background: bg,
+                      paddingLeft: bar !== 'transparent' ? '6px' : '4px',
+                      paddingRight: '4px',
+                      marginBottom: l.type === 'err' || l.type === 'warn' ? 1 : 0,
+                      borderRadius: 4,
+                    }}>
+                    <span className="text-[var(--fg-faint)] flex-shrink-0 select-none w-14 text-right" style={{ fontSize: 9, paddingTop: 2 }}>{l.time}</span>
+                    <span className="flex-shrink-0 w-3 flex items-center">{LOG_ICON[l.type]}</span>
+                    <span className={clsx('flex-1 min-w-0 whitespace-pre', {
+                      'text-green-400':  l.type === 'ok',
+                      'text-red-400':    l.type === 'err',
+                      'text-yellow-400': l.type === 'warn',
+                    })}
+                    style={{
+                      color: (l.type === 'ok' || l.type === 'err' || l.type === 'warn') ? undefined : 'var(--fg-muted)',
+                    }}>{l.msg}</span>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(l.msg).catch(() => {})}
+                      className="opacity-0 group-hover:opacity-100 w-4 h-4 flex items-center justify-center text-[var(--fg-faint)] hover:text-[var(--fg)] cursor-pointer border-0 bg-transparent flex-shrink-0 transition-opacity"
+                      title="Copy line">
+                      <Copy size={9} />
+                    </button>
+                  </div>
+                )
+              })
+            })()}
             <div ref={endRef} />
           </div>
         </div>
@@ -1299,6 +1625,10 @@ export default function BottomPanel() {
 
       <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'monitor' && 'hidden')}>
         <SerialMonitor />
+      </div>
+
+      <div className={clsx('flex-1 flex flex-col overflow-hidden', bottomTab !== 'explorer' && 'hidden')}>
+        <FileExplorer compact />
       </div>
     </div>
   )

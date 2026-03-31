@@ -548,6 +548,17 @@ impl PyTranspiler {
             let mod_name = &fname[..dot];
             let fn_name  = &fname[dot+1..];
 
+            // Guard: if mod_name is itself a loaded package name, this is a
+            // module-qualified call (e.g. `dht.new(...)`) that already failed
+            // the package lookup above (package not installed / not in
+            // pkg_names).  Do NOT fall into the instance-method path — doing
+            // so would match a stale var_types entry for a package alias and
+            // apply a completely wrong C++ template, or worse, bubble up
+            // through the final fallback and emit `new DHT(...)` via the
+            // runtime builtin "new" → "(new {0}())" mapping.
+            let mod_is_package = self.rt.packages.contains_key(mod_name);
+
+            if !mod_is_package {
             if let Some(cpp_type) = self.var_types.get(mod_name).cloned() {
                 let base_type = cpp_type.trim_end_matches('*').to_owned();
 
@@ -570,6 +581,7 @@ impl PyTranspiler {
                     return Ok(fn_map.apply(&cpp_args));
                 }
             }
+            } // end !mod_is_package guard
         }
 
         let parts: Result<Vec<_>> = args.iter().map(|a| self.emit_expr(a)).collect();
@@ -647,8 +659,14 @@ impl PyTranspiler {
             PyExpr::Str(_)   => if self.cfg.arduino_string { "String".to_owned() } else { "const char*".to_owned() },
             PyExpr::Ident(n) => self.var_types.get(n).cloned().unwrap_or_else(|| "auto".to_owned()),
             // Constructor call: pkg.new(…) / pkg.New(…)
-            // If the package has a cpp_class, the variable type is `ClassName*`
-            // (heap pointer, because the DHT/Servo/etc. templates use `{0}->method()`).
+            // If the package has a cpp_class, the variable type is `ClassName`
+            // (stack-allocated; method templates use `{0}.method()`).
+            //
+            // IMPORTANT: if the package is NOT loaded we must still return
+            // "auto" here via the explicit early return below.  Without it,
+            // the emit_call final fallback can reach the builtin `new` entry
+            // (FnMap::template("(new {0})")) and emit `new DHT(...)` instead
+            // of a proper error or placeholder.
             PyExpr::Call { func, .. } => {
                 let fname = self.flatten_expr_name(func);
                 if let Some(dot) = fname.find('.') {
@@ -658,12 +676,42 @@ impl PyTranspiler {
                         let resolved = self.resolve_module(mod_name);
                         if let Some(pkg) = self.rt.packages.get(&resolved) {
                             if let Some(class) = &pkg.cpp_class {
-                                // Stack allocation — no pointer needed.
-                                // Constructor templates use ClassName({args}) and
-                                // method templates use {0}.method(), not ->.
-                                return class.clone();
+                                // Determine whether the constructor template allocates on
+                                // the heap (produces `new ClassName(...)`) or the stack
+                                // (produces `ClassName(...)`).
+                                //
+                                // Heap packages: cpp = "new DHT({0},{1})"
+                                //   → method templates use {0}->method()
+                                //   → variable type must be ClassName* (pointer)
+                                //
+                                // Stack packages: cpp = "DHT({0},{1})"
+                                //   → method templates use {0}.method()
+                                //   → variable type is ClassName (value)
+                                //
+                                // We detect this by probing the constructor template:
+                                // apply it with empty dummy args and check whether the
+                                // result starts with "new ".
+                                let is_heap = pkg.functions.get("new")
+                                    .or_else(|| pkg.functions.get("New"))
+                                    .map(|fm| {
+                                        let probe = fm.apply(&[
+                                            String::new(), String::new(),
+                                            String::new(), String::new(),
+                                        ]);
+                                        probe.trim_start().starts_with("new ")
+                                    })
+                                    .unwrap_or(false);
+                                if is_heap {
+                                    return format!("{}*", class);
+                                } else {
+                                    return class.clone();
+                                }
                             }
                         }
+                        // Package not loaded or has no cpp_class: return "auto"
+                        // immediately so we never accidentally reach the builtin
+                        // `new` → `(new {0}())` path in the call emitter.
+                        return "auto".into();
                     }
                 }
                 "auto".into()
